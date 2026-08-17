@@ -1,0 +1,3 @@
+package uz.kassa.domain;
+
+public enum OpType { PRIXOD, VOZVRAT, RASXOD, OTKAZMA, TOPSHIRIQ, KORREKTIROVKA, BOSHLANGICH }

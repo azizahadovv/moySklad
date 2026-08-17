@@ -1,0 +1,36 @@
+server:
+  port: ${WEBAPP_PORT:8080}
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/kassa}
+    username: ${DB_USER:data}
+    password: ${DB_PASSWORD:data}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+  flyway:
+    enabled: true
+
+app:
+  zone: Asia/Tashkent
+  bot:
+    token: ${BOT_TOKEN:}
+    username: ${BOT_USERNAME:kassa_bot}
+  superadmin:
+    telegram-id: ${SUPERADMIN_TELEGRAM_ID:0}
+    name: ${SUPERADMIN_NAME:SuperAdmin}
+  moysklad:
+    token: ${MOYSKLAD_TOKEN:}
+    base-url: https://api.moysklad.ru/api/remap/1.2
+    # MoySklad 'updated' filtri akkount timezone'ida o'qiladi — Toshkent bilan
+    # farqni (±3 soat) va vaqtinchalik xatolarni qoplash uchun katta overlap.
+    # Idempotent (moysklad_id UNIQUE) — qayta o'qish dublikat yaratmaydi.
+    sync-overlap-minutes: ${MOYSKLAD_OVERLAP_MIN:240}
+  reminder-hour: 21
+  webapp-url: ${WEBAPP_URL:}
+
+logging:
+  level:
+    uz.kassa: INFO
