@@ -35,6 +35,32 @@ public class Sender {
 
     public void send(long chatId, String text) { send(chatId, text, null); }
 
+    /** Yuborilgan xabar ID sini qaytaradi (panel xabarlarini keyin o'chirish uchun). */
+    public Integer sendId(long chatId, String text, ReplyKeyboard kb) {
+        SendMessage m = SendMessage.builder()
+                .chatId(String.valueOf(chatId))
+                .text(text)
+                .parseMode("HTML")
+                .build();
+        if (kb != null) m.setReplyMarkup(kb);
+        try {
+            return bot().execute(m).getMessageId();
+        } catch (TelegramApiException e) {
+            log.warn("Xabar yuborilmadi ({}): {}", chatId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Xabarni o'chirish (48 soatdan eski bo'lsa Telegram rad etadi — jim o'tamiz). */
+    public void deleteMessage(long chatId, int messageId) {
+        try {
+            bot().execute(org.telegram.telegrambots.meta.api.methods.updatingmessages.DeleteMessage
+                    .builder().chatId(String.valueOf(chatId)).messageId(messageId).build());
+        } catch (TelegramApiException e) {
+            log.debug("O'chirilmadi ({}:{}): {}", chatId, messageId, e.getMessage());
+        }
+    }
+
     public void send(long chatId, String text, ReplyKeyboard kb) {
         SendMessage m = SendMessage.builder()
                 .chatId(String.valueOf(chatId))
@@ -80,6 +106,45 @@ public class Sender {
         } catch (TelegramApiException e) {
             log.warn("Hujjat yuborilmadi ({}): {}", chatId, e.getMessage());
         }
+    }
+
+    /**
+     * Chatni tozalash: joriy xabardan orqaga `count` ta xabarni o'chiradi.
+     * Bot API deleteMessages (100 talik partiyalar) — topilmaganlari jim o'tkaziladi.
+     * Fonda ishlaydi, botni bloklamaydi.
+     */
+    public void clearChat(long chatId, int fromMessageId, int count) {
+        new Thread(() -> {
+            try {
+                String token = bot().getBotToken();
+                java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
+                int start = Math.max(1, fromMessageId - count + 1);
+                StringBuilder ids = new StringBuilder();
+                int inBatch = 0;
+                for (int i = fromMessageId; i >= start; i--) {
+                    if (inBatch > 0) ids.append(',');
+                    ids.append(i);
+                    if (++inBatch == 100) {
+                        batchDelete(http, token, chatId, ids.toString());
+                        ids.setLength(0); inBatch = 0;
+                    }
+                }
+                if (inBatch > 0) batchDelete(http, token, chatId, ids.toString());
+            } catch (Exception e) {
+                log.warn("clearChat ({}): {}", chatId, e.getMessage());
+            }
+        }).start();
+    }
+
+    private void batchDelete(java.net.http.HttpClient http, String token,
+                             long chatId, String ids) throws Exception {
+        var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create(
+                        "https://api.telegram.org/bot" + token + "/deleteMessages"))
+                .header("Content-Type", "application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(
+                        "{\"chat_id\":" + chatId + ",\"message_ids\":[" + ids + "]}"))
+                .build();
+        http.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
     }
 
     public void answer(String callbackId) {

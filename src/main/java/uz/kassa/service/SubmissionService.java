@@ -110,6 +110,64 @@ public class SubmissionService {
         return subRepo.save(sub);
     }
 
+    /**
+     * Buxgalter/Admin pulni kassadan BEVOSITA qabul qiladi (hisobot kutmasdan):
+     * kassa balansidan yechiladi (manfiyga tushishi mumkin — pul qo'lda olingan fakt),
+     * Buxgalteriyaga kiradi, kunlar FIFO qoplanadi. TERMINAL — faqat jurnalga yoziladi
+     * (terminal puli firma bank hisobida, kassir balansida yuritilmaydi).
+     */
+    @Transactional
+    public Operation directCollect(Long kassaId, MoneyType mt, long amount,
+                                   AppUser by, String topshirgan) {
+        return directCollect(kassaId, mt, amount, by, topshirgan, ledger.today());
+    }
+
+    /** date — pul haqiqatda qaysi kun uchun qabul qilingani (kalendar orqali tanlanadi). */
+    @Transactional
+    public Operation directCollect(Long kassaId, MoneyType mt, long amount,
+                                   AppUser by, String topshirgan, java.time.LocalDate date) {
+        if (amount <= 0) throw new BusinessException("Summa noldan katta bo'lishi kerak");
+
+        if (mt != MoneyType.TERMINAL) {
+            ledger.settle(OwnerType.KASSA, kassaId, mt, 0, amount);
+            ledger.credit(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, mt, amount);
+        }
+
+        Operation op = opRepo.save(Operation.builder()
+                .type(OpType.TOPSHIRIQ).moneyType(mt).amount(amount)
+                .fromOwnerType(OwnerType.KASSA).fromOwnerId(kassaId)
+                .toOwnerType(OwnerType.BUXGALTERIYA).toOwnerId(LedgerService.BUX_ID)
+                .status(OpStatus.TASDIQLANGAN)
+                .comment("Topshirdi: " + topshirgan)
+                .opDate(date)
+                .createdBy(by.getId()).decidedBy(by.getId()).decidedAt(Instant.now())
+                .build());
+
+        if (mt != MoneyType.TERMINAL) {
+            long rem = amount;
+            List<DayRecord> days = new java.util.ArrayList<>();
+            days.addAll(dayRepo.findByKassaIdAndStatusOrderByDateAsc(kassaId, DayStatus.YOPILGAN));
+            days.addAll(dayRepo.findByKassaIdAndStatusOrderByDateAsc(kassaId, DayStatus.OCHIQ));
+            for (DayRecord d : days) {
+                if (rem <= 0) break;
+                long need = mt == MoneyType.NAQD ? d.remainNaqd() : d.remainKlik();
+                if (need <= 0) continue;
+                long take = Math.min(need, rem);
+                if (mt == MoneyType.NAQD) d.setCoveredNaqd(d.getCoveredNaqd() + take);
+                else d.setCoveredKlik(d.getCoveredKlik() + take);
+                rem -= take;
+                if (d.getStatus() == DayStatus.YOPILGAN
+                        && d.remainNaqd() == 0 && d.remainKlik() == 0)
+                    d.setStatus(DayStatus.QABUL_QILINGAN);
+            }
+            dayRepo.saveAll(days);
+        }
+
+        audit.log(by.getId(), "PUL_QABUL", "operation", op.getId(),
+                "kassa=" + kassaId + " " + mt + " " + amount + " topshirdi=" + topshirgan);
+        return op;
+    }
+
     /* ------------------------ ichki ------------------------ */
 
     private Submission pending(Long subId) {

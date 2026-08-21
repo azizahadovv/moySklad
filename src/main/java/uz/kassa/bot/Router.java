@@ -34,11 +34,13 @@ public class Router {
     private final uz.kassa.config.AppProps props;
     private final AppUserRepo userRepo;
     private final uz.kassa.repo.GuestRepo guestRepo;
+    private final uz.kassa.repo.KassaRepo kassaRepo;
     private final OperationRepo opRepo;
     private final SubmissionRepo subRepo;
     private final SessionStore sessions;
     private final Sender sender;
     private final NameService names;
+    private final LabelService labelSvc;
     private final NotificationService notify;
     private final RasxodService rasxodService;
     private final TransferService transferService;
@@ -46,10 +48,65 @@ public class Router {
     private final KassirHandler kassir;
     private final BuxgalterHandler bux;
     private final AdminHandler admin;
+    private final uz.kassa.bot.handlers.KontragentHandler kontragent;
+    private final AuditService audit;
 
     public void route(Update u) {
         if (u.hasCallbackQuery()) onCallback(u.getCallbackQuery());
+        else if (u.hasMessage() && u.getMessage().hasContact()) onContact(u.getMessage());
         else if (u.hasMessage() && u.getMessage().hasText()) onMessage(u.getMessage());
+    }
+
+    /** «📱 Telefon raqamni yuborish» tugmasi orqali kelgan kontakt. */
+    private void onContact(Message m) {
+        long chatId = m.getChatId();
+        long tgId = m.getFrom().getId();
+        Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
+        if (uo.isPresent() && uo.get().isActive()) {
+            sender.send(chatId, "✅ Raqamingiz allaqachon tizimda", menuFor(uo.get()));
+            return;
+        }
+        rememberGuest(m);
+        Guest g = guestRepo.findById(tgId).orElse(null);
+        if (g != null) {
+            g.setPhone(m.getContact().getPhoneNumber());
+            guestRepo.save(g);
+        }
+        // Jadvaldan (Sheets) telefon bilan oldindan yaratilgan foydalanuvchi bo'lsa — darhol ulaymiz
+        String d = m.getContact().getPhoneNumber().replaceAll("\\D", "");
+        if (d.length() >= 7) {
+            for (AppUser cand : userRepo.findAll()) {
+                String p = cand.getPhone() == null ? "" : cand.getPhone().replaceAll("\\D", "");
+                if (cand.getTelegramId() == null && !p.isEmpty()
+                        && (p.endsWith(d) || d.endsWith(p))) {
+                    cand.setTelegramId(tgId);
+                    userRepo.save(cand);
+                    sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(cand.getFullName())
+                            + "</b>!\n" + otdelLabel(cand), menuFor(cand));
+                    notify.toRole(Role.SUPERADMIN, "🔗 <b>" + esc(cand.getFullName())
+                            + "</b> botga ulandi (telefon mos keldi: <code>"
+                            + esc(m.getContact().getPhoneNumber()) + "</code>)", null);
+                    return;
+                }
+            }
+        }
+        sender.send(chatId, "✅ Telefon raqamingiz qabul qilindi: <b>"
+                + esc(m.getContact().getPhoneNumber()) + "</b>\n\n"
+                + "SuperAdmin sizni shu raqam orqali topib tizimga qo'shadi.");
+        String who = m.getFrom().getFirstName() == null ? "" : m.getFrom().getFirstName();
+        if (m.getFrom().getLastName() != null) who += " " + m.getFrom().getLastName();
+        notify.toRole(Role.SUPERADMIN, "📱 <b>Yangi kontakt:</b> " + esc(who.trim())
+                + (m.getFrom().getUserName() == null ? "" : " (@" + esc(m.getFrom().getUserName()) + ")")
+                + "\nTelefon: <code>" + esc(m.getContact().getPhoneNumber()) + "</code>"
+                + "\nTelegramID: <code>" + tgId + "</code>\n\n"
+                + "Jadvalda shu odam qatoriga Telefon yoki TelegramID ni yozsangiz — ulanadi.", null);
+    }
+
+    /** Salomlashishda rol o'rniga foydalanuvchining O'Z otdeli ko'rsatiladi. */
+    private String otdelLabel(AppUser u) {
+        if (u.getKassaId() != null)
+            return "🏪 Отдел " + esc(names.owner(OwnerType.KASSA, u.getKassaId()));
+        return "🏪 Отдел основной";
     }
 
     /* ============================ MATN ============================ */
@@ -57,14 +114,25 @@ public class Router {
     private void onMessage(Message m) {
         long chatId = m.getChatId();
         long tgId = m.getFrom().getId();
-        String text = m.getText().trim();
+        // Tugma nomi o'zgartirilgan bo'lsa — kanonik nomga qaytariladi,
+        // shunda barcha navigatsiya mosligi buzilmaydi.
+        String text = labelSvc.canonical(m.getText().trim());
 
         Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
         if (uo.isEmpty() || !uo.get().isActive()) {
             rememberGuest(m);
+            var shareBtn = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton(
+                    "📱 Telefon raqamni yuborish");
+            shareBtn.setRequestContact(true);
+            var row = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow();
+            row.add(shareBtn);
+            var kb = new ReplyKeyboardMarkup();
+            kb.setKeyboard(java.util.List.of(row));
+            kb.setResizeKeyboard(true);
+            kb.setOneTimeKeyboard(true);
             sender.send(chatId, "⛔ Sizga hali ruxsat berilmagan.\n\n"
-                    + "Sizning Telegram ID: <code>" + tgId + "</code>\n"
-                    + "SuperAdmin sizni endi ro'yxatdan tanlab qo'sha oladi.");
+                    + "Pastdagi tugma orqali <b>telefon raqamingizni yuboring</b> — "
+                    + "SuperAdmin sizni raqam orqali topib tizimga qo'shadi.", kb);
             return;
         }
         AppUser user = uo.get();
@@ -73,10 +141,29 @@ public class Router {
         // Menyu tugmasi bosilsa — tugallanmagan dialog (FSM) bekor qilinadi
         if (Keyboards.isMenuLabel(text)) s.reset();
 
+        // Panel ichida yurilganda foydalanuvchi bosgan tugma xabari o'chiriladi — chat toza qoladi
+        boolean inPanel = s.data.get("nav") != null || s.data.get("knav") != null
+                || Keyboards.isMenuLabel(text);
+        if (inPanel && !text.startsWith("/")) sender.deleteMessage(chatId, m.getMessageId());
+
+        if (text.equals("/clear")) {
+            s.reset();
+            // Audit: kim qachon chatni tozalagani yoziladi (Telegram o'chirilgan
+            // xabarlar MATNINI bermaydi — faqat fakt qayd etiladi)
+            audit.log(user.getId(), "CHAT_TOZALANDI", "chat", chatId,
+                    user.getFullName() + " chatni tozaladi (~800 xabar o'chirildi)");
+            sender.clearChat(chatId, m.getMessageId(), 800);
+            sender.send(chatId, "🏦 <b>NSB bot</b>\n\n"
+                    + "Ushbu bot <b>NewStarBukhara</b> kompaniyasi uchun kassa va "
+                    + "kontragentlar hisobini yuritish maqsadida yaratilgan.\n\n"
+                    + "Davom etish uchun /start tugmasini bosing.");
+            return;
+        }
+
         if (text.equals("/start") || text.equals("/menu")) {
             s.reset();
             sender.send(chatId, "Assalomu alaykum, <b>" + esc(user.getFullName()) + "</b>!\n"
-                    + "Rol: " + roleLabel(user.getRole()), menuFor(user));
+                    + otdelLabel(user), menuFor(user));
             String wa = props.getWebappUrl();
             if (wa != null && !wa.isBlank()) {
                 var btn = org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
@@ -94,9 +181,13 @@ public class Router {
         boolean handled;
         try {
             handled = switch (user.getRole()) {
-                case KASSIR -> kassir.onText(user, s, text, chatId);
-                case BUXGALTER -> bux.onText(user, s, text, chatId);
-                case SUPERADMIN -> admin.onText(user, s, text, chatId)
+                case KASSIR -> kontragent.onText(user, s, text, chatId)
+                        || kassir.onText(user, s, text, chatId);
+                case BUXGALTER -> kontragent.onText(user, s, text, chatId)
+                        || admin.onText(user, s, text, chatId)   // 📊 ПАНЕЛ (rol kesimida)
+                        || bux.onText(user, s, text, chatId);
+                case SUPERADMIN -> kontragent.onText(user, s, text, chatId)
+                        || admin.onText(user, s, text, chatId)
                         || bux.onText(user, s, text, chatId);
             };
         } catch (BusinessException e) {
@@ -149,10 +240,12 @@ public class Router {
             if (data.startsWith("rx:")) { decisionRasxod(user, s, data, chatId, msgId); return; }
             if (data.startsWith("tr:")) { decisionTransfer(user, data, chatId, msgId); return; }
             if (data.startsWith("sb:")) { decisionSubmission(user, s, data, chatId, msgId); return; }
+            if (data.startsWith("kg:")) { kontragent.onCallback(user, s, data, chatId, msgId); return; }
 
             boolean handled = switch (user.getRole()) {
                 case KASSIR -> kassir.onCallback(user, s, data, chatId, msgId);
-                case BUXGALTER -> bux.onCallback(user, s, data, chatId, msgId);
+                case BUXGALTER -> admin.onCallback(user, s, data, chatId, msgId)   // pul qabul qilish
+                        || bux.onCallback(user, s, data, chatId, msgId);
                 case SUPERADMIN -> admin.onCallback(user, s, data, chatId, msgId)
                         || bux.onCallback(user, s, data, chatId, msgId);
             };

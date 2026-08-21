@@ -28,8 +28,20 @@ app:
     # farqni (±3 soat) va vaqtinchalik xatolarni qoplash uchun katta overlap.
     # Idempotent (moysklad_id UNIQUE) — qayta o'qish dublikat yaratmaydi.
     sync-overlap-minutes: ${MOYSKLAD_OVERLAP_MIN:240}
+    # Chuqur solishtiruv (reconcile) oynasi: oxirgi N kun hujjatlari API bilan
+    # to'liq solishtiriladi — o'chirilgan/o'zgargan hujjatlar avtomatik tuzatiladi.
+    reconcile-days: ${MOYSKLAD_RECONCILE_DAYS:7}
+    # Ledger boshlanish sanasi: boshlang'ich qoldiqlar (BOSHLANGICH) 17-18.08.2026 da
+    # kiritilgan — bundan eski hujjatlar sinxron/reconcile'ga olinmaydi, bazadagi
+    # eski yozuvlarga tegilmaydi (ikki marta hisoblanishdan himoya).
+    ledger-start-date: ${MOYSKLAD_LEDGER_START:2026-08-18}
   reminder-hour: 21
   webapp-url: ${WEBAPP_URL:}
+  gsheet:
+    id: ${GSHEET_ID:}
+    credentials: ${GOOGLE_SA_JSON:}
+    script-url: ${GSHEET_SCRIPT_URL:}
+    secret: ${GSHEET_SECRET:nsb-2026-kassa}
 
 logging:
   level:

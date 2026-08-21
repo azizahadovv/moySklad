@@ -12,6 +12,14 @@ public interface OperationRepo extends JpaRepository<Operation, Long> {
 
     Optional<Operation> findByMoyskladId(String moyskladId);
 
+    /** MoySklad reconcile: davr ichidagi sinxron yozuvlar (prefiks: ci:/pi:/co:/dc:). */
+    List<Operation> findByOpDateBetweenAndMoyskladIdStartingWith(
+            java.time.LocalDate from, java.time.LocalDate to, String prefix);
+
+    /** Bekor qilish/tahrirlash uchun: bot orqali tasdiqlangan oxirgi rasxodlar. */
+    List<Operation> findTop10ByTypeAndStatusAndMoyskladIdIsNullOrderByIdDesc(
+            OpType type, OpStatus status);
+
     List<Operation> findByStatusAndType(OpStatus status, OpType type);
 
     /** Egaga tegishli oxirgi operatsiyalar (tarix uchun). */

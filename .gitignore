@@ -2,3 +2,7 @@ target/
 .env
 *.iml
 .idea/
+.github
+.idea
+.vscode/
+docs

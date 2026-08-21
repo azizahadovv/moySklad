@@ -208,6 +208,154 @@ public class LedgerService {
         return true;
     }
 
+    /**
+     * MoySklad hujjatining otdeli o'zgartirilgan — allaqachon yozilgan KIRIMNI
+     * eski egadan yangisiga ko'chirish (balans + kun + operatsiya yozuvi).
+     */
+    @Transactional
+    public boolean reroutePrixod(Operation op, OwnerType newOt, Long newOid) {
+        OwnerType oldOt = op.getToOwnerType();
+        Long oldOid = op.getToOwnerId();
+        if (oldOt == newOt && java.util.Objects.equals(oldOid, newOid)) return false;
+        MoneyType mt = op.getMoneyType();
+        long amount = op.getAmount();
+
+        if (mt != MoneyType.TERMINAL) {
+            Balance from = lock(oldOt, oldOid, mt);
+            from.setAmount(from.getAmount() - amount);
+            touch(from);
+            Balance to = lock(newOt, newOid, mt);
+            to.setAmount(to.getAmount() + amount);
+            touch(to);
+        }
+        if (oldOt == OwnerType.KASSA) dayService.addPrixod(oldOid, op.getOpDate(), mt, -amount);
+        if (newOt == OwnerType.KASSA) dayService.addPrixod(newOid, op.getOpDate(), mt, amount);
+
+        op.setToOwnerType(newOt);
+        op.setToOwnerId(newOid);
+        opRepo.save(op);
+        audit.log(null, "REROUTE", "operation", op.getId(),
+                oldOt + ":" + oldOid + " -> " + newOt + ":" + newOid + " " + mt + " " + amount);
+        return true;
+    }
+
+    /**
+     * MoySklad hujjati O'CHIRILGAN yoki BEKOR QILINGAN (провести olib tashlangan) —
+     * yozilgan sinxron operatsiyani to'liq STORNO qilish: balans + kun qaytariladi,
+     * operatsiya o'chiriladi (hujjat qayta paydo bo'lsa yana yoziladi — idempotent).
+     */
+    @Transactional
+    public boolean reverseSyncOp(Operation op, String reason) {
+        MoneyType mt = op.getMoneyType();
+        long amount = op.getAmount();
+        switch (op.getType()) {
+            case PRIXOD -> {
+                if (mt != MoneyType.TERMINAL) {
+                    Balance b = lock(op.getToOwnerType(), op.getToOwnerId(), mt);
+                    b.setAmount(b.getAmount() - amount);
+                    touch(b);
+                }
+                if (op.getToOwnerType() == OwnerType.KASSA)
+                    dayService.addPrixod(op.getToOwnerId(), op.getOpDate(), mt, -amount);
+            }
+            case VOZVRAT -> {
+                if (mt != MoneyType.TERMINAL) {
+                    Balance b = lock(op.getFromOwnerType(), op.getFromOwnerId(), mt);
+                    b.setAmount(b.getAmount() + amount);
+                    touch(b);
+                }
+                if (op.getFromOwnerType() == OwnerType.KASSA)
+                    dayService.addVozvrat(op.getFromOwnerId(), op.getOpDate(), mt, -amount);
+            }
+            case RASXOD -> {
+                Balance b = lock(op.getFromOwnerType(), op.getFromOwnerId(), mt);
+                b.setAmount(b.getAmount() + amount);
+                touch(b);
+                if (op.getFromOwnerType() == OwnerType.KASSA)
+                    dayService.addRasxod(op.getFromOwnerId(), op.getOpDate(), mt, -amount);
+            }
+            default -> { return false; }
+        }
+        audit.log(null, "SYNC_STORNO", "operation", op.getId(),
+                op.getType() + " " + mt + " " + amount + " " + op.getMoyskladId() + " | " + reason);
+        opRepo.delete(op);
+        return true;
+    }
+
+    /**
+     * MoySklad hujjatining SUMMASI o'zgartirilgan — operatsiya, balans va kun
+     * yozuvi farq (delta) bilan yangi summaga moslashtiriladi.
+     */
+    @Transactional
+    public boolean updateSyncAmount(Operation op, long newAmount) {
+        long delta = newAmount - op.getAmount();
+        if (delta == 0 || newAmount <= 0) return false;
+        MoneyType mt = op.getMoneyType();
+        switch (op.getType()) {
+            case PRIXOD -> {
+                if (mt != MoneyType.TERMINAL) {
+                    Balance b = lock(op.getToOwnerType(), op.getToOwnerId(), mt);
+                    b.setAmount(b.getAmount() + delta);
+                    touch(b);
+                }
+                if (op.getToOwnerType() == OwnerType.KASSA)
+                    dayService.addPrixod(op.getToOwnerId(), op.getOpDate(), mt, delta);
+            }
+            case VOZVRAT -> {
+                if (mt != MoneyType.TERMINAL) {
+                    Balance b = lock(op.getFromOwnerType(), op.getFromOwnerId(), mt);
+                    b.setAmount(b.getAmount() - delta);
+                    touch(b);
+                }
+                if (op.getFromOwnerType() == OwnerType.KASSA)
+                    dayService.addVozvrat(op.getFromOwnerId(), op.getOpDate(), mt, delta);
+            }
+            case RASXOD -> {
+                Balance b = lock(op.getFromOwnerType(), op.getFromOwnerId(), mt);
+                b.setAmount(b.getAmount() - delta);
+                touch(b);
+                if (op.getFromOwnerType() == OwnerType.KASSA)
+                    dayService.addRasxod(op.getFromOwnerId(), op.getOpDate(), mt, delta);
+            }
+            default -> { return false; }
+        }
+        long old = op.getAmount();
+        op.setAmount(newAmount);
+        opRepo.save(op);
+        audit.log(null, "SYNC_AMOUNT", "operation", op.getId(),
+                op.getType() + " " + mt + " " + old + " -> " + newAmount + " " + op.getMoyskladId());
+        return true;
+    }
+
+    /**
+     * MoySklad rasxod hujjatining otdeli o'zgartirilgan — allaqachon yozilgan CHIQIMNI
+     * eski egadan yangisiga ko'chirish (reroutePrixod'ning rasxod ko'zgusi).
+     */
+    @Transactional
+    public boolean rerouteRasxod(Operation op, OwnerType newOt, Long newOid) {
+        OwnerType oldOt = op.getFromOwnerType();
+        Long oldOid = op.getFromOwnerId();
+        if (oldOt == newOt && java.util.Objects.equals(oldOid, newOid)) return false;
+        MoneyType mt = op.getMoneyType();
+        long amount = op.getAmount();
+
+        Balance from = lock(oldOt, oldOid, mt);
+        from.setAmount(from.getAmount() + amount);
+        touch(from);
+        Balance to = lock(newOt, newOid, mt);
+        to.setAmount(to.getAmount() - amount);
+        touch(to);
+        if (oldOt == OwnerType.KASSA) dayService.addRasxod(oldOid, op.getOpDate(), mt, -amount);
+        if (newOt == OwnerType.KASSA) dayService.addRasxod(newOid, op.getOpDate(), mt, amount);
+
+        op.setFromOwnerType(newOt);
+        op.setFromOwnerId(newOid);
+        opRepo.save(op);
+        audit.log(null, "REROUTE_RASXOD", "operation", op.getId(),
+                oldOt + ":" + oldOid + " -> " + newOt + ":" + newOid + " " + mt + " " + amount);
+        return true;
+    }
+
     /* ==================== RASXOD (MoySklad sinxron, TZ v1.1) ==================== */
 
     /**
@@ -248,6 +396,14 @@ public class LedgerService {
     @Transactional
     public Operation postAdjustment(OpType type, OwnerType ot, Long oid, MoneyType mt,
                                     long signedAmount, String reason, Long byUserId) {
+        return postAdjustment(type, ot, oid, mt, signedAmount, reason, byUserId, null);
+    }
+
+    /** date null bo'lsa — bugun. */
+    @Transactional
+    public Operation postAdjustment(OpType type, OwnerType ot, Long oid, MoneyType mt,
+                                    long signedAmount, String reason, Long byUserId,
+                                    java.time.LocalDate date) {
         if (signedAmount == 0) throw new BusinessException("Summa nolga teng bo'lishi mumkin emas");
         if (mt == MoneyType.TERMINAL) throw new BusinessException("Terminal balansda yuritilmaydi");
 
@@ -258,7 +414,7 @@ public class LedgerService {
         Operation.OperationBuilder ob = Operation.builder()
                 .type(type).moneyType(mt).amount(Math.abs(signedAmount))
                 .status(OpStatus.TASDIQLANGAN)
-                .comment(reason).opDate(today())
+                .comment(reason).opDate(date == null ? today() : date)
                 .createdBy(byUserId).decidedBy(byUserId).decidedAt(Instant.now());
         if (signedAmount > 0) ob.toOwnerType(ot).toOwnerId(oid);
         else ob.fromOwnerType(ot).fromOwnerId(oid);

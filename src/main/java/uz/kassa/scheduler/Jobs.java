@@ -24,6 +24,8 @@ import java.util.List;
 public class Jobs {
 
     private final MoySkladSyncService syncService;
+    private final uz.kassa.service.ReminderService reminderService;
+    private final uz.kassa.gsheets.SheetsSyncService sheetsSync;
     private final DayService dayService;
     private final SubmissionService submissionService;
     private final LedgerService ledger;
@@ -31,12 +33,61 @@ public class Jobs {
     private final DayRepo dayRepo;
     private final NotificationService notify;
 
-    @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT30S")
+    /** Tez sinxron — realtime'ga yaqin: har 30 soniyada yangi/o'zgargan hujjatlar. */
+    @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT15S")
     public void moyskladSync() {
         try {
             syncService.sync();
         } catch (Exception e) {
             log.error("Sinxron xatosi: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Chuqur solishtiruv — oxirgi N kun API bilan to'liq tekshiriladi:
+     * o'chirilgan/bekor qilingan hujjatlar STORNO, tushib qolganlari yoziladi.
+     * Ishga tushgandan 45 soniya o'tib birinchi marta — bot to'xtab turgan
+     * davrdagi barcha o'zgarishlar shu yerdan tiklanadi.
+     */
+    @Scheduled(fixedDelayString = "PT10M", initialDelayString = "PT45S")
+    public void moyskladReconcile() {
+        try {
+            syncService.reconcile();
+        } catch (Exception e) {
+            log.error("Reconcile xatosi: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Qarz eslatmalari: 09:00 dan keyin tekshiriladi, har eslatma kuniga bir marta —
+     * tanlangan kunlarda, muddat kunida va muddati o'tganda yuboriladi.
+     */
+    @Scheduled(fixedDelayString = "PT10M", initialDelayString = "PT2M")
+    public void reminderTick() {
+        try {
+            reminderService.tick();
+        } catch (Exception e) {
+            log.warn("Eslatma tick xatosi: {}", e.getMessage());
+        }
+    }
+
+    /** Google Sheets ikki tomonlama sinxron (sozlangan bo'lsa). */
+    @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT75S")
+    public void googleSheets() {
+        try {
+            sheetsSync.sync();
+        } catch (Exception e) {
+            log.warn("Sheets sinxron xatosi: {}", e.getMessage());
+        }
+    }
+
+    /** НАСТРОЙКА varaqlari (Foydalanuvchilar/Kassalar) — tez sikl, tahrir 1 daqiqada qo'llanadi. */
+    @Scheduled(fixedDelayString = "PT1M", initialDelayString = "PT45S")
+    public void googleSheetsNastroyka() {
+        try {
+            sheetsSync.syncNastroyka();
+        } catch (Exception e) {
+            log.warn("Sheets tez sinxron xatosi: {}", e.getMessage());
         }
     }
 

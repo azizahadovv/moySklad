@@ -177,7 +177,8 @@ public class WebAppController {
 
         List<Map<String, Object>> kassirs = new ArrayList<>();
         for (AppUser x : userRepo.findByKassaIdAndActiveTrue(id))
-            kassirs.add(Map.of("name", x.getFullName(), "tgId", x.getTelegramId()));
+            kassirs.add(Map.of("name", x.getFullName(),
+                    "tgId", x.getTelegramId() == null ? 0L : x.getTelegramId()));
 
         LocalDate f = LocalDate.parse(from), t = LocalDate.parse(to);
         List<Map<String, Object>> ops = new ArrayList<>();
@@ -452,7 +453,8 @@ public class WebAppController {
         adminOnly(user(init));
         List<Map<String, Object>> out = new ArrayList<>();
         for (AppUser x : userRepo.findByActiveTrueOrderByRoleAscIdAsc())
-            out.add(Map.of("id", x.getId(), "tgId", x.getTelegramId(),
+            out.add(Map.of("id", x.getId(),
+                    "tgId", x.getTelegramId() == null ? 0L : x.getTelegramId(),
                     "name", x.getFullName(), "role", x.getRole().name(),
                     "kassa", x.getKassaId() == null ? "" : names.owner(OwnerType.KASSA, x.getKassaId())));
         return out;

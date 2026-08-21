@@ -24,16 +24,16 @@ public class NotificationService {
 
     public void toRole(Role role, String text, InlineKeyboardMarkup kb) {
         for (AppUser u : userRepo.findByRoleAndActiveTrue(role))
-            sender.send(u.getTelegramId(), text, kb);
+            if (u.getTelegramId() != null) sender.send(u.getTelegramId(), text, kb);
     }
 
-    /** Kassaga biriktirilgan barcha faol kassirlarga. */
+    /** Kassaga biriktirilgan barcha faol kassirlarga (Telegram ulanganlariga). */
     public void toKassa(Long kassaId, String text, InlineKeyboardMarkup kb) {
         for (AppUser u : userRepo.findByKassaIdAndActiveTrue(kassaId))
-            sender.send(u.getTelegramId(), text, kb);
+            if (u.getTelegramId() != null) sender.send(u.getTelegramId(), text, kb);
     }
 
     public void toUser(Long telegramId, String text) {
-        sender.send(telegramId, text, null);
+        if (telegramId != null) sender.send(telegramId, text, null);
     }
 }

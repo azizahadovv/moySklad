@@ -10,7 +10,8 @@ public class AppUser {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "telegram_id", nullable = false, unique = true)
+    /** Telegram ulanmagan bo'lishi mumkin (Sheets'dan yaratilgan kassir) — keyin telefon orqali bog'lanadi. */
+    @Column(name = "telegram_id", unique = true)
     private Long telegramId;
 
     @Column(name = "full_name", nullable = false)

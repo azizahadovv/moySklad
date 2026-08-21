@@ -1,0 +1,418 @@
+package uz.kassa.gsheets;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import uz.kassa.bot.NameService;
+import uz.kassa.domain.*;
+import uz.kassa.repo.*;
+import uz.kassa.service.LedgerService;
+import uz.kassa.service.moysklad.MoySkladClient;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Google Sheets bilan IKKI TOMONLAMA sinxron (har 5 daqiqada):
+ *   BOT -> SHEETS: Operatsiyalar, Balanslar, Kunlar (jarayonning to'liq ko'rinishi)
+ *   SHEETS -> BOT: Kassalar va Foydalanuvchilar varaqlaridagi tahrirlar
+ *                  (nom, otdel, rol, kassa, faol) botga qo'llanadi — НАСТРОЙКА jadvaldan.
+ * Yangi satr (ID bo'sh) -> yangi kassa / foydalanuvchi yaratiladi.
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class SheetsSyncService {
+
+    private final GoogleSheetsClient gs;
+    private final KassaRepo kassaRepo;
+    private final AppUserRepo userRepo;
+    private final OperationRepo opRepo;
+    private final DayRepo dayRepo;
+    private final LedgerService ledger;
+    private final NameService names;
+    private final MoySkladClient msClient;
+    private final GuestRepo guestRepo;
+    private final ClickAccountRepo clickRepo;
+
+    private volatile boolean tabsReady = false;
+
+    /** Qayta ishlanmagan (chala) satrlar — push paytida SAQLAB qolinadi, o'chirilmaydi. */
+    private volatile List<List<Object>> pendingUsers = List.of();
+    private volatile List<List<Object>> pendingKassas = List.of();
+    private volatile boolean usersPullOk = false, kassaPullOk = false;
+
+    public void sync() {
+        if (!gs.configured()) return;
+        try {
+            ensureTabs();
+            pullKassalar();
+            pullUsers();
+            pushOperatsiyalar();
+            pushBalanslar();
+            pushKunlar();
+            pushKassalar();
+            pushUsers();
+            pushSozlamalar();
+        } catch (Exception e) {
+            log.warn("Google Sheets sinxron xatosi: {}", e.getMessage());
+        }
+    }
+
+    /** Tez sikl (har 1 daqiqa): faqat НАСТРОЙКА varaqlari — foydalanuvchi/kassa
+     *  tahrirlari uzoq kutmasin. Og'ir push'lar to'liq siklda (5 daq) qoladi. */
+    public void syncNastroyka() {
+        if (!gs.configured()) return;
+        try {
+            ensureTabs();
+            pullKassalar();
+            pullUsers();
+            pushKassalar();
+            pushUsers();
+        } catch (Exception e) {
+            log.warn("Google Sheets tez sinxron xatosi: {}", e.getMessage());
+        }
+    }
+
+    private void ensureTabs() throws Exception {
+        if (tabsReady) return;
+        gs.ensureTabs(List.of("Operatsiyalar", "Balanslar", "Kunlar",
+                "Kassalar", "Foydalanuvchilar", "Sozlamalar"));
+        tabsReady = true;
+        log.info("Google Sheets ulandi");
+    }
+
+    /* ==================== SHEETS -> BOT (НАСТРОЙКА) ==================== */
+
+    private boolean bool(String v, boolean def) {
+        if (v == null || v.isBlank()) return def;
+        String s = v.trim().toUpperCase();
+        return s.equals("TRUE") || s.equals("HA") || s.equals("ХА") || s.equals("1") || s.equals("+");
+    }
+
+    private String cell(List<String> row, int i) {
+        return i < row.size() ? row.get(i).trim() : "";
+    }
+
+    /** Rol nomini yumshoq o'qish: kassir/Kassir/KASSIR, admin -> SUPERADMIN. */
+    private Role parseRole(String s) {
+        String v = s == null ? "" : s.trim().toUpperCase();
+        if (v.startsWith("KASSIR") || v.startsWith("КАССИР")) return Role.KASSIR;
+        if (v.startsWith("BUX") || v.startsWith("БУХ")) return Role.BUXGALTER;
+        if (v.contains("ADMIN") || v.contains("АДМИН") || v.startsWith("SUPER")) return Role.SUPERADMIN;
+        return null;
+    }
+
+    /** Kassani ID yoki NOM bo'yicha topish. */
+    private Kassa resolveKassa(String idS, String nomi) {
+        if (idS != null && !idS.isBlank())
+            try { return kassaRepo.findById(Long.parseLong(idS.trim())).orElse(null); }
+            catch (NumberFormatException ignored) { }
+        if (nomi != null && !nomi.isBlank())
+            return kassaRepo.findAll().stream()
+                    .filter(k -> k.getName().equalsIgnoreCase(nomi.trim())).findFirst().orElse(null);
+        return null;
+    }
+
+    /** Telefon raqami bo'yicha mehmon (kontakt yuborganlar) Telegram ID sini topish. */
+    private Long guestByPhone(String tel) {
+        String d = tel == null ? "" : tel.replaceAll("\\D", "");
+        if (d.length() < 7) return null;
+        for (Guest g : guestRepo.findAll()) {
+            String gp = g.getPhone() == null ? "" : g.getPhone().replaceAll("\\D", "");
+            if (!gp.isEmpty() && (gp.endsWith(d) || d.endsWith(gp))) return g.getTelegramId();
+        }
+        return null;
+    }
+
+    /** Kassalar varag'i: [ID, Nomi, Otdel ID, Otdel nomi, Faol]. Chala satrlar saqlanadi. */
+    private void pullKassalar() {
+        List<List<Object>> pending = new ArrayList<>();
+        kassaPullOk = false;
+        try {
+            Map<String, String> groups;
+            try { groups = msClient.fetchGroups(); } catch (Exception e) { groups = Map.of(); }
+            Map<String, String> groupByName = new java.util.HashMap<>();
+            groups.forEach((id, name) -> groupByName.put(name.trim().toLowerCase(), id));
+
+            List<List<String>> rows = gs.get("Kassalar!A2:F100");
+            for (List<String> r : rows) {
+                if (r.stream().allMatch(c -> c == null || c.isBlank())) continue;
+                String id = cell(r, 0), nomi = cell(r, 1), otdel = cell(r, 2), otdelNomi = cell(r, 3);
+                boolean faol = bool(cell(r, 4), true);
+                // Otdel: ID yo'q bo'lsa nomi bo'yicha topiladi (masalan "Отдел Шохрух")
+                String groupId = !otdel.isBlank() ? otdel
+                        : groupByName.getOrDefault(otdelNomi.trim().toLowerCase(), "");
+
+                if (id.isBlank()) {
+                    if (nomi.isBlank()) {
+                        pending.add(List.of("", nomi, otdel, otdelNomi, faol ? "TRUE" : "FALSE",
+                                "⚠️ Nomi yo'q — kassa nomini yozing"));
+                        continue;
+                    }
+                    if (kassaRepo.findAll().stream().anyMatch(k -> k.getName().equalsIgnoreCase(nomi)))
+                        continue;   // allaqachon bor
+                    kassaRepo.save(Kassa.builder().name(nomi)
+                            .moyskladGroupId(groupId.isBlank() ? null : groupId)
+                            .active(faol).build());
+                    log.info("Sheets: yangi kassa yaratildi — {}", nomi);
+                    continue;
+                }
+                final String gFinal = groupId;
+                kassaRepo.findById(Long.parseLong(id)).ifPresent(k -> {
+                    boolean ch = false;
+                    if (!nomi.isBlank() && !nomi.equals(k.getName())) { k.setName(nomi); ch = true; }
+                    String cur = k.getMoyskladGroupId() == null ? "" : k.getMoyskladGroupId();
+                    if (!gFinal.isBlank() && !gFinal.equals(cur)) { k.setMoyskladGroupId(gFinal); ch = true; }
+                    if (faol != k.isActive()) { k.setActive(faol); ch = true; }
+                    if (ch) { kassaRepo.save(k); log.info("Sheets: kassa #{} yangilandi", k.getId()); }
+                });
+            }
+            kassaPullOk = true;
+        } catch (Exception e) {
+            log.warn("Sheets Kassalar o'qish: {}", e.getMessage());
+        }
+        pendingKassas = pending;
+    }
+
+    /** Foydalanuvchilar: [ID, TelegramID, Telefon, Ism, Rol, KassaID, KassaNomi, Faol].
+     *  Chala satrlar o'chirilmaydi — «Holat» ustunida sabab ko'rsatiladi. */
+    private void pullUsers() {
+        List<List<Object>> pending = new ArrayList<>();
+        usersPullOk = false;
+        try {
+            List<List<String>> rows = gs.get("Foydalanuvchilar!A2:I300");
+            for (List<String> r : rows) {
+                if (r.stream().allMatch(c -> c == null || c.isBlank())) continue;
+                String id = cell(r, 0), tg = cell(r, 1), tel = cell(r, 2), ism = cell(r, 3),
+                        rolS = cell(r, 4), kassaIdS = cell(r, 5), kassaNomi = cell(r, 6);
+                boolean faol = bool(cell(r, 7), true);
+
+                if (id.isBlank()) {
+                    Role role = parseRole(rolS);
+                    Long tgId = null;
+                    if (!tg.isBlank())
+                        try { tgId = Long.parseLong(tg.replaceAll("\\D", "")); }
+                        catch (NumberFormatException ignored) { }
+                    if (tgId == null) tgId = guestByPhone(tel);
+                    Kassa kassa = resolveKassa(kassaIdS, kassaNomi);
+
+                    String xato = null;
+                    if (ism.isBlank()) xato = "⚠️ Ism yozing";
+                    else if (role == null) xato = "⚠️ Rol: KASSIR / BUXGALTER / SUPERADMIN";
+                    else if (tgId != null && userRepo.findByTelegramId(tgId).isPresent())
+                            xato = "⚠️ Bu TelegramID allaqachon tizimda";
+                    else if (role == Role.KASSIR && kassa == null)
+                            xato = "⚠️ KassaID yoki KassaNomi kiriting";
+
+                    if (xato == null) {
+                        // Telegram'siz ham yaratiladi — ro'yxatlarda darhol ko'rinadi,
+                        // kontakt yuborilganda telefon orqali avtomatik ulanadi.
+                        // Takror yaratmaslik: xuddi shu ismli tg'siz foydalanuvchi bo'lsa — o'tkazamiz.
+                        boolean dup = tgId == null && userRepo.findAll().stream()
+                                .anyMatch(e -> e.getTelegramId() == null
+                                        && e.getFullName().equalsIgnoreCase(ism));
+                        if (!dup) {
+                            String phone = tel.replaceAll("\\D", "");
+                            userRepo.save(AppUser.builder()
+                                    .telegramId(tgId).fullName(ism).role(role)
+                                    .phone(phone.isEmpty() ? null : phone)
+                                    .kassaId(role == Role.KASSIR ? kassa.getId() : null)
+                                    .active(faol).build());
+                            log.info("Sheets: yangi foydalanuvchi — {}", ism);
+                        }
+                    } else {
+                        pending.add(List.of("", tg, tel, ism, rolS, kassaIdS, kassaNomi,
+                                faol ? "TRUE" : "FALSE", xato));
+                    }
+                    continue;
+                }
+
+                userRepo.findById(Long.parseLong(id)).ifPresent(x -> {
+                    boolean ch = false;
+                    if (!ism.isBlank() && !ism.equals(x.getFullName())) { x.setFullName(ism); ch = true; }
+                    // Telefon ham jadvaldan boshqariladi: yozilsa — yangilanadi, o'chirilsa — o'chadi
+                    String phone = tel.replaceAll("\\D", "");
+                    if (!phone.isEmpty() && !phone.equals(x.getPhone())) { x.setPhone(phone); ch = true; }
+                    else if (phone.isEmpty() && x.getPhone() != null) { x.setPhone(null); ch = true; }
+                    // TelegramID ustuni jadvaldan boshqariladi: yozilsa — ulash/almashtirish,
+                    // o'chirilsa — uzish (faqat SUPERADMIN'niki himoyalangan).
+                    if (!tg.isBlank()) {
+                        Long tgNew = null;
+                        try { tgNew = Long.parseLong(tg.replaceAll("\\D", "")); }
+                        catch (NumberFormatException ignored) { }   // tushunarsiz yozuv — tegmaymiz
+                        if (tgNew != null && !tgNew.equals(x.getTelegramId())
+                                && userRepo.findByTelegramId(tgNew).isEmpty()) {
+                            x.setTelegramId(tgNew); ch = true;
+                            log.info("Sheets: {} Telegram bilan bog'landi ({})", x.getFullName(), tgNew);
+                        }
+                    } else if (x.getTelegramId() != null) {
+                        // Ataylab o'chirilgan: uzamiz va mehmon yozuvini ham tozalaymiz —
+                        // aks holda telefon orqali keyingi siklda o'zi qayta ulanib qolardi.
+                        if (x.getRole() != Role.SUPERADMIN) {
+                            guestRepo.findById(x.getTelegramId()).ifPresent(guestRepo::delete);
+                            x.setTelegramId(null); ch = true;
+                            log.info("Sheets: {} Telegram uzildi", x.getFullName());
+                        }
+                    } else {
+                        // Hali ulanmagan: kontakt yuborganlar (guests) telefoni bo'yicha ulashga urinamiz
+                        Long link = guestByPhone(!phone.isEmpty() ? phone : x.getPhone());
+                        if (link != null && userRepo.findByTelegramId(link).isEmpty()) {
+                            x.setTelegramId(link); ch = true;
+                            log.info("Sheets: {} Telegram bilan bog'landi ({})", x.getFullName(), link);
+                        }
+                    }
+                    Role role = parseRole(rolS);
+                    if (role != null && role != x.getRole()) {
+                        if (!(x.getRole() == Role.SUPERADMIN
+                                && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
+                            x.setRole(role); ch = true;
+                        }
+                    }
+                    Kassa kassa = resolveKassa(kassaIdS, kassaNomi);
+                    Long newKassa = x.getRole() == Role.KASSIR
+                            ? (kassa != null ? kassa.getId() : x.getKassaId()) : null;
+                    if (newKassa == null ? x.getKassaId() != null : !newKassa.equals(x.getKassaId())) {
+                        x.setKassaId(newKassa); ch = true;
+                    }
+                    if (faol != x.isActive()) {
+                        if (!(x.getRole() == Role.SUPERADMIN && !faol
+                                && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
+                            x.setActive(faol); ch = true;
+                        }
+                    }
+                    if (ch) { userRepo.save(x); log.info("Sheets: foydalanuvchi #{} yangilandi", x.getId()); }
+                });
+            }
+            usersPullOk = true;
+        } catch (Exception e) {
+            log.warn("Sheets Foydalanuvchilar o'qish: {}", e.getMessage());
+        }
+        pendingUsers = pending;
+    }
+
+    /* ==================== BOT -> SHEETS ==================== */
+
+    private String owner(OwnerType t, Long id) {
+        if (t == null) return "";
+        return t == OwnerType.BUXGALTERIYA ? "Buxgalteriya" : names.owner(t, id);
+    }
+
+    private void pushOperatsiyalar() throws Exception {
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("ID", "Sana", "Turi", "Pul turi", "Summa",
+                "Kimdan", "Kimga", "Status", "Izoh", "MoySklad"));
+        List<Operation> ops = opRepo.byPeriod(ledger.today().minusDays(60), ledger.today());
+        int n = 0;
+        for (Operation o : ops) {
+            if (n++ >= 3000) break;
+            rows.add(List.of(o.getId(), o.getOpDate().toString(), o.getType().name(),
+                    o.getMoneyType().name(), o.getAmount(),
+                    owner(o.getFromOwnerType(), o.getFromOwnerId()),
+                    owner(o.getToOwnerType(), o.getToOwnerId()),
+                    o.getStatus().name(),
+                    o.getComment() == null ? "" : o.getComment(),
+                    o.getMoyskladId() == null ? "" : o.getMoyskladId()));
+        }
+        gs.overwrite("Operatsiyalar", rows);
+    }
+
+    private void pushBalanslar() throws Exception {
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("Kassa", "Naqd", "Band naqd", "Click", "Band click",
+                "Terminal (bugun)", "JAMI"));
+        long tn = 0, tk = 0, tt = 0;
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            var n = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD);
+            var kl = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK);
+            long term = dayRepo.findByKassaIdAndDate(k.getId(), ledger.today())
+                    .map(DayRecord::getPrixodTerminal).orElse(0L);
+            tn += n.getAmount(); tk += kl.getAmount(); tt += term;
+            rows.add(List.of(k.getName(), n.getAmount(), n.getReserved(),
+                    kl.getAmount(), kl.getReserved(), term,
+                    n.getAmount() + kl.getAmount() + term));
+        }
+        var bn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD);
+        var bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
+        rows.add(List.of("Buxgalteriya", bn.getAmount(), bn.getReserved(),
+                bk.getAmount(), bk.getReserved(), 0, bn.getAmount() + bk.getAmount()));
+        long ck = 0;
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+            var cb = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK);
+            ck += cb.getAmount();
+            rows.add(List.of("📲 " + c.getName(), "", "",
+                    cb.getAmount(), cb.getReserved(), 0, cb.getAmount()));
+        }
+        rows.add(List.of("JAMI", tn + bn.getAmount(), "", tk + bk.getAmount() + ck, "", tt,
+                tn + bn.getAmount() + tk + bk.getAmount() + ck + tt));
+        gs.overwrite("Balanslar", rows);
+    }
+
+    private void pushKunlar() throws Exception {
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("Sana", "Kassa", "Kirim naqd", "Kirim click", "Terminal",
+                "Rasxod naqd", "Rasxod click", "Qoplangan naqd", "Qoplangan click", "Status"));
+        LocalDate from = ledger.today().minusDays(31);
+        for (DayRecord d : dayRepo.findAll()) {
+            if (d.getDate().isBefore(from)) continue;
+            rows.add(List.of(d.getDate().toString(),
+                    names.owner(OwnerType.KASSA, d.getKassaId()),
+                    d.getPrixodNaqd(), d.getPrixodKlik(), d.getPrixodTerminal(),
+                    d.getRasxodNaqd(), d.getRasxodKlik(),
+                    d.getCoveredNaqd(), d.getCoveredKlik(), d.getStatus().name()));
+        }
+        gs.overwrite("Kunlar", rows);
+    }
+
+    private void pushKassalar() throws Exception {
+        if (!kassaPullOk) return;   // o'qish muvaffaqiyatsiz — foydalanuvchi tahririni yo'qotmaymiz
+        Map<String, String> groups;
+        try { groups = msClient.fetchGroups(); } catch (Exception e) { groups = Map.of(); }
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("ID", "Nomi", "Otdel ID", "Otdel nomi", "Faol", "Holat"));
+        for (Kassa k : kassaRepo.findAll()) {
+            String g = k.getMoyskladGroupId() == null ? "" : k.getMoyskladGroupId();
+            rows.add(List.of(k.getId(), k.getName(), g,
+                    groups.getOrDefault(g, ""), k.isActive() ? "TRUE" : "FALSE", ""));
+        }
+        rows.addAll(pendingKassas);   // chala satrlar sabab bilan saqlanadi
+        gs.overwrite("Kassalar", rows);
+    }
+
+    private void pushUsers() throws Exception {
+        if (!usersPullOk) return;   // o'qish muvaffaqiyatsiz — foydalanuvchi tahririni yo'qotmaymiz
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("ID", "TelegramID", "Telefon", "Ism", "Rol",
+                "KassaID", "KassaNomi", "Faol", "Holat"));
+        for (AppUser x : userRepo.findAll()) {
+            rows.add(List.of(x.getId(),
+                    x.getTelegramId() == null ? "" : x.getTelegramId(),
+                    x.getPhone() == null ? "" : x.getPhone(),
+                    x.getFullName(), x.getRole().name(),
+                    x.getKassaId() == null ? "" : x.getKassaId(),
+                    x.getKassaId() == null ? "" : names.owner(OwnerType.KASSA, x.getKassaId()),
+                    x.isActive() ? "TRUE" : "FALSE",
+                    x.getTelegramId() == null
+                            ? "⏳ Telegram ulanmagan — Telefon ustunini to'ldiring va odam botga kirib «📱 Telefon raqamni yuborish»ni bossin"
+                            : ""));
+        }
+        rows.addAll(pendingUsers);   // chala satrlar sabab bilan saqlanadi
+        gs.overwrite("Foydalanuvchilar", rows);
+    }
+
+    private void pushSozlamalar() throws Exception {
+        gs.overwrite("Sozlamalar", List.of(
+                List.of("Ko'rsatma", "Qiymat"),
+                List.of("Oxirgi sinxron", LocalDateTime.now().withNano(0).toString()),
+                List.of("Tahrir qilinadigan varaqlar", "Kassalar, Foydalanuvchilar"),
+                List.of("Kassalar", "Nomi/Otdel (ID yoki nomi)/Faol; yangi satr (ID bo'sh) = yangi kassa"),
+                List.of("Foydalanuvchilar", "Ism + Rol (kassir/buxgalter/admin) + TelegramID YOKI Telefon + Kassa (ID yoki nomi); yangi satr (ID bo'sh) = yangi foydalanuvchi"),
+                List.of("Holat ustuni", "Satr qabul qilinmasa sabab shu ustunda chiqadi — satr O'CHMAYDI, to'ldirsangiz keyingi siklda qabul qilinadi"),
+                List.of("Qolgan varaqlar", "Bot tomonidan avtomatik yoziladi — tahrir 5 daqiqada ustidan yozib yuboriladi"),
+                List.of("Davr", "Operatsiyalar: oxirgi 60 kun · Kunlar: oxirgi 31 kun")));
+    }
+}

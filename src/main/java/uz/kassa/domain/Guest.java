@@ -15,6 +15,9 @@ public class Guest {
 
     private String username;
 
+    /** «Kontakt ulashish» tugmasi orqali kelgan telefon raqami. */
+    private String phone;
+
     @Builder.Default
     @Column(name = "first_seen", nullable = false)
     private Instant firstSeen = Instant.now();

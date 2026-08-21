@@ -73,6 +73,63 @@ public class RasxodService {
         return opRepo.save(op);
     }
 
+    /**
+     * TASDIQLANGAN rasxodni bekor qilish (SuperAdmin): yechilgan summa balansga
+     * QAYTARILADI, kun yozuvi tuzatiladi, status BEKOR bo'ladi.
+     * Faqat bot orqali qilingan rasxodlar — MoySklad rasxodi MoySkladda o'zgartiriladi.
+     */
+    @Transactional
+    public Operation cancelApproved(Long opId, AppUser by) {
+        Operation op = opRepo.findById(opId)
+                .orElseThrow(() -> new BusinessException("Rasxod topilmadi"));
+        if (op.getType() != OpType.RASXOD || op.getStatus() != OpStatus.TASDIQLANGAN)
+            throw new BusinessException("Faqat tasdiqlangan rasxodni bekor qilish mumkin");
+        if (op.getMoyskladId() != null)
+            throw new BusinessException("Bu MoySklad rasxodi — MoySkladning o'zida o'zgartiriladi");
+
+        ledger.credit(op.getFromOwnerType(), op.getFromOwnerId(), op.getMoneyType(), op.getAmount());
+        if (op.getFromOwnerType() == OwnerType.KASSA)
+            dayService.addRasxod(op.getFromOwnerId(), op.getOpDate(), op.getMoneyType(), -op.getAmount());
+
+        op.setStatus(OpStatus.BEKOR);
+        op.setRejectReason("Bekor qildi: " + by.getFullName());
+        op.setDecidedBy(by.getId());
+        op.setDecidedAt(Instant.now());
+        audit.log(by.getId(), "RASXOD_BEKOR", "operation", op.getId(),
+                op.getMoneyType() + " " + op.getAmount() + " qaytarildi");
+        return opRepo.save(op);
+    }
+
+    /**
+     * TASDIQLANGAN rasxod summasini o'zgartirish (SuperAdmin):
+     * farq (delta) balans va kun yozuviga qo'llanadi.
+     */
+    @Transactional
+    public Operation editApprovedAmount(Long opId, long newAmount, AppUser by) {
+        Operation op = opRepo.findById(opId)
+                .orElseThrow(() -> new BusinessException("Rasxod topilmadi"));
+        if (op.getType() != OpType.RASXOD || op.getStatus() != OpStatus.TASDIQLANGAN)
+            throw new BusinessException("Faqat tasdiqlangan rasxodni tahrirlash mumkin");
+        if (op.getMoyskladId() != null)
+            throw new BusinessException("Bu MoySklad rasxodi — MoySkladning o'zida o'zgartiriladi");
+        if (newAmount <= 0)
+            throw new BusinessException("Summa noldan katta bo'lishi kerak");
+        long delta = newAmount - op.getAmount();
+        if (delta == 0) throw new BusinessException("Summa o'zgarmadi");
+
+        // delta > 0: qo'shimcha yechiladi; delta < 0: ortiqcha qaytariladi
+        ledger.credit(op.getFromOwnerType(), op.getFromOwnerId(), op.getMoneyType(), -delta);
+        if (op.getFromOwnerType() == OwnerType.KASSA)
+            dayService.addRasxod(op.getFromOwnerId(), op.getOpDate(), op.getMoneyType(), delta);
+
+        long old = op.getAmount();
+        op.setAmount(newAmount);
+        op.setDecidedBy(by.getId());
+        op.setDecidedAt(Instant.now());
+        audit.log(by.getId(), "RASXOD_EDIT", "operation", op.getId(), old + " -> " + newAmount);
+        return opRepo.save(op);
+    }
+
     /** Buxgalterning O'Z rasxodi — dialogda tasdiqlangach darhol bajariladi (TZ 7.7). */
     @Transactional
     public Operation direct(AppUser bux, MoneyType mt, long amount, Long categoryId, String comment) {

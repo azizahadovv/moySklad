@@ -37,31 +37,80 @@ public class MoySkladClient {
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
 
     private final AppProps props;
+    private final uz.kassa.service.SettingsService settings;
     private final ObjectMapper om = new ObjectMapper();
     private final HttpClient http = HttpClient.newHttpClient();
 
-    /** Sotuv/vozvrat hujjati: summalar TIYINDA keladi (so'mga /100). */
-    public record MsDoc(String id, LocalDate date, long cashTiyin, long noCashTiyin, String storeId) {}
+    /** Joriy token keshi (settings o'zgarganda null qilinadi). */
+    private volatile String cachedToken = null;
+
+    /**
+     * Amaldagi token: avval settings jadvalidagi «moysklad.token» (SuperAdmin
+     * botdan o'zgartirgan bo'lsa), bo'lmasa .env dagi MOYSKLAD_TOKEN.
+     */
+    public String currentToken() {
+        String t = cachedToken;
+        if (t == null) {
+            t = settings.get("moysklad.token").orElse("").trim();
+            if (t.isBlank()) {
+                String env = props.getMoysklad().getToken();
+                t = env == null ? "" : env.trim();
+            }
+            cachedToken = t;
+        }
+        return t;
+    }
+
+    /** SuperAdmin yangi kalit kiritdi — saqlash va keshni yangilash. */
+    public void updateToken(String token) {
+        settings.set("moysklad.token", token == null ? "" : token.trim());
+        cachedToken = null;
+    }
+
+    /** Kalitni tekshirish: API oddiy so'rovga 200 qaytarsa — yaroqli. */
+    public boolean testToken(String token) {
+        try {
+            HttpRequest req = HttpRequest.newBuilder(
+                            URI.create(props.getMoysklad().getBaseUrl() + "/entity/currency?limit=1"))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Accept", "application/json;charset=utf-8")
+                    .header("Accept-Encoding", "gzip")
+                    .GET().build();
+            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            return resp.statusCode() == 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Sotuv/vozvrat hujjati: summalar TIYINDA keladi (so'mga /100).
+     *  applicable=false — hujjat o'tkazilmagan (bekor qilingan) — yozuv STORNO qilinadi. */
+    public record MsDoc(String id, LocalDate date, long cashTiyin, long noCashTiyin,
+                        String storeId, boolean applicable) {}
 
     /** Kassa hujjati (Приходный/Расходный ордер, Входящий платеж, Выплата денег).
      *  groupId — hujjat egasining otdeli (Владелец-отдел), kassa bog'lanishi shu orqali.
-     *  docNo — hujjat raqami, agent — kontragent, state — hujjat statusi (mas. «Клик»). */
+     *  docNo — hujjat raqami, agent — kontragent, state — hujjat statusi (mas. «Клик»).
+     *  applicable=false — hujjat o'tkazilmagan (bekor qilingan) — yozuv STORNO qilinadi. */
     public record MsExpense(String id, String docNo, LocalDate date, long sumTiyin, String storeId,
                             String groupId, String expenseItem, String description,
-                            String agent, String state) {}
+                            String agent, String state, String currencyId, boolean applicable) {}
+
+    /** Bitta hujjatning API'dagi holati (o'chirilganlikni aniqlash uchun). */
+    public enum DocStatus { OK, UNAPPLIED, DELETED, UNKNOWN }
 
     /** "retaildemand" (sotuv) yoki "retailsalesreturn" (vozvrat). */
     public List<MsDoc> fetchSales(String entity, LocalDateTime updatedFrom) {
         List<MsDoc> out = new ArrayList<>();
         for (JsonNode r : rows(entity, "", updatedFrom)) {
-            if (!r.path("applicable").asBoolean(true)) continue;
             String href = r.path("retailStore").path("meta").path("href").asText("");
             out.add(new MsDoc(
                     r.path("id").asText(),
                     date(r),
                     r.path("cashSum").asLong(0),
                     r.path("noCashSum").asLong(0),
-                    lastSegment(href)));
+                    lastSegment(href),
+                    r.path("applicable").asBoolean(true)));
         }
         return out;
     }
@@ -70,7 +119,6 @@ public class MoySkladClient {
     public List<MsExpense> fetchDrawerCashouts(LocalDateTime updatedFrom) {
         List<MsExpense> out = new ArrayList<>();
         for (JsonNode r : rows("retaildrawercashout", "&expand=retailShift", updatedFrom)) {
-            if (!r.path("applicable").asBoolean(true)) continue;
             // Ba'zi javoblarda retailStore to'g'ridan-to'g'ri bo'ladi, aks holda smena orqali
             String storeHref = r.path("retailStore").path("meta").path("href").asText("");
             if (storeHref.isEmpty())
@@ -84,7 +132,8 @@ public class MoySkladClient {
                     groupOf(r),
                     "",
                     r.path("description").asText(""),
-                    "", ""));
+                    "", "", currencyOf(r),
+                    r.path("applicable").asBoolean(true)));
         }
         return out;
     }
@@ -93,7 +142,6 @@ public class MoySkladClient {
     public List<MsExpense> fetchCashouts(LocalDateTime updatedFrom) {
         List<MsExpense> out = new ArrayList<>();
         for (JsonNode r : rows("cashout", "&expand=expenseItem,agent,state", updatedFrom)) {
-            if (!r.path("applicable").asBoolean(true)) continue;
             out.add(new MsExpense(
                     r.path("id").asText(),
                     r.path("name").asText(""),
@@ -104,7 +152,9 @@ public class MoySkladClient {
                     r.path("expenseItem").path("name").asText(""),
                     r.path("description").asText(""),
                     agentOf(r),
-                    r.path("state").path("name").asText("")));
+                    r.path("state").path("name").asText(""),
+                    currencyOf(r),
+                    r.path("applicable").asBoolean(true)));
         }
         return out;
     }
@@ -113,7 +163,6 @@ public class MoySkladClient {
     public List<MsExpense> fetchCashins(LocalDateTime updatedFrom) {
         List<MsExpense> out = new ArrayList<>();
         for (JsonNode r : rows("cashin", "&expand=agent,state", updatedFrom)) {
-            if (!r.path("applicable").asBoolean(true)) continue;
             out.add(new MsExpense(
                     r.path("id").asText(),
                     r.path("name").asText(""),
@@ -124,7 +173,9 @@ public class MoySkladClient {
                     "",
                     r.path("description").asText(""),
                     agentOf(r),
-                    r.path("state").path("name").asText("")));
+                    r.path("state").path("name").asText(""),
+                    currencyOf(r),
+                    r.path("applicable").asBoolean(true)));
         }
         return out;
     }
@@ -133,7 +184,6 @@ public class MoySkladClient {
     public List<MsExpense> fetchPaymentsIn(LocalDateTime updatedFrom) {
         List<MsExpense> out = new ArrayList<>();
         for (JsonNode r : rows("paymentin", "&expand=agent,state", updatedFrom)) {
-            if (!r.path("applicable").asBoolean(true)) continue;
             out.add(new MsExpense(
                     r.path("id").asText(),
                     r.path("name").asText(""),
@@ -144,9 +194,50 @@ public class MoySkladClient {
                     "",
                     r.path("description").asText(""),
                     agentOf(r),
-                    r.path("state").path("name").asText("")));
+                    r.path("state").path("name").asText(""),
+                    currencyOf(r),
+                    r.path("applicable").asBoolean(true)));
         }
         return out;
+    }
+
+    /** MoySklad kontragenti (qarz daftari uchun). */
+    public record MsAgent(String id, String name, String phone, String inn) {}
+
+    /** Kontragent qidiruvi (nom/telefon/INN bo'yicha). Xatoda bo'sh ro'yxat. */
+    public List<MsAgent> searchAgents(String query, int limit) {
+        List<MsAgent> out = new ArrayList<>();
+        try {
+            String url = props.getMoysklad().getBaseUrl() + "/entity/counterparty?limit=" + limit
+                    + "&search=" + URLEncoder.encode(query.trim(), StandardCharsets.UTF_8);
+            JsonNode root = getJson(url);
+            if (root != null)
+                for (JsonNode r : root.path("rows"))
+                    out.add(new MsAgent(
+                            r.path("id").asText(),
+                            r.path("name").asText(""),
+                            r.path("phone").asText(""),
+                            r.path("inn").asText("")));
+        } catch (Exception e) {
+            log.warn("Kontragent qidiruvi xatosi: {}", e.getMessage());
+        }
+        return out;
+    }
+
+    /**
+     * Kontragent balansi (Взаиморасчёты), SO'MDA. null — olinmadi (ruxsat/tarmoq).
+     * Musbat — kontragent bizga qarzdor, manfiy — biz unga qarzdormiz.
+     */
+    public Long fetchAgentBalanceSom(String agentId) {
+        try {
+            JsonNode root = getJson(props.getMoysklad().getBaseUrl()
+                    + "/report/counterparty/" + agentId);
+            if (root == null) return null;
+            return root.path("balance").asLong(0) / 100;
+        } catch (Exception e) {
+            log.warn("Kontragent balansi o'qilmadi: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** Otdellar (Владелец-отдел) ro'yxati: UUID -> nomi. Xatoda bo'sh map. */
@@ -183,7 +274,8 @@ public class MoySkladClient {
                     r.path("expenseItem").path("name").asText(""),
                     r.path("description").asText(""),
                     agentOf(r),
-                    r.path("state").path("name").asText("")));
+                    r.path("state").path("name").asText(""),
+                    currencyOf(r), true));
         }
         return out;
     }
@@ -198,7 +290,12 @@ public class MoySkladClient {
 
     private List<JsonNode> rowsFiltered(String entity, String extraQuery, String filter) {
         List<JsonNode> out = new ArrayList<>();
-        for (int page = 0; page < 10; page++) {           // himoya: maks 1000 hujjat/sikl
+        for (int page = 0; ; page++) {
+            // Himoya: 30 000+ hujjat bir siklda — exception, watermark surilmaydi,
+            // keyingi siklda davom etadi (hujjat YO'QOLMAYDI, avvalgi 1000-lik limit yo'qotardi).
+            if (page >= 300)
+                throw new IllegalStateException("MoySklad: " + entity
+                        + " bo'yicha 30000+ hujjat bir siklda — keyingi siklda davom etadi");
             String url = props.getMoysklad().getBaseUrl()
                     + "/entity/" + entity
                     + "?limit=100&offset=" + (page * 100)
@@ -213,6 +310,29 @@ public class MoySkladClient {
     }
 
     /**
+     * Bitta hujjatning hozirgi holati: OK (o'tkazilgan), UNAPPLIED (bekor qilingan),
+     * DELETED (o'chirilgan), UNKNOWN (ruxsat/tarmoq xatosi — hech narsa qilinmaydi).
+     * Reconcile o'chirilgan hujjatlarni faqat shu tasdiq bilan STORNO qiladi.
+     */
+    public DocStatus fetchDocStatus(String entity, String id) {
+        try {
+            String url = props.getMoysklad().getBaseUrl() + "/entity/" + entity + "/" + id;
+            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                    .header("Authorization", "Bearer " + currentToken())
+                    .header("Accept", "application/json;charset=utf-8")
+                    .header("Accept-Encoding", "gzip")
+                    .GET().build();
+            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() == 404 || resp.statusCode() == 410) return DocStatus.DELETED;
+            if (resp.statusCode() != 200) return DocStatus.UNKNOWN;
+            JsonNode r = om.readTree(decodeBody(resp));
+            return r.path("applicable").asBoolean(true) ? DocStatus.OK : DocStatus.UNAPPLIED;
+        } catch (Exception e) {
+            return DocStatus.UNKNOWN;
+        }
+    }
+
+    /**
      * Bitta GET so'rov. 401/403 (huquq yo'q — doimiy) -> null, entity bo'sh deb qaraladi.
      * Boshqa xatolar (429/5xx/tarmoq) -> exception: sync watermark'ni surmasligi kerak,
      * aks holda o'qilmagan hujjatlar butunlay yo'qoladi.
@@ -221,7 +341,7 @@ public class MoySkladClient {
         try {
             // MoySklad API Accept-Encoding: gzip bo'lmasa 415 qaytaradi
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                    .header("Authorization", "Bearer " + props.getMoysklad().getToken())
+                    .header("Authorization", "Bearer " + currentToken())
                     .header("Accept", "application/json;charset=utf-8")
                     .header("Accept-Encoding", "gzip")
                     .GET().build();
@@ -245,6 +365,25 @@ public class MoySkladClient {
     /** Hujjat egasining otdeli (Владелец-отдел) UUID si. */
     private String groupOf(JsonNode r) {
         return lastSegment(r.path("group").path("meta").path("href").asText(""));
+    }
+
+    /** Hujjat valyutasi UUID si (rate.currency). */
+    private String currencyOf(JsonNode r) {
+        return lastSegment(r.path("rate").path("currency").path("meta").path("href").asText(""));
+    }
+
+    /** Valyutalar: UUID -> ISO kod (UZS, USD...). Xatoda bo'sh map. */
+    public java.util.Map<String, String> fetchCurrencies() {
+        java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+        try {
+            JsonNode root = getJson(props.getMoysklad().getBaseUrl() + "/entity/currency?limit=100");
+            if (root != null)
+                for (JsonNode r : root.path("rows"))
+                    out.put(r.path("id").asText(), r.path("isoCode").asText(""));
+        } catch (Exception e) {
+            log.warn("Valyutalar o'qilmadi: {}", e.getMessage());
+        }
+        return out;
     }
 
     /** Kontragent: "Ism · telefon" (telefon bo'lsa). */

@@ -19,7 +19,20 @@ public class Session {
         // Admin oqimlari
         ADM_AU_PICK, ADM_AU_TGID, ADM_AU_NAME, ADM_AU_ROLE, ADM_AU_KASSA,
         ADM_AK_NAME, ADM_AK_MSID, ADM_AK_GROUP,
-        ADM_IB_OWNER, ADM_IB_NAQD, ADM_IB_KLIK
+        ADM_IB_OWNER, ADM_IB_NAQD, ADM_IB_KLIK, ADM_IB_SANA,
+        // Buxgalter/Admin: kassadan pul qabul qilish (summa kiritish)
+        ADM_QB_SUM,
+        // Click hisobiga boshlang'ich qoldiq: summa + sana
+        ADM_CK_SUM, ADM_CK_SANA,
+        // Tasdiqlangan rasxod summasini tahrirlash
+        ADM_RXE_SUM,
+        // Tugma nomini o'zgartirish
+        ADM_LB_NAME,
+        // MoySklad API kalitini kiritish
+        ADM_MS_TOKEN,
+        // 🤝 Kontragent (qarz daftari) oqimlari
+        KG_SEARCH, KG_MN_NAME, KG_MN_INFO, KG_SUM, KG_IZOH,
+        KG_AU_TGID, KG_AU_NAME, KG_RN_NAME
     }
 
     public State state = State.IDLE;

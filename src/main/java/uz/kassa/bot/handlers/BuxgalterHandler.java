@@ -134,7 +134,7 @@ public class BuxgalterHandler {
 
     /* ============================ 🏪 UMUMIY HOLAT ============================ */
 
-    private void overview(long chatId) {
+    public void overview(long chatId) {
         syncService.syncIfStale(45);   // so'ralganda oxirgi ma'lumot kelsin
         StringBuilder sb = new StringBuilder("🏪 <b>Kassalar holati</b>\n");
         long totN = 0, totK = 0, totT = 0;
@@ -182,7 +182,7 @@ public class BuxgalterHandler {
 
     /* ============================ 📥 KUTILAYOTGANLAR ============================ */
 
-    private void pendingList(long chatId) {
+    public void pendingList(long chatId) {
         int shown = 0;
 
         List<Operation> rasxods = opRepo.findByStatusAndType(OpStatus.KUTILMOQDA, OpType.RASXOD);
@@ -300,7 +300,7 @@ public class BuxgalterHandler {
 
     /* ============================ 🔁 O'TKAZMA (BUX -> KASSA) ============================ */
 
-    private void trStart(Session s, long chatId) {
+    public void trStart(Session s, long chatId) {
         s.reset(); s.state = Session.State.TR_TGT;
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())

@@ -13,15 +13,22 @@ import java.util.List;
 public final class Keyboards {
     private Keyboards() {}
 
+    /** Kanonik nom -> foydalanuvchi bergan nom (LabelService yangilaydi). */
+    private static volatile java.util.Map<String, String> DISPLAY = java.util.Map.of();
+
+    public static void setDisplayMap(java.util.Map<String, String> m) { DISPLAY = m; }
+
+    private static String disp(String canonical) { return DISPLAY.getOrDefault(canonical, canonical); }
+
     /** Barcha asosiy menyu tugmalari — bosilganda tugallanmagan dialog bekor qilinadi. */
     private static final java.util.Set<String> MENU_LABELS = java.util.Set.of(
-            "📊 Bugungi holat", "💰 Balansim", "💸 Rasxod", "🔁 O'tkazma",
+            "📊 Bugungi holat", "💰 Balansim", "💸 Rasxod",
             "📤 Hisobot topshirish", "🧾 Qarzlarim", "📜 Tarix",
-            "🏪 Kassalar holati", "📥 Kutilayotganlar", "💸 Rasxod (o'zim)",
-            "🧾 Qarzlar registri", "📊 Excel hisobot",
+            "🏪 Kassalar holati", "🧾 Qarzlar registri", "📊 Excel hisobot",
             "👥 Foydalanuvchi qo'shish", "🏪 Kassa qo'shish",
             "💼 Boshlang'ich qoldiq", "👤 Foydalanuvchilar",
-            "👑 АДМИН ПАНЕЛ", "💰 БУГУНГИ ТУШУМ");
+            "👑 АДМИН ПАНЕЛ", "💰 БУГУНГИ ТУШУМ", "📊 ПАНЕЛ", "📊 КАССАМ", "🏪 KASSA",
+            "🤝 КОНТРАГЕНТ");
 
     public static boolean isMenuLabel(String text) { return MENU_LABELS.contains(text); }
 
@@ -29,28 +36,31 @@ public final class Keyboards {
 
     public static ReplyKeyboardMarkup kassirMenu() {
         return replyMenu(
-                row("📊 Bugungi holat", "💰 Balansim"),
-                row("💸 Rasxod", "🔁 O'tkazma"),
-                row("📤 Hisobot topshirish", "🧾 Qarzlarim"),
-                row("📜 Tarix"));
+                row(disp("📊 КАССАМ"), disp("💰 БУГУНГИ ТУШУМ")),
+                row(disp("💸 Rasxod"), disp("🔁 O'tkazma")),
+                row(disp("📤 Hisobot topshirish"), disp("🤝 КОНТРАГЕНТ")));
+    }
+
+    /** Panel darajasi uchun menu: 2 tadan qator + «⬅️ Orqaga». */
+    public static ReplyKeyboardMarkup levelMenu(List<String> labels) {
+        List<KeyboardRow> rows = new ArrayList<>();
+        for (int i = 0; i < labels.size(); i += 2) {
+            KeyboardRow r = new KeyboardRow();
+            r.add(new KeyboardButton(labels.get(i)));
+            if (i + 1 < labels.size()) r.add(new KeyboardButton(labels.get(i + 1)));
+            rows.add(r);
+        }
+        rows.add(row("⬅️ Orqaga"));
+        ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
+        m.setKeyboard(rows);
+        m.setResizeKeyboard(true);
+        return m;
     }
 
     public static ReplyKeyboardMarkup buxMenu(boolean superadmin) {
         List<KeyboardRow> rows;
-        if (superadmin) {
-            // Sxema bo'yicha: АДМИН ПАНЕЛ (Отдел/Настройка/Статистика) + БУГУНГИ ТУШУМ
-            rows = new ArrayList<>(List.of(
-                    row("👑 АДМИН ПАНЕЛ"),
-                    row("💰 БУГУНГИ ТУШУМ"),
-                    row("📥 Kutilayotganlar", "🔁 O'tkazma"),
-                    row("💸 Rasxod (o'zim)")));
-        } else {
-            rows = new ArrayList<>(List.of(
-                    row("🏪 Kassalar holati", "📥 Kutilayotganlar"),
-                    row("💸 Rasxod (o'zim)", "🔁 O'tkazma"),
-                    row("🧾 Qarzlar registri", "📜 Tarix"),
-                    row("📊 Excel hisobot")));
-        }
+        // Bosh menyu — faqat bitta panel; qolgan hammasi 🏪 KASSA ichida
+        rows = new ArrayList<>(List.of(row(disp("🏪 KASSA"), disp("🤝 КОНТРАГЕНТ"))));
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
         m.setResizeKeyboard(true);

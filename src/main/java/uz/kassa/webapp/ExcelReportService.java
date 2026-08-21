@@ -72,6 +72,46 @@ public class ExcelReportService {
         }
     }
 
+    /** 📋 Audit jurnali Excel: kim, qachon, nima qildi. */
+    public byte[] buildAudit(List<AuditLog> logs,
+                             java.util.function.Function<Long, String> userName,
+                             java.time.ZoneId zone) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            CellStyle head = wb.createCellStyle();
+            Font hf = wb.createFont(); hf.setBold(true); head.setFont(hf);
+            head.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            head.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+            Sheet sh = wb.createSheet("Audit");
+            String[] cols = {"Sana", "Vaqt", "Foydalanuvchi", "Amal", "Obyekt", "Obyekt ID", "Tafsilot"};
+            Row hr = sh.createRow(0);
+            for (int i = 0; i < cols.length; i++) {
+                Cell c = hr.createCell(i); c.setCellValue(cols[i]); c.setCellStyle(head);
+            }
+            java.time.format.DateTimeFormatter df =
+                    java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy").withZone(zone);
+            java.time.format.DateTimeFormatter tf =
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss").withZone(zone);
+            int r = 1;
+            for (AuditLog a : logs) {
+                Row row = sh.createRow(r++);
+                row.createCell(0).setCellValue(df.format(a.getCreatedAt()));
+                row.createCell(1).setCellValue(tf.format(a.getCreatedAt()));
+                row.createCell(2).setCellValue(a.getUserId() == null ? "tizim" : userName.apply(a.getUserId()));
+                row.createCell(3).setCellValue(a.getAction());
+                row.createCell(4).setCellValue(a.getEntity() == null ? "" : a.getEntity());
+                if (a.getEntityId() != null) row.createCell(5).setCellValue(a.getEntityId());
+                row.createCell(6).setCellValue(a.getPayload() == null ? "" : a.getPayload());
+            }
+            for (int i = 0; i < cols.length; i++) sh.autoSizeColumn(i);
+            wb.write(bos);
+            return bos.toByteArray();
+        } catch (Exception e) {
+            log.error("Audit Excel xatosi: {}", e.getMessage());
+            throw new RuntimeException("Excel tayyorlashda xato: " + e.getMessage());
+        }
+    }
+
     /* ---------------- 1: UMUMIY ---------------- */
 
     private void summarySheet(Workbook wb, CellStyle head, CellStyle money, CellStyle bold,

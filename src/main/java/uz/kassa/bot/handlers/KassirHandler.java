@@ -36,6 +36,7 @@ public class KassirHandler {
     private final DebtRepo debtRepo;
     private final DayRepo dayRepo;
     private final OperationRepo opRepo;
+    private final uz.kassa.webapp.ExcelReportService excelReport;
 
     /* ============================ MATN ============================ */
 
@@ -49,8 +50,13 @@ public class KassirHandler {
             default -> { }
         }
 
+        // 📊 КАССАМ paneli ichida — pastki menu tugmalari bo'yicha navigatsiya
+        String knav = s.getStr("knav");
+        if (knav != null && handleKNav(u, s, knav, text, chatId)) return true;
+
         return switch (text) {
-            case "📊 Bugungi holat" -> { today(u, chatId); yield true; }
+            case "📊 КАССАМ" -> { knavPanel(u, s, chatId); yield true; }
+            case "💰 БУГУНГИ ТУШУМ", "📊 Bugungi holat" -> { today(u, chatId); yield true; }
             case "💰 Balansim" -> { balance(u, chatId); yield true; }
             case "💸 Rasxod" -> {
                 s.reset(); s.state = Session.State.RX_MT;
@@ -419,9 +425,145 @@ public class KassirHandler {
         sender.send(chatId, sb.toString());
     }
 
+    /* ==================== 📊 КАССАМ PANELI (menu tugmali) ==================== */
+
+    private static final List<String> KASSAM_MENU = List.of(
+            "💰 Бугунги тушум", "💸 Расход", "📆 Давр танлаш",
+            "💼 Салдо", "🧾 Қарзларим", "📊 Excel");
+    private static final List<String> KPERIODS = List.of(
+            "📆 Bugun", "Kecha", "7 kun", "30 kun", "Shu oy");
+
+    private void knavPanel(AppUser u, Session s, long chatId) {
+        String name = u.getKassaId() == null ? "?" : names.owner(OwnerType.KASSA, u.getKassaId());
+        s.data.put("knav", "panel");
+        kSend(s, chatId, "📊 <b>КАССАМ</b> — " + esc(name) + "\n\nBo'limni tanlang:",
+                levelMenu(KASSAM_MENU));
+    }
+
+    /** Panel prompt-xabarini yuborish, oldingisini o'chirib — chat toza qoladi. */
+    private void kSend(Session s, long chatId, String text,
+                       org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboard kb) {
+        Object prev = s.data.remove("panelMsg");
+        if (prev instanceof Integer i) sender.deleteMessage(chatId, i);
+        Integer id = sender.sendId(chatId, text, kb);
+        if (id != null) s.data.put("panelMsg", id);
+    }
+
+    private boolean handleKNav(AppUser u, Session s, String knav, String text, long chatId) {
+        if (text.equals("⬅️ Orqaga")) {
+            if (knav.equals("panel")) {
+                s.data.remove("knav");
+                Object prev = s.data.remove("panelMsg");
+                if (prev instanceof Integer i) sender.deleteMessage(chatId, i);
+                sender.send(chatId, "🏠 Bosh menyu", kassirMenu());
+            } else knavPanel(u, s, chatId);
+            return true;
+        }
+        switch (knav) {
+            case "panel" -> {
+                switch (text) {
+                    case "💰 Бугунги тушум" -> today(u, chatId);
+                    case "💸 Расход" -> rasxodToday(u, chatId);
+                    case "📆 Давр танлаш" -> {
+                        s.data.put("knav", "kdavr");
+                        kSend(s, chatId, "📆 <b>Давр танлаш</b>\n\nDavrni tanlang:",
+                                levelMenu(KPERIODS));
+                    }
+                    case "💼 Салдо" -> balance(u, chatId);
+                    case "🧾 Қарзларим" -> debts(u, chatId);
+                    case "📊 Excel" -> {
+                        s.data.put("knav", "kexcel");
+                        kSend(s, chatId, "📊 <b>Excel</b> — o'z kassangiz bo'yicha\n\n"
+                                + "Davrni tanlang, fayl shu chatga yuboriladi:", levelMenu(KPERIODS));
+                    }
+                    default -> { return false; }
+                }
+            }
+            case "kdavr" -> {
+                String code = kCodeOf(text);
+                if (code == null) return false;
+                historyPeriod(u, code, chatId, 0);
+            }
+            case "kexcel" -> {
+                String code = kCodeOf(text);
+                if (code == null) return false;
+                kassirExcel(u, code, chatId);
+            }
+            default -> { return false; }
+        }
+        return true;
+    }
+
+    private String kCodeOf(String text) {
+        return switch (text) {
+            case "📆 Bugun" -> "t"; case "Kecha" -> "y";
+            case "7 kun" -> "7"; case "30 kun" -> "30"; case "Shu oy" -> "m";
+            default -> null;
+        };
+    }
+
+    /** Kassir Exceli — FAQAT o'z kassasi kesimida. */
+    private void kassirExcel(AppUser u, String code, long chatId) {
+        Long kid = u.getKassaId();
+        if (kid == null) { sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan"); return; }
+        Kassa kassa = kassaRepo.findById(kid).orElse(null);
+        if (kassa == null) return;
+
+        java.time.LocalDate t = ledger.today();
+        java.time.LocalDate from = switch (code) {
+            case "t" -> t; case "y" -> t.minusDays(1);
+            case "7" -> t.minusDays(6); case "30" -> t.minusDays(29);
+            default -> t.withDayOfMonth(1);
+        };
+        java.time.LocalDate to = code.equals("y") ? t.minusDays(1) : t;
+        String label = kassa.getName() + " · "
+                + (from.equals(to) ? from.format(DF) : from.format(DF) + " — " + to.format(DF));
+
+        sender.send(chatId, "⏳ Excel tayyorlanmoqda: <b>" + esc(label) + "</b>…");
+        java.time.LocalDate fFrom = from, fTo = to;
+        new Thread(() -> {
+            try {
+                byte[] xlsx = excelReport.build(fFrom, fTo, kassa);
+                sender.sendDocument(chatId, xlsx,
+                        "kassa" + kid + "_" + fFrom + "_" + fTo + ".xlsx",
+                        "📊 Excel: <b>" + esc(label) + "</b>");
+            } catch (Exception e) {
+                sender.send(chatId, "⚠️ Excel xatosi: " + esc(e.getMessage()));
+            }
+        }).start();
+    }
+
+    /** Bugungi chiqimlar — o'z kassasi bo'yicha. */
+    private void rasxodToday(AppUser u, long chatId) {
+        Long kid = u.getKassaId();
+        if (kid == null) { sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan"); return; }
+        DayRecord d = dayRepo.findByKassaIdAndDate(kid, ledger.today()).orElse(null);
+        long rn = d == null ? 0 : d.getRasxodNaqd();
+        long rk = d == null ? 0 : d.getRasxodKlik();
+        StringBuilder sb = new StringBuilder("💸 <b>Расход</b> — bugun\n\n"
+                + "💵 Naqd: <b>" + fmt(rn) + "</b> · 📲 Click: <b>" + fmt(rk) + "</b>\n"
+                + "➕ <b>Jami: " + fmt(rn + rk) + "</b> so'm\n");
+        int shown = 0;
+        for (Operation o : opRepo.byPeriod(ledger.today(), ledger.today())) {
+            if (o.getType() != OpType.RASXOD) continue;
+            if (o.getFromOwnerType() != OwnerType.KASSA || !kid.equals(o.getFromOwnerId())) continue;
+            if (shown++ >= 15) break;
+            sb.append("\n• ").append(fmt(o.getAmount())).append(" so'm")
+              .append(o.getStatus() == OpStatus.KUTILMOQDA ? " ⏳" : "")
+              .append(o.getComment() == null || o.getComment().isEmpty()
+                      ? "" : " — " + esc(o.getComment()));
+        }
+        if (shown == 0) sb.append("\nBugun rasxod yo'q");
+        sender.send(chatId, sb.toString());
+    }
+
     /** Davr bo'yicha tarix: code = t|y|7|30|m. */
     void historyPeriod(AppUser u, String code, long chatId, int msgId) {
-        if (u.getKassaId() == null) { sender.edit(chatId, msgId, "⚠️ Sizga kassa biriktirilmagan"); return; }
+        if (u.getKassaId() == null) {
+            if (msgId > 0) sender.edit(chatId, msgId, "⚠️ Sizga kassa biriktirilmagan");
+            else sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan");
+            return;
+        }
         java.time.LocalDate t = java.time.LocalDate.now();
         java.time.LocalDate from = switch (code) {
             case "t" -> t; case "y" -> t.minusDays(1);
@@ -454,9 +596,11 @@ public class KassirHandler {
             if (total > lines.size())
                 sb.append("\n\n<i>…yana ").append(total - lines.size()).append(" ta</i>");
         }
-        sender.edit(chatId, msgId, sb.toString(), inline(List.of(
-                irow(btn("📆 Bugun", "k:hp:t"), btn("Kecha", "k:hp:y")),
-                irow(btn("7 kun", "k:hp:7"), btn("30 kun", "k:hp:30"), btn("Shu oy", "k:hp:m")))));
+        if (msgId > 0)
+            sender.edit(chatId, msgId, sb.toString(), inline(List.of(
+                    irow(btn("📆 Bugun", "k:hp:t"), btn("Kecha", "k:hp:y")),
+                    irow(btn("7 kun", "k:hp:7"), btn("30 kun", "k:hp:30"), btn("Shu oy", "k:hp:m")))));
+        else sender.send(chatId, sb.toString());   // menu-rejim: inline tugmalarsiz
     }
 
     private String opLine(Operation o, Long myKassaId) {

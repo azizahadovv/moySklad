@@ -1,0 +1,37 @@
+﻿
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v3.3.4)
+
+2026-08-21T14:15:03.793+05:00  INFO 21144 --- [           main] uz.kassa.KassaNazoratiApplication        : Starting KassaNazoratiApplication v0.1.0 using Java 21.0.12 with PID 21144 (D:\NSB\BOT-MOYSKLAD\BOT\kassa-nazorati\target\kassa-nazorati-0.1.0.jar started by user in D:\NSB\BOT-MOYSKLAD\BOT\kassa-nazorati)
+2026-08-21T14:15:03.794+05:00  INFO 21144 --- [           main] uz.kassa.KassaNazoratiApplication        : No active profile set, falling back to 1 default profile: "default"
+2026-08-21T14:15:04.392+05:00  INFO 21144 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-08-21T14:15:04.475+05:00  INFO 21144 --- [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 71 ms. Found 13 JPA repository interfaces.
+2026-08-21T14:15:04.994+05:00  INFO 21144 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8971 (http)
+2026-08-21T14:15:05.009+05:00  INFO 21144 --- [           main] o.apache.catalina.core.StandardService   : Starting service [Tomcat]
+2026-08-21T14:15:05.010+05:00  INFO 21144 --- [           main] o.apache.catalina.core.StandardEngine    : Starting Servlet engine: [Apache Tomcat/10.1.30]
+2026-08-21T14:15:05.037+05:00  INFO 21144 --- [           main] o.a.c.c.C.[Tomcat].[localhost].[/]       : Initializing Spring embedded WebApplicationContext
+2026-08-21T14:15:05.038+05:00  INFO 21144 --- [           main] w.s.c.ServletWebServerApplicationContext : Root WebApplicationContext: initialization completed in 1199 ms
+2026-08-21T14:15:05.295+05:00  INFO 21144 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-08-21T14:15:05.476+05:00  INFO 21144 --- [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@49a38b1
+2026-08-21T14:15:05.482+05:00  INFO 21144 --- [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-08-21T14:15:05.515+05:00  INFO 21144 --- [           main] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:5435/kassa (PostgreSQL 16.15)
+2026-08-21T14:15:05.570+05:00  INFO 21144 --- [           main] o.f.core.internal.command.DbValidate     : Successfully validated 7 migrations (execution time 00:00.032s)
+2026-08-21T14:15:05.615+05:00  INFO 21144 --- [           main] o.f.core.internal.command.DbMigrate      : Current version of schema "public": 7
+2026-08-21T14:15:05.617+05:00  INFO 21144 --- [           main] o.f.core.internal.command.DbMigrate      : Schema "public" is up to date. No migration necessary.
+2026-08-21T14:15:05.704+05:00  INFO 21144 --- [           main] o.hibernate.jpa.internal.util.LogHelper  : HHH000204: Processing PersistenceUnitInfo [name: default]
+2026-08-21T14:15:05.756+05:00  INFO 21144 --- [           main] org.hibernate.Version                    : HHH000412: Hibernate ORM core version 6.5.3.Final
+2026-08-21T14:15:05.795+05:00  INFO 21144 --- [           main] o.h.c.internal.RegionFactoryInitiator    : HHH000026: Second-level cache disabled
+2026-08-21T14:15:06.071+05:00  INFO 21144 --- [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-08-21T14:15:06.927+05:00  INFO 21144 --- [           main] o.h.e.t.j.p.i.JtaPlatformInitiator       : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+2026-08-21T14:15:06.930+05:00  INFO 21144 --- [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-08-21T14:15:07.242+05:00  INFO 21144 --- [           main] o.s.d.j.r.query.QueryEnhancerFactory     : Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-08-21T14:15:08.212+05:00  INFO 21144 --- [           main] o.s.b.a.w.s.WelcomePageHandlerMapping    : Adding welcome page: class path resource [static/index.html]
+2026-08-21T14:15:08.516+05:00  INFO 21144 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port 8971 (http) with context path '/'
+2026-08-21T14:15:08.527+05:00  INFO 21144 --- [           main] uz.kassa.KassaNazoratiApplication        : Started KassaNazoratiApplication in 5.117 seconds (process running for 5.532)
+2026-08-21T14:15:09.635+05:00  INFO 21144 --- [           main] uz.kassa.config.BotInitializer           : Telegram bot ishga tushdi: @nsbkassa_bot
