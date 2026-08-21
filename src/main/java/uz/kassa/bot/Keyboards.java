@@ -16,9 +16,48 @@ public final class Keyboards {
     /** Kanonik nom -> foydalanuvchi bergan nom (LabelService yangilaydi). */
     private static volatile java.util.Map<String, String> DISPLAY = java.util.Map.of();
 
+    /** SuperAdmin o'chirgan (yashirgan) bo'limlar — menyularda chiqmaydi. */
+    private static volatile java.util.Set<String> HIDDEN = java.util.Set.of();
+
     public static void setDisplayMap(java.util.Map<String, String> m) { DISPLAY = m; }
 
+    public static void setHiddenSet(java.util.Set<String> h) { HIDDEN = h; }
+
     private static String disp(String canonical) { return DISPLAY.getOrDefault(canonical, canonical); }
+
+    /** Yashirilganlarni tashlab, qolganini display nomi bilan qatorga yig'adi. */
+    private static void addVisibleRow(List<KeyboardRow> rows, String... canonicals) {
+        addRowIf(rows, c -> !HIDDEN.contains(c), canonicals);
+    }
+
+    private static void addRowIf(List<KeyboardRow> rows,
+                                 java.util.function.Predicate<String> visible, String... canonicals) {
+        KeyboardRow r = new KeyboardRow();
+        for (String c : canonicals)
+            if (visible.test(c)) r.add(new KeyboardButton(disp(c)));
+        if (!r.isEmpty()) rows.add(r);
+    }
+
+    /** Bosh menyu — foydalanuvchiga xos huquq filtri bilan (PermService prediati). */
+    public static ReplyKeyboardMarkup kassirMenu(java.util.function.Predicate<String> visible) {
+        List<KeyboardRow> rows = new ArrayList<>();
+        addRowIf(rows, visible, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
+        addRowIf(rows, visible, "💸 Rasxod", "🔁 O'tkazma");
+        addRowIf(rows, visible, "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ");
+        ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
+        m.setKeyboard(rows);
+        m.setResizeKeyboard(true);
+        return m;
+    }
+
+    public static ReplyKeyboardMarkup buxMenu(java.util.function.Predicate<String> visible) {
+        List<KeyboardRow> rows = new ArrayList<>();
+        addRowIf(rows, visible, "🏪 KASSA", "🤝 КОНТРАГЕНТ");
+        ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
+        m.setKeyboard(rows);
+        m.setResizeKeyboard(true);
+        return m;
+    }
 
     /** Barcha asosiy menyu tugmalari — bosilganda tugallanmagan dialog bekor qilinadi. */
     private static final java.util.Set<String> MENU_LABELS = java.util.Set.of(
@@ -35,10 +74,14 @@ public final class Keyboards {
     /* ---------------- Reply (asosiy menyu) ---------------- */
 
     public static ReplyKeyboardMarkup kassirMenu() {
-        return replyMenu(
-                row(disp("📊 КАССАМ"), disp("💰 БУГУНГИ ТУШУМ")),
-                row(disp("💸 Rasxod"), disp("🔁 O'tkazma")),
-                row(disp("📤 Hisobot topshirish"), disp("🤝 КОНТРАГЕНТ")));
+        List<KeyboardRow> rows = new ArrayList<>();
+        addVisibleRow(rows, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
+        addVisibleRow(rows, "💸 Rasxod", "🔁 O'tkazma");
+        addVisibleRow(rows, "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ");
+        ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
+        m.setKeyboard(rows);
+        m.setResizeKeyboard(true);
+        return m;
     }
 
     /** Panel darajasi uchun menu: 2 tadan qator + «⬅️ Orqaga». */
@@ -58,9 +101,9 @@ public final class Keyboards {
     }
 
     public static ReplyKeyboardMarkup buxMenu(boolean superadmin) {
-        List<KeyboardRow> rows;
         // Bosh menyu — faqat bitta panel; qolgan hammasi 🏪 KASSA ichida
-        rows = new ArrayList<>(List.of(row(disp("🏪 KASSA"), disp("🤝 КОНТРАГЕНТ"))));
+        List<KeyboardRow> rows = new ArrayList<>();
+        addVisibleRow(rows, "🏪 KASSA", "🤝 КОНТРАГЕНТ");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
         m.setResizeKeyboard(true);

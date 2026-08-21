@@ -41,6 +41,7 @@ public class Router {
     private final Sender sender;
     private final NameService names;
     private final LabelService labelSvc;
+    private final PermService permSvc;
     private final NotificationService notify;
     private final RasxodService rasxodService;
     private final TransferService transferService;
@@ -175,6 +176,14 @@ public class Router {
                         + "va kutilayotgan qarorlar 👇",
                         Keyboards.inline(java.util.List.of(Keyboards.irow(btn))));
             }
+            return;
+        }
+
+        // Bo'lim huquqi: umumiy o'chirilgan yoki shu user/otdel uchun taqiqlangan bo'lsa —
+        // kira olmaydi (eski klaviaturada tugma qolib ketgan bo'lishi mumkin)
+        if (LabelService.RENAMABLE.contains(text) && !permSvc.visible(user, text)) {
+            sender.send(chatId, "⚠️ Bu bo'lim siz uchun ochiq emas (SuperAdmin sozlagan)",
+                    menuFor(user));
             return;
         }
 
@@ -376,10 +385,10 @@ public class Router {
     /* ============================ Yordamchi ============================ */
 
     public ReplyKeyboardMarkup menuFor(AppUser user) {
+        java.util.function.Predicate<String> vis = c -> permSvc.visible(user, c);
         return switch (user.getRole()) {
-            case KASSIR -> Keyboards.kassirMenu();
-            case BUXGALTER -> Keyboards.buxMenu(false);
-            case SUPERADMIN -> Keyboards.buxMenu(true);
+            case KASSIR -> Keyboards.kassirMenu(vis);
+            case BUXGALTER, SUPERADMIN -> Keyboards.buxMenu(vis);
         };
     }
 

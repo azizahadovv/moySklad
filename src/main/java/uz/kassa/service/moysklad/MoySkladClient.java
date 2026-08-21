@@ -240,6 +240,26 @@ public class MoySkladClient {
         }
     }
 
+    /** MoySklad xodimi (Владелец-сотрудник). */
+    public record MsEmployee(String name, String phone) {}
+
+    /** Xodimlar (Владелец-сотрудник) ro'yxati. Xatoda bo'sh ro'yxat. */
+    public List<MsEmployee> fetchEmployees() {
+        List<MsEmployee> out = new ArrayList<>();
+        try {
+            JsonNode root = getJson(props.getMoysklad().getBaseUrl() + "/entity/employee?limit=100");
+            if (root != null)
+                for (JsonNode r : root.path("rows")) {
+                    String name = r.path("name").asText("");
+                    if (name.isBlank()) continue;
+                    out.add(new MsEmployee(name, r.path("phone").asText("")));
+                }
+        } catch (Exception e) {
+            log.warn("Xodimlar ro'yxati o'qilmadi: {}", e.getMessage());
+        }
+        return out;
+    }
+
     /** Otdellar (Владелец-отдел) ro'yxati: UUID -> nomi. Xatoda bo'sh map. */
     public java.util.LinkedHashMap<String, String> fetchGroups() {
         java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();

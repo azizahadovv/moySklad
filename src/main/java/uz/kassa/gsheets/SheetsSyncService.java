@@ -41,6 +41,54 @@ public class SheetsSyncService {
 
     private volatile boolean tabsReady = false;
 
+    /* ==================================================================
+     * DB — YAGONA HAQIQAT MANBAI. Jadval unga ergashadi, aksincha emas.
+     *
+     * SNAPSHOT usuli: har push'da varaqqa YOZILGAN qiymatlar eslab qolinadi
+     * (settings jadvalida — restartdan keyin ham saqlanadi). Pull paytida
+     * varaqdagi qiymat faqat SNAPSHOT'DAN FARQ QILSA (ya'ni operator katakni
+     * haqiqatan tahrirlagan bo'lsa) DB'ga qo'llanadi. Farq qilmasa — bu shunchaki
+     * eski nusxa: bot tomonida qilingan o'zgarish (rol, kassa, ism, faol,
+     * Telegram ulanishi) varaq tomonidan QAYTARIB YUBORILMAYDI, keyingi push
+     * varaqni DB holatiga tekislaydi. Snapshot'i yo'q satr (bot o'chiq paytda
+     * paydo bo'lgan va h.k.) DB'ga ta'sir qilmaydi.
+     * ================================================================== */
+    private final java.util.Map<Long, String> userSnap =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<Long, String> kassaSnap =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean snapsLoaded = false;
+
+    private final uz.kassa.service.SettingsService settings;
+
+    private void loadSnaps() {
+        if (snapsLoaded) return;
+        parseSnap(settings.get("sheets.snap.users").orElse(""), userSnap);
+        parseSnap(settings.get("sheets.snap.kassa").orElse(""), kassaSnap);
+        snapsLoaded = true;
+    }
+
+    private void parseSnap(String raw, java.util.Map<Long, String> into) {
+        for (String line : raw.split("\n")) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            try { into.put(Long.parseLong(line.substring(0, eq)), line.substring(eq + 1)); }
+            catch (NumberFormatException ignored) { }
+        }
+    }
+
+    private void saveSnap(String key, java.util.Map<Long, String> m) {
+        StringBuilder sb = new StringBuilder();
+        m.forEach((k, v) -> sb.append(k).append('=').append(v).append('\n'));
+        settings.set(key, sb.toString());
+    }
+
+    private String norm(String s) {
+        return s == null ? "" : s.trim().replace("|", "/").replace("\n", " ");
+    }
+
+    private String digits(String s) { return s == null ? "" : s.replaceAll("\\D", ""); }
+
     /** Qayta ishlanmagan (chala) satrlar — push paytida SAQLAB qolinadi, o'chirilmaydi. */
     private volatile List<List<Object>> pendingUsers = List.of();
     private volatile List<List<Object>> pendingKassas = List.of();
@@ -49,6 +97,7 @@ public class SheetsSyncService {
     public void sync() {
         if (!gs.configured()) return;
         try {
+            loadSnaps();
             ensureTabs();
             pullKassalar();
             pullUsers();
@@ -68,6 +117,7 @@ public class SheetsSyncService {
     public void syncNastroyka() {
         if (!gs.configured()) return;
         try {
+            loadSnaps();
             ensureTabs();
             pullKassalar();
             pullUsers();
@@ -162,14 +212,29 @@ public class SheetsSyncService {
                     log.info("Sheets: yangi kassa yaratildi — {}", nomi);
                     continue;
                 }
+                // DB USTUVOR: faqat operator haqiqatan tahrirlagan kataklar qo'llanadi
+                // (snapshot bilan solishtirib). Snapshot yo'q — DB'ga tegilmaydi.
+                String kSnap = kassaSnap.get(Long.parseLong(id));
+                if (kSnap == null) continue;
+                String[] kv = kSnap.split("\\|", -1);   // [nomi, groupId, faol]
+                if (kv.length < 3) continue;
                 final String gFinal = groupId;
+                final String nomiN = norm(nomi);
+                final String faolN = faol ? "TRUE" : "FALSE";
                 kassaRepo.findById(Long.parseLong(id)).ifPresent(k -> {
                     boolean ch = false;
-                    if (!nomi.isBlank() && !nomi.equals(k.getName())) { k.setName(nomi); ch = true; }
+                    if (!nomiN.isBlank() && !nomiN.equals(kv[0]) && !nomiN.equals(k.getName())) {
+                        k.setName(nomiN); ch = true;
+                    }
                     String cur = k.getMoyskladGroupId() == null ? "" : k.getMoyskladGroupId();
-                    if (!gFinal.isBlank() && !gFinal.equals(cur)) { k.setMoyskladGroupId(gFinal); ch = true; }
-                    if (faol != k.isActive()) { k.setActive(faol); ch = true; }
-                    if (ch) { kassaRepo.save(k); log.info("Sheets: kassa #{} yangilandi", k.getId()); }
+                    if (!gFinal.isBlank() && !gFinal.equals(kv[1]) && !gFinal.equals(cur)) {
+                        k.setMoyskladGroupId(gFinal); ch = true;
+                    }
+                    if (!faolN.equals(kv[2]) && faol != k.isActive()) { k.setActive(faol); ch = true; }
+                    if (ch) {
+                        kassaRepo.save(k);
+                        log.info("Sheets: kassa #{} yangilandi (operator tahriri)", k.getId());
+                    }
                 });
             }
             kassaPullOk = true;
@@ -212,10 +277,11 @@ public class SheetsSyncService {
                     if (xato == null) {
                         // Telegram'siz ham yaratiladi — ro'yxatlarda darhol ko'rinadi,
                         // kontakt yuborilganda telefon orqali avtomatik ulanadi.
-                        // Takror yaratmaslik: xuddi shu ismli tg'siz foydalanuvchi bo'lsa — o'tkazamiz.
-                        boolean dup = tgId == null && userRepo.findAll().stream()
-                                .anyMatch(e -> e.getTelegramId() == null
-                                        && e.getFullName().equalsIgnoreCase(ism));
+                        // Takror yaratmaslik: shu ISMLI foydalanuvchi (tg bor-yo'qligidan
+                        // qat'i nazar) mavjud bo'lsa — o'tkazamiz. Aks holda ID'siz satr
+                        // har siklda yangi nusxa yaratib tashlaydi.
+                        boolean dup = userRepo.findAll().stream()
+                                .anyMatch(e -> e.getFullName().equalsIgnoreCase(ism));
                         if (!dup) {
                             String phone = tel.replaceAll("\\D", "");
                             userRepo.save(AppUser.builder()
@@ -232,60 +298,96 @@ public class SheetsSyncService {
                     continue;
                 }
 
-                userRepo.findById(Long.parseLong(id)).ifPresent(x -> {
-                    boolean ch = false;
-                    if (!ism.isBlank() && !ism.equals(x.getFullName())) { x.setFullName(ism); ch = true; }
-                    // Telefon ham jadvaldan boshqariladi: yozilsa — yangilanadi, o'chirilsa — o'chadi
-                    String phone = tel.replaceAll("\\D", "");
-                    if (!phone.isEmpty() && !phone.equals(x.getPhone())) { x.setPhone(phone); ch = true; }
-                    else if (phone.isEmpty() && x.getPhone() != null) { x.setPhone(null); ch = true; }
-                    // TelegramID ustuni jadvaldan boshqariladi: yozilsa — ulash/almashtirish,
-                    // o'chirilsa — uzish (faqat SUPERADMIN'niki himoyalangan).
-                    if (!tg.isBlank()) {
-                        Long tgNew = null;
-                        try { tgNew = Long.parseLong(tg.replaceAll("\\D", "")); }
-                        catch (NumberFormatException ignored) { }   // tushunarsiz yozuv — tegmaymiz
-                        if (tgNew != null && !tgNew.equals(x.getTelegramId())
-                                && userRepo.findByTelegramId(tgNew).isEmpty()) {
-                            x.setTelegramId(tgNew); ch = true;
-                            log.info("Sheets: {} Telegram bilan bog'landi ({})", x.getFullName(), tgNew);
+                // DB USTUVOR: varaqdagi qiymat faqat SNAPSHOT'dan farq qilsa (operator
+                // katakni haqiqatan tahrirlagan bo'lsa) qo'llanadi. Snapshot yo'q bo'lsa —
+                // varaq holati noma'lum, DB'ga tegilmaydi (push tekislaydi); faqat
+                // zararsiz avto-ulash (guest telefoni) qilinadi.
+                long uid = Long.parseLong(id);
+                String snap = userSnap.get(uid);
+                String tgN = digits(tg), telN = digits(tel), ismN = norm(ism);
+                Role role = parseRole(rolS);
+                Kassa kassa = resolveKassa(kassaIdS, kassaNomi);
+                String faolN = faol ? "TRUE" : "FALSE";
+
+                if (snap == null) {
+                    userRepo.findById(uid).ifPresent(x -> {
+                        if (x.getTelegramId() == null) {
+                            Long link = guestByPhone(!telN.isEmpty() ? telN : x.getPhone());
+                            if (link != null && userRepo.findByTelegramId(link).isEmpty()) {
+                                x.setTelegramId(link);
+                                userRepo.save(x);
+                                log.info("Sheets: {} Telegram bilan bog'landi ({})",
+                                        x.getFullName(), link);
+                            }
                         }
-                    } else if (x.getTelegramId() != null) {
-                        // Ataylab o'chirilgan: uzamiz va mehmon yozuvini ham tozalaymiz —
-                        // aks holda telefon orqali keyingi siklda o'zi qayta ulanib qolardi.
-                        if (x.getRole() != Role.SUPERADMIN) {
+                    });
+                    continue;
+                }
+                String[] pv = snap.split("\\|", -1);   // [tg, tel, ism, rol, kassa, faol]
+                if (pv.length < 6) continue;
+
+                userRepo.findById(uid).ifPresent(x -> {
+                    boolean ch = false;
+                    // ISM — operator o'zgartirgan bo'lsa
+                    if (!ismN.isBlank() && !ismN.equals(pv[2]) && !ismN.equals(x.getFullName())) {
+                        x.setFullName(ismN); ch = true;
+                    }
+                    // TELEFON — operator o'zgartirgan bo'lsa (o'chirish ham)
+                    if (!telN.equals(pv[1])) {
+                        if (!telN.isEmpty() && !telN.equals(x.getPhone())) { x.setPhone(telN); ch = true; }
+                        else if (telN.isEmpty() && x.getPhone() != null) { x.setPhone(null); ch = true; }
+                    }
+                    // TELEGRAM — operator o'zgartirgan bo'lsa: yozilsa ulash, o'chirilsa uzish
+                    if (!tgN.equals(pv[0])) {
+                        if (!tgN.isEmpty()) {
+                            try {
+                                Long tgNew = Long.parseLong(tgN);
+                                if (!tgNew.equals(x.getTelegramId())
+                                        && userRepo.findByTelegramId(tgNew).isEmpty()) {
+                                    x.setTelegramId(tgNew); ch = true;
+                                    log.info("Sheets: {} Telegram bilan bog'landi ({})",
+                                            x.getFullName(), tgNew);
+                                }
+                            } catch (NumberFormatException ignored) { }
+                        } else if (x.getTelegramId() != null && x.getRole() != Role.SUPERADMIN) {
                             guestRepo.findById(x.getTelegramId()).ifPresent(guestRepo::delete);
                             x.setTelegramId(null); ch = true;
-                            log.info("Sheets: {} Telegram uzildi", x.getFullName());
+                            log.info("Sheets: {} Telegram uzildi (operator o'chirdi)", x.getFullName());
                         }
-                    } else {
-                        // Hali ulanmagan: kontakt yuborganlar (guests) telefoni bo'yicha ulashga urinamiz
-                        Long link = guestByPhone(!phone.isEmpty() ? phone : x.getPhone());
+                    } else if (x.getTelegramId() == null) {
+                        // Hali ulanmagan: guest telefoni bo'yicha avto-ulash — har doim zararsiz
+                        Long link = guestByPhone(!telN.isEmpty() ? telN : x.getPhone());
                         if (link != null && userRepo.findByTelegramId(link).isEmpty()) {
                             x.setTelegramId(link); ch = true;
                             log.info("Sheets: {} Telegram bilan bog'landi ({})", x.getFullName(), link);
                         }
                     }
-                    Role role = parseRole(rolS);
-                    if (role != null && role != x.getRole()) {
+                    // ROL — operator o'zgartirgan bo'lsa (oxirgi SuperAdmin himoyalangan)
+                    if (role != null && !role.name().equals(pv[3]) && role != x.getRole()) {
                         if (!(x.getRole() == Role.SUPERADMIN
                                 && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
-                            x.setRole(role); ch = true;
+                            x.setRole(role);
+                            if (role != Role.KASSIR) x.setKassaId(null);
+                            ch = true;
                         }
                     }
-                    Kassa kassa = resolveKassa(kassaIdS, kassaNomi);
-                    Long newKassa = x.getRole() == Role.KASSIR
-                            ? (kassa != null ? kassa.getId() : x.getKassaId()) : null;
-                    if (newKassa == null ? x.getKassaId() != null : !newKassa.equals(x.getKassaId())) {
-                        x.setKassaId(newKassa); ch = true;
+                    // KASSA — operator o'zgartirgan bo'lsa (faqat kassirga)
+                    if (x.getRole() == Role.KASSIR && kassa != null
+                            && !String.valueOf(kassa.getId()).equals(pv[4])
+                            && !kassa.getId().equals(x.getKassaId())) {
+                        x.setKassaId(kassa.getId()); ch = true;
                     }
-                    if (faol != x.isActive()) {
+                    // FAOL — operator o'zgartirgan bo'lsa (oxirgi SuperAdmin himoyalangan)
+                    if (!faolN.equals(pv[5]) && faol != x.isActive()) {
                         if (!(x.getRole() == Role.SUPERADMIN && !faol
                                 && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
                             x.setActive(faol); ch = true;
                         }
                     }
-                    if (ch) { userRepo.save(x); log.info("Sheets: foydalanuvchi #{} yangilandi", x.getId()); }
+                    if (ch) {
+                        userRepo.save(x);
+                        log.info("Sheets: foydalanuvchi #{} yangilandi (operator tahriri)", x.getId());
+                    }
                 });
             }
             usersPullOk = true;
@@ -374,13 +476,19 @@ public class SheetsSyncService {
         try { groups = msClient.fetchGroups(); } catch (Exception e) { groups = Map.of(); }
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("ID", "Nomi", "Otdel ID", "Otdel nomi", "Faol", "Holat"));
+        java.util.Map<Long, String> snap = new java.util.HashMap<>();
         for (Kassa k : kassaRepo.findAll()) {
             String g = k.getMoyskladGroupId() == null ? "" : k.getMoyskladGroupId();
+            String faolS = k.isActive() ? "TRUE" : "FALSE";
+            snap.put(k.getId(), norm(k.getName()) + "|" + g + "|" + faolS);
             rows.add(List.of(k.getId(), k.getName(), g,
-                    groups.getOrDefault(g, ""), k.isActive() ? "TRUE" : "FALSE", ""));
+                    groups.getOrDefault(g, ""), faolS, ""));
         }
         rows.addAll(pendingKassas);   // chala satrlar sabab bilan saqlanadi
         gs.overwrite("Kassalar", rows);
+        kassaSnap.clear();
+        kassaSnap.putAll(snap);
+        saveSnap("sheets.snap.kassa", kassaSnap);
     }
 
     private void pushUsers() throws Exception {
@@ -388,20 +496,31 @@ public class SheetsSyncService {
         List<List<Object>> rows = new ArrayList<>();
         rows.add(List.of("ID", "TelegramID", "Telefon", "Ism", "Rol",
                 "KassaID", "KassaNomi", "Faol", "Holat"));
+        java.util.Map<Long, String> snap = new java.util.HashMap<>();
         for (AppUser x : userRepo.findAll()) {
-            rows.add(List.of(x.getId(),
-                    x.getTelegramId() == null ? "" : x.getTelegramId(),
+            String tgS = x.getTelegramId() == null ? "" : String.valueOf(x.getTelegramId());
+            String telS = digits(x.getPhone());
+            String kasS = x.getKassaId() == null ? "" : String.valueOf(x.getKassaId());
+            String faolS = x.isActive() ? "TRUE" : "FALSE";
+            // Varaqqa yozilayotgan holat snapshot'ga: keyingi pull'da faqat shundan
+            // FARQ QILGAN kataklar operator tahriri deb qabul qilinadi.
+            snap.put(x.getId(), tgS + "|" + telS + "|" + norm(x.getFullName()) + "|"
+                    + x.getRole().name() + "|" + kasS + "|" + faolS);
+            rows.add(List.of(x.getId(), tgS,
                     x.getPhone() == null ? "" : x.getPhone(),
                     x.getFullName(), x.getRole().name(),
                     x.getKassaId() == null ? "" : x.getKassaId(),
                     x.getKassaId() == null ? "" : names.owner(OwnerType.KASSA, x.getKassaId()),
-                    x.isActive() ? "TRUE" : "FALSE",
+                    faolS,
                     x.getTelegramId() == null
                             ? "⏳ Telegram ulanmagan — Telefon ustunini to'ldiring va odam botga kirib «📱 Telefon raqamni yuborish»ni bossin"
                             : ""));
         }
         rows.addAll(pendingUsers);   // chala satrlar sabab bilan saqlanadi
         gs.overwrite("Foydalanuvchilar", rows);
+        userSnap.clear();
+        userSnap.putAll(snap);
+        saveSnap("sheets.snap.users", userSnap);
     }
 
     private void pushSozlamalar() throws Exception {
@@ -412,6 +531,7 @@ public class SheetsSyncService {
                 List.of("Kassalar", "Nomi/Otdel (ID yoki nomi)/Faol; yangi satr (ID bo'sh) = yangi kassa"),
                 List.of("Foydalanuvchilar", "Ism + Rol (kassir/buxgalter/admin) + TelegramID YOKI Telefon + Kassa (ID yoki nomi); yangi satr (ID bo'sh) = yangi foydalanuvchi"),
                 List.of("Holat ustuni", "Satr qabul qilinmasa sabab shu ustunda chiqadi — satr O'CHMAYDI, to'ldirsangiz keyingi siklda qabul qilinadi"),
+                List.of("Ustuvorlik", "BOT BAZASI — asosiy manba. Jadvaldagi katak faqat SIZ o'zgartirganingizda botga qo'llanadi; bot tomonida qilingan o'zgarishlarni jadval eski nusxasi qaytarib yubormaydi"),
                 List.of("Qolgan varaqlar", "Bot tomonidan avtomatik yoziladi — tahrir 5 daqiqada ustidan yozib yuboriladi"),
                 List.of("Davr", "Operatsiyalar: oxirgi 60 kun · Kunlar: oxirgi 31 kun")));
     }

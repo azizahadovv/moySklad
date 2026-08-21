@@ -45,6 +45,7 @@ public class AdminHandler {
     private final uz.kassa.service.AuditService audit;
     private final uz.kassa.service.RasxodService rasxodService;
     private final LabelService labelSvc;
+    private final PermService permSvc;
     private final uz.kassa.config.AppProps props;
 
     private static final java.time.format.DateTimeFormatter DF =
@@ -81,7 +82,7 @@ public class AdminHandler {
         // Panelga kirish (🏪 KASSA; eski nomlar ham ishlaydi)
         switch (text) {
             case "🏪 KASSA", "👑 АДМИН ПАНЕЛ", "📊 ПАНЕЛ" -> {
-                navTo(s, "panel", chatId, panelTitle(u), panelLabels(u));
+                navTo(u, s, "panel", chatId, panelTitle(u), panelLabels(u));
                 return true;
             }
             case "💰 БУГУНГИ ТУШУМ" -> { tushumAll(s, chatId); return true; }
@@ -130,7 +131,16 @@ public class AdminHandler {
             case "aux" -> auditExcel(Long.parseLong(arg), chatId);
             case "lbm" -> labelList(s, chatId, msgId);
             case "lb" -> labelPick(s, Integer.parseInt(arg), chatId, msgId);
+            case "lbr" -> labelRenameStart(s, Integer.parseInt(arg), chatId, msgId);
+            case "lbh" -> labelHideToggle(s, Integer.parseInt(arg), chatId, msgId);
             case "msk" -> msToken(s, chatId, msgId);
+            case "prm" -> permMenu(s, chatId, msgId);
+            case "prc" -> permCard(Long.parseLong(arg), chatId, msgId);
+            case "prs" -> permGrid("user", Long.parseLong(arg), chatId, msgId);
+            case "prt" -> permToggle(u, "user", arg, chatId, msgId);
+            case "prko" -> permKassaList(chatId, msgId);
+            case "prk" -> permGrid("kassa", Long.parseLong(arg), chatId, msgId);
+            case "prq" -> permToggle(u, "kassa", arg, chatId, msgId);
             case "mske" -> {
                 s.state = Session.State.ADM_MS_TOKEN;
                 sender.edit(chatId, msgId, "🔑 <b>Yangi MoySklad API kalitini yuboring</b>\n\n"
@@ -138,6 +148,7 @@ public class AdminHandler {
                         + "Bekor qilish uchun «-» yuboring.");
             }
             case "gu" -> auPick(s, arg, chatId, msgId);
+            case "me" -> auEmp(s, arg, chatId, msgId);
             case "rl" -> auRole(s, arg, chatId, msgId);
             case "ks" -> auKassa(s, arg, chatId, msgId);
             case "gr" -> akGroup(s, arg, chatId, msgId);
@@ -161,7 +172,8 @@ public class AdminHandler {
             List.of("📆 Bugun", "Kecha", "7 kun", "30 kun", "Shu oy", "🗓 Kalendar");
     private static final List<String> SOZLASH_MENU =
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
-                    "🧾 Расходлар", "📋 Аудит", "🏷 Тугма номлари", "🔑 MoySklad API");
+                    "🧾 Расходлар", "📋 Аудит", "🏷 Тугма номлари",
+                    "🔑 MoySklad API", "👁 Ҳуқуқлар");
     private static final List<String> STAT_MENU =
             List.of("🧾 Карзлар реестр", "📜 История", "👥 Фойдаланувчилар умумий",
                     "🏦 Бухгалтерия", "💼 Салдо", "📲 Кликлар", "📊 Свод");
@@ -186,10 +198,10 @@ public class AdminHandler {
                           "🏦 Бухгалтерия", "💼 Салдо", "📲 Кликлар", "📊 Свод");
     }
 
-    private void navTo(Session s, String nav, long chatId, String title, List<String> labels) {
+    private void navTo(AppUser u, Session s, String nav, long chatId, String title, List<String> labels) {
         s.data.put("nav", nav);
         deletePrevPanel(s, chatId);
-        Integer id = sender.sendId(chatId, title, menuKb(labels));
+        Integer id = sender.sendId(chatId, title, menuKb(u, labels));
         if (id != null) s.data.put("panelMsg", id);
     }
 
@@ -210,10 +222,13 @@ public class AdminHandler {
     }
 
     private org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup
-            menuKb(List<String> labels) {
+            menuKb(AppUser u, List<String> labels) {
         List<org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow> rows =
                 new ArrayList<>();
-        List<String> shown = labelSvc.displayAll(labels);   // o'zgartirilgan nomlar ko'rsatiladi
+        // Shu foydalanuvchi uchun yopiq bo'limlar yashiriladi, nomlar display bilan
+        List<String> shown = labels.stream()
+                .filter(l -> !LabelService.RENAMABLE.contains(l) || permSvc.visible(u, l))
+                .map(labelSvc::display).toList();
         for (int i = 0; i < shown.size(); i += 2) {
             var r = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow();
             r.add(shown.get(i));
@@ -257,13 +272,13 @@ public class AdminHandler {
         switch (lvl) {
             case "panel" -> {
                 switch (text) {
-                    case "🏬 Отдел" -> navTo(s, "otdel", chatId,
+                    case "🏬 Отдел" -> navTo(u, s, "otdel", chatId,
                             "🏬 <b>Отдел</b>\n\nKassani tanlang:", kassaLabels());
                     case "⚙️ Настройка" -> {
                         if (u.getRole() != Role.SUPERADMIN) return false;
-                        navTo(s, "sozlash", chatId, "⚙️ <b>Настройка</b>", SOZLASH_MENU);
+                        navTo(u, s, "sozlash", chatId, "⚙️ <b>Настройка</b>", SOZLASH_MENU);
                     }
-                    case "📈 Статистика" -> navTo(s, "stat", chatId,
+                    case "📈 Статистика" -> navTo(u, s, "stat", chatId,
                             "📈 <b>Статистика</b>", statLabels(u));
                     case "💰 Бугунги тушум" -> tushumAll(s, chatId);
                     default -> { return false; }
@@ -272,7 +287,7 @@ public class AdminHandler {
             case "otdel" -> {
                 Kassa k = kassaByLabel(text);
                 if (k == null) return false;
-                navTo(s, "kassa:" + k.getId(), chatId,
+                navTo(u, s, "kassa:" + k.getId(), chatId,
                         "🏪 <b>" + esc(k.getName()) + "</b>\n\nBo'limni tanlang:",
                         List.of("💰 Бугунги тушум", "📆 Давр танлаш"));
             }
@@ -280,7 +295,7 @@ public class AdminHandler {
                 long id = idOf(nav);
                 switch (text) {
                     case "💰 Бугунги тушум" -> { syncService.syncIfStale(45); kassaTushum(s, id, chatId, 0); }
-                    case "📆 Давр танлаш" -> navTo(s, "davr:" + id, chatId,
+                    case "📆 Давр танлаш" -> navTo(u, s, "davr:" + id, chatId,
                             "📆 <b>Давр танлаш</b>\n\nDavrni tanlang:", PERIODS);
                     default -> { return false; }
                 }
@@ -294,15 +309,16 @@ public class AdminHandler {
             }
             case "sozlash" -> {
                 switch (text) {
-                    case "🏪 Касса" -> navTo(s, "sozkassa", chatId, "🏪 <b>Касса</b>",
+                    case "🏪 Касса" -> navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
                             List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
-                    case "👥 Фойдаланувчилар" -> navTo(s, "sozuser", chatId,
+                    case "👥 Фойдаланувчилар" -> navTo(u, s, "sozuser", chatId,
                             "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
                     case "💼 Бошланғич қолдиқ" -> { ibStart(s, chatId); s.data.put("nav", "sozlash"); }
                     case "🧾 Расходлар" -> rxList(s, chatId, 0);
                     case "📋 Аудит" -> auditMenu(s, chatId, 0);
                     case "🏷 Тугма номлари" -> labelList(s, chatId, 0);
                     case "🔑 MoySklad API" -> msToken(s, chatId, 0);
+                    case "👁 Ҳуқуқлар" -> permMenu(s, chatId, 0);
                     default -> { return false; }
                 }
             }
@@ -312,7 +328,7 @@ public class AdminHandler {
                         s.state = Session.State.ADM_AK_NAME;
                         sender.send(chatId, "🏪 <b>Yangi kassa</b>\n\nKassa nomini kiriting:");
                     }
-                    case "🚫 Касса ўчириш" -> navTo(s, "kassadel", chatId,
+                    case "🚫 Касса ўчириш" -> navTo(u, s, "kassadel", chatId,
                             "🚫 <b>Касса ўчириш</b>\n\nQaysi kassani o'chirasiz?", kassaLabels());
                     default -> { return false; }
                 }
@@ -320,7 +336,7 @@ public class AdminHandler {
             case "kassadel" -> {
                 Kassa k = kassaByLabel(text);
                 if (k == null) return false;
-                navTo(s, "kassadelc:" + k.getId(), chatId,
+                navTo(u, s, "kassadelc:" + k.getId(), chatId,
                         "⚠️ <b>" + esc(k.getName()) + "</b> kassasi o'chirilsinmi?\n\n"
                                 + "Kassa faolsizlanadi — tarix saqlanadi.",
                         List.of("✅ Ha, o'chirilsin", "❌ Yo'q"));
@@ -329,17 +345,17 @@ public class AdminHandler {
                 if (text.startsWith("✅")) {
                     long id = idOf(nav);
                     kassaRepo.findById(id).ifPresent(k -> { k.setActive(false); kassaRepo.save(k); });
-                    navTo(s, "sozkassa", chatId, "🚫 Kassa faolsizlantirildi",
+                    navTo(u, s, "sozkassa", chatId, "🚫 Kassa faolsizlantirildi",
                             List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
                 } else if (text.startsWith("❌")) {
-                    navTo(s, "sozkassa", chatId, "🏪 <b>Касса</b>",
+                    navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
                             List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
                 } else return false;
             }
             case "sozuser" -> {
                 switch (text) {
                     case "➕ Фойдаланувчи қўшиш" -> { auStart(s, chatId); s.data.put("nav", "sozuser"); }
-                    case "🔄 Рол ўзгартириш" -> navTo(s, "roluser", chatId,
+                    case "🔄 Рол ўзгартириш" -> navTo(u, s, "roluser", chatId,
                             "🔄 <b>Рол ўзгартириш</b>\n\nFoydalanuvchini tanlang:", userLabels());
                     case "🚫 Фойдаланувчини ўчириш" -> listUsers(u, chatId);
                     default -> { return false; }
@@ -348,7 +364,7 @@ public class AdminHandler {
             case "roluser" -> {
                 AppUser x = userByLabel(text);
                 if (x == null) return false;
-                navTo(s, "rolpick:" + x.getId(), chatId,
+                navTo(u, s, "rolpick:" + x.getId(), chatId,
                         "🔄 <b>" + esc(x.getFullName()) + "</b> (hozir: " + x.getRole()
                                 + (x.getKassaId() == null ? "" :
                                    " · " + esc(names.owner(OwnerType.KASSA, x.getKassaId()))) + ")\n\n"
@@ -356,7 +372,7 @@ public class AdminHandler {
             }
             case "rolpick" -> {
                 if (!applyRole(idOf(nav), text, chatId)) return false;
-                navTo(s, "sozuser", chatId, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
+                navTo(u, s, "sozuser", chatId, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
             }
             case "stat" -> {
                 switch (text) {
@@ -370,7 +386,7 @@ public class AdminHandler {
                     case "🏦 Бухгалтерия" -> buxReport(s, chatId);
                     case "💼 Салдо" -> { syncService.syncIfStale(45); saldoKassa(s, "B", chatId, 0); }
                     case "📲 Кликлар" -> clickMenu(u, s, chatId, 0);
-                    case "📊 Свод" -> navTo(s, "svod", chatId, "📊 <b>Свод</b>\n\nExcel turini tanlang:",
+                    case "📊 Свод" -> navTo(u, s, "svod", chatId, "📊 <b>Свод</b>\n\nExcel turini tanlang:",
                             List.of("📗 Умумий Excel", "📘 Даврий Excel", "📙 Отдел Excel"));
                     default -> { return false; }
                 }
@@ -378,9 +394,9 @@ public class AdminHandler {
             case "svod" -> {
                 switch (text) {
                     case "📗 Умумий Excel" -> genExcel(chatId, 0, "m", null);
-                    case "📘 Даврий Excel" -> navTo(s, "svoddavr", chatId,
+                    case "📘 Даврий Excel" -> navTo(u, s, "svoddavr", chatId,
                             "📘 <b>Даврий Excel</b>\n\nDavrni tanlang:", PERIODS);
-                    case "📙 Отдел Excel" -> navTo(s, "svodotd", chatId,
+                    case "📙 Отдел Excel" -> navTo(u, s, "svodotd", chatId,
                             "📙 <b>Отдел Excel</b>\n\nKassani tanlang:", kassaLabels());
                     default -> { return false; }
                 }
@@ -394,7 +410,7 @@ public class AdminHandler {
             case "svodotd" -> {
                 Kassa k = kassaByLabel(text);
                 if (k == null) return false;
-                navTo(s, "svodotdd:" + k.getId(), chatId,
+                navTo(u, s, "svodotdd:" + k.getId(), chatId,
                         "📙 <b>Отдел Excel</b> — " + esc(k.getName()) + "\n\nDavrni tanlang:", PERIODS);
             }
             case "svodotdd" -> {
@@ -545,35 +561,35 @@ public class AdminHandler {
                 s.data.remove("nav");
                 deletePrevPanel(s, chatId);
                 sender.send(chatId, "🏠 Bosh menyu",
-                        Keyboards.buxMenu(u.getRole() == Role.SUPERADMIN));
+                        Keyboards.buxMenu(c -> permSvc.visible(u, c)));
             }
-            case "otdel", "sozlash", "stat" -> navTo(s, "panel", chatId,
+            case "otdel", "sozlash", "stat" -> navTo(u, s, "panel", chatId,
                     panelTitle(u), panelLabels(u));
-            case "kassa" -> navTo(s, "otdel", chatId,
+            case "kassa" -> navTo(u, s, "otdel", chatId,
                     "🏬 <b>Отдел</b>\n\nKassani tanlang:", kassaLabels());
             case "davr" -> {
                 long id = idOf(nav);
-                navTo(s, "kassa:" + id, chatId,
+                navTo(u, s, "kassa:" + id, chatId,
                         "🏪 <b>" + esc(names.owner(OwnerType.KASSA, id)) + "</b>\n\nBo'limni tanlang:",
                         List.of("💰 Бугунги тушум", "📆 Давр танлаш"));
             }
-            case "sozkassa", "sozuser" -> navTo(s, "sozlash", chatId, "⚙️ <b>Настройка</b>",
+            case "sozkassa", "sozuser" -> navTo(u, s, "sozlash", chatId, "⚙️ <b>Настройка</b>",
                     SOZLASH_MENU);
-            case "roluser", "rolpick" -> navTo(s, "sozuser", chatId,
+            case "roluser", "rolpick" -> navTo(u, s, "sozuser", chatId,
                     "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
-            case "kassadel", "kassadelc" -> navTo(s, "sozkassa", chatId, "🏪 <b>Касса</b>",
+            case "kassadel", "kassadelc" -> navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
                     List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
-            case "saldo", "svod" -> navTo(s, "stat", chatId, "📈 <b>Статистика</b>", statLabels(u));
-            case "svoddavr", "svodotd" -> navTo(s, "svod", chatId,
+            case "saldo", "svod" -> navTo(u, s, "stat", chatId, "📈 <b>Статистика</b>", statLabels(u));
+            case "svoddavr", "svodotd" -> navTo(u, s, "svod", chatId,
                     "📊 <b>Свод</b>\n\nExcel turini tanlang:",
                     List.of("📗 Умумий Excel", "📘 Даврий Excel", "📙 Отдел Excel"));
-            case "svodotdd" -> navTo(s, "svodotd", chatId,
+            case "svodotdd" -> navTo(u, s, "svodotd", chatId,
                     "📙 <b>Отдел Excel</b>\n\nKassani tanlang:", kassaLabels());
             default -> {
                 s.data.remove("nav");
                 deletePrevPanel(s, chatId);
                 sender.send(chatId, "🏠 Bosh menyu",
-                        Keyboards.buxMenu(u.getRole() == Role.SUPERADMIN));
+                        Keyboards.buxMenu(c -> permSvc.visible(u, c)));
             }
         }
     }
@@ -846,6 +862,7 @@ public class AdminHandler {
                 irow(btn("👥 Фойдаланувчилар", "a:p:su")),
                 irow(btn("🧾 Расходлар", "a:rxl"), btn("📋 Аудит", "a:audm")),
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
+                irow(btn("👁 Ҳуқуқлар", "a:prm")),
                 irow(bk("a:p:main"))));
     }
 
@@ -1407,25 +1424,48 @@ public class AdminHandler {
      * 🏷 ТУГМА НОМЛАРИ — sahifa/tugma nomlarini o'zgartirish.
      * ================================================================== */
 
+    private String labelMark(String canonical) {
+        return (labelSvc.isHidden(canonical) ? "🙈 " : "") + labelSvc.display(canonical)
+                + (labelSvc.isRenamed(canonical) ? " *" : "");
+    }
+
     private void labelList(Session s, long chatId, int msgId) {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         List<String> all = LabelService.RENAMABLE;
         for (int i = 0; i < all.size(); i += 2) {
             List<InlineKeyboardButton> r = new ArrayList<>();
-            r.add(btn(labelSvc.display(all.get(i)) + (labelSvc.isRenamed(all.get(i)) ? " *" : ""),
-                    "a:lb:" + i));
-            if (i + 1 < all.size())
-                r.add(btn(labelSvc.display(all.get(i + 1)) + (labelSvc.isRenamed(all.get(i + 1)) ? " *" : ""),
-                        "a:lb:" + (i + 1)));
+            r.add(btn(labelMark(all.get(i)), "a:lb:" + i));
+            if (i + 1 < all.size()) r.add(btn(labelMark(all.get(i + 1)), "a:lb:" + (i + 1)));
             rows.add(r);
         }
-        String text = "🏷 <b>Тугма номлари</b>\n\nQaysi tugma nomini o'zgartirasiz?\n"
-                + "<i>* — nomi allaqachon o'zgartirilgan</i>";
+        String text = "🏷 <b>Тугма номлари ва бўлимлар</b>\n\n"
+                + "Bo'limni tanlang — nomini o'zgartirish yoki o'chirish/yoqish mumkin.\n"
+                + "<i>* — nomi o'zgartirilgan · 🙈 — o'chirilgan (menyularda ko'rinmaydi)</i>";
         if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
         else sendContent(s, chatId, text, inline(rows));
     }
 
+    /** Bo'lim kartochkasi: nom o'zgartirish / o'chirish-yoqish. */
     private void labelPick(Session s, int idx, long chatId, int msgId) {
+        if (idx < 0 || idx >= LabelService.RENAMABLE.size()) return;
+        String canonical = LabelService.RENAMABLE.get(idx);
+        boolean hidden = labelSvc.isHidden(canonical);
+        boolean protectd = canonical.equals(LabelService.PROTECTED_LABEL);
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("✏️ Nomini o'zgartirish", "a:lbr:" + idx)));
+        if (!protectd)
+            rows.add(irow(btn(hidden ? "👁 Yoqish (menyuga qaytarish)"
+                    : "🙈 O'chirish (menyudan yashirish)", "a:lbh:" + idx)));
+        rows.add(irow(bk("a:lbm")));
+        sender.edit(chatId, msgId, "🏷 <b>" + esc(labelSvc.display(canonical)) + "</b>"
+                + (labelSvc.isRenamed(canonical) ? " (asl: " + esc(canonical) + ")" : "")
+                + "\nHolat: " + (hidden ? "🙈 <b>o'chirilgan</b> — menyularda ko'rinmaydi"
+                    : "👁 <b>ko'rinadi</b>")
+                + (protectd ? "\n\nℹ️ Bu bo'limni o'chirib bo'lmaydi — sozlamalarga kirish yo'li."
+                    : ""), inline(rows));
+    }
+
+    private void labelRenameStart(Session s, int idx, long chatId, int msgId) {
         if (idx < 0 || idx >= LabelService.RENAMABLE.size()) return;
         String canonical = LabelService.RENAMABLE.get(idx);
         s.state = Session.State.ADM_LB_NAME;
@@ -1435,6 +1475,21 @@ public class AdminHandler {
                     ? " (asl: " + esc(canonical) + ")" : "") + "\n\n"
                 + "<b>Yangi nomni yozing</b> (2–30 belgi).\n"
                 + "Asl nomga qaytarish uchun «-» yuboring:");
+    }
+
+    private void labelHideToggle(Session s, int idx, long chatId, int msgId) {
+        if (idx < 0 || idx >= LabelService.RENAMABLE.size()) return;
+        String canonical = LabelService.RENAMABLE.get(idx);
+        if (canonical.equals(LabelService.PROTECTED_LABEL)) { labelPick(s, idx, chatId, msgId); return; }
+        boolean nowHidden = !labelSvc.isHidden(canonical);
+        labelSvc.setHidden(canonical, nowHidden);
+        audit.log(null, nowHidden ? "BOLIM_OCHIRILDI" : "BOLIM_YOQILDI", "label", null, canonical);
+        sender.send(chatId, (nowHidden
+                ? "🙈 <b>" + esc(labelSvc.display(canonical)) + "</b> o'chirildi — menyularda "
+                  + "ko'rinmaydi, bosilsa ham ishlamaydi (SuperAdmin'dan tashqari)."
+                : "👁 <b>" + esc(labelSvc.display(canonical)) + "</b> yoqildi — menyularga qaytdi.")
+                + "\nFoydalanuvchilarda yangi menyu /start bosilganda ko'rinadi.");
+        labelPick(s, idx, chatId, msgId);
     }
 
     private void labelName(Session s, String text, long chatId) {
@@ -1529,6 +1584,186 @@ public class AdminHandler {
         }
     }
 
+    /* ==================================================================
+     * 👁 ҲУҚУҚЛАР — foydalanuvchini tanlab, u UI'da nimani ko'rishi va
+     * nimalar qila olishini jonli kartochkada ko'rish.
+     * ================================================================== */
+
+    private void permMenu(Session s, long chatId, int msgId) {
+        List<AppUser> users = userRepo.findByActiveTrueOrderByRoleAscIdAsc();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (int i = 0; i < users.size(); i += 2) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn(roleEmoji(users.get(i).getRole()) + " " + users.get(i).getFullName(),
+                    "a:prc:" + users.get(i).getId()));
+            if (i + 1 < users.size())
+                r.add(btn(roleEmoji(users.get(i + 1).getRole()) + " " + users.get(i + 1).getFullName(),
+                        "a:prc:" + users.get(i + 1).getId()));
+            rows.add(r);
+        }
+        rows.add(irow(btn("🏬 Отдел кесимида (butun kassaga)", "a:prko")));
+        rows.add(irow(bk("a:p:set")));
+        String text = "👁 <b>Ҳуқуқлар</b>\n\nKimning imkoniyatlarini ko'rasiz/boshqarasiz?\n"
+                + "👤 kassir · 🧮 buxgalter · 👑 superadmin";
+        if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
+        else sendContent(s, chatId, text, inline(rows));
+    }
+
+    private String roleEmoji(Role r) {
+        return switch (r) { case KASSIR -> "👤"; case BUXGALTER -> "🧮"; case SUPERADMIN -> "👑"; };
+    }
+
+    private void permCard(long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) return;
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        if (x.getRole() != Role.SUPERADMIN)
+            rows.add(irow(btn("⚙️ Бўлимларини бошқариш", "a:prs:" + userId)));
+        rows.add(irow(bk("a:prm")));
+        sender.edit(chatId, msgId, permText(x), inline(rows));
+    }
+
+    /* ---------- huquq berish/olish: user yoki kassa kesimida ---------- */
+
+    private void permKassaList(long chatId, int msgId) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn("🏪 " + k.getName(), "a:prk:" + k.getId())));
+        rows.add(irow(bk("a:prm")));
+        sender.edit(chatId, msgId, "🏬 <b>Отдел кесимида ҳуқуқ</b>\n\n"
+                + "Kassani tanlang — sozlama shu kassaning BARCHA kassirlariga amal qiladi\n"
+                + "(user uchun alohida belgilangani bo'lsa, o'shanisi ustun):", inline(rows));
+    }
+
+    private void permGrid(String subj, long id, long chatId, int msgId) {
+        String who = subj.equals("user")
+                ? userRepo.findById(id).map(AppUser::getFullName).orElse("#" + id)
+                : names.owner(OwnerType.KASSA, id);
+        List<String> all = LabelService.RENAMABLE;
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        String cb = subj.equals("user") ? "a:prt:" : "a:prq:";
+        for (int i = 0; i < all.size(); i += 2) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(permBtn(subj, id, all.get(i), cb + id + "." + i));
+            if (i + 1 < all.size())
+                r.add(permBtn(subj, id, all.get(i + 1), cb + id + "." + (i + 1)));
+            rows.add(r);
+        }
+        rows.add(irow(bk(subj.equals("user") ? "a:prc:" + id : "a:prko")));
+        sender.edit(chatId, msgId, "⚙️ <b>Бўлим ҳуқуқлари</b> — "
+                + (subj.equals("user") ? "👤 " : "🏪 ") + esc(who) + "\n\n"
+                + "Tugmani bosib holatni almashtiring:\n"
+                + "belgisiz — umumiy holat (meros) · 🚫 — taqiqlangan · ✅ — ruxsat berilgan\n"
+                + "<i>O'zgarish foydalanuvchida /start yoki menyu qayta ochilganda ko'rinadi.</i>",
+                inline(rows));
+    }
+
+    private InlineKeyboardButton permBtn(String subj, long id, String canonical, String cb) {
+        Boolean o = subj.equals("user") ? permSvc.userOverride(id, canonical)
+                : permSvc.kassaOverride(id, canonical);
+        String mark = o == null ? "" : (o ? "✅ " : "🚫 ");
+        String label = mark + labelSvc.display(canonical);
+        if (label.length() > 32) label = label.substring(0, 32);
+        return btn(label, cb);
+    }
+
+    /** arg: "<id>.<idx>" — holat sikli: meros → 🚫 taqiq → ✅ ruxsat → meros. */
+    private void permToggle(AppUser admin, String subj, String arg, long chatId, int msgId) {
+        int dot = arg.indexOf('.');
+        if (dot <= 0) return;
+        long id = Long.parseLong(arg.substring(0, dot));
+        int idx = Integer.parseInt(arg.substring(dot + 1));
+        if (idx < 0 || idx >= LabelService.RENAMABLE.size()) return;
+        String canonical = LabelService.RENAMABLE.get(idx);
+        Boolean cur = subj.equals("user") ? permSvc.userOverride(id, canonical)
+                : permSvc.kassaOverride(id, canonical);
+        Boolean next = cur == null ? Boolean.FALSE : (cur ? null : Boolean.TRUE);
+        permSvc.set(subj, id, canonical, next);
+        audit.log(admin.getId(), "HUQUQ_" + (next == null ? "MEROS" : next ? "RUXSAT" : "TAQIQ"),
+                subj, id, canonical);
+        permGrid(subj, id, chatId, msgId);
+    }
+
+    /** Foydalanuvchining roli+kassasiga qarab UI va huquqlar kartochkasi. */
+    private String permText(AppUser x) {
+        String kassaName = x.getKassaId() == null ? null
+                : names.owner(OwnerType.KASSA, x.getKassaId());
+        Kassa kassa = x.getKassaId() == null ? null
+                : kassaRepo.findById(x.getKassaId()).orElse(null);
+        boolean msBound = kassa != null && kassa.getMoyskladGroupId() != null
+                && !kassa.getMoyskladGroupId().isBlank();
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("👁 <b>").append(esc(x.getFullName())).append("</b> — ")
+          .append(roleEmoji(x.getRole())).append(" ").append(x.getRole().name());
+        if (kassaName != null) sb.append(" · 🏪 ").append(esc(kassaName));
+        sb.append("\n📲 Telegram: ").append(x.getTelegramId() == null
+                ? "❌ ulanmagan (menyularni ko'ra olmaydi, xabar olmaydi)" : "✅ ulangan");
+
+        sb.append("\n\n<b>Bosh menyusida ko'radi:</b>\n");
+        switch (x.getRole()) {
+            case KASSIR -> sb.append("• ").append(esc(labelSvc.display("📊 КАССАМ")))
+                    .append(" · ").append(esc(labelSvc.display("💰 БУГУНГИ ТУШУМ")))
+                    .append("\n• ").append(esc(labelSvc.display("💸 Rasxod")))
+                    .append(" · ").append(esc(labelSvc.display("🔁 O'tkazma")))
+                    .append("\n• ").append(esc(labelSvc.display("📤 Hisobot topshirish")))
+                    .append(" · ").append(esc(labelSvc.display("🤝 КОНТРАГЕНТ")));
+            default -> sb.append("• ").append(esc(labelSvc.display("🏪 KASSA")))
+                    .append(" · ").append(esc(labelSvc.display("🤝 КОНТРАГЕНТ")));
+        }
+
+        sb.append("\n\n<b>Qila oladi:</b>\n");
+        switch (x.getRole()) {
+            case KASSIR -> {
+                sb.append("• Faqat O'Z kassasi")
+                  .append(kassaName == null ? "" : " («" + esc(kassaName) + "»)")
+                  .append(": balans, tushum, tarix, Excel\n");
+                sb.append("• Rasxod SO'ROVI (buxgalter tasdig'i bilan), o'tkazma, hisobot topshirish\n");
+                sb.append("• Kontragent qarz daftari: qidiruv, balans, eslatma qo'shish (o'ziniki)\n");
+                if (x.getKassaId() != null)
+                    sb.append("• 🤝 Настройка: otdeliga odam qo'shish (erkin); o'chirish/tahrir — "
+                            + "SuperAdmin tasdig'i bilan\n");
+            }
+            case BUXGALTER -> {
+                sb.append("• Barcha kassalar: holat, statistika, saldo, svod/Excel, tarix\n");
+                sb.append("• Rasxod so'rovlarini tasdiqlash/rad etish, hisobot qabul qilish\n");
+                sb.append("• Kassadan pul qabul qilish (sana tanlash bilan), o'z rasxodi\n");
+                sb.append("• Kontragent qarz daftari (o'ziniki)\n");
+            }
+            case SUPERADMIN -> {
+                sb.append("• Buxgalter qila oladigan HAMMASI\n");
+                sb.append("• Foydalanuvchi/kassa qo'shish-o'chirish, rol o'zgartirish\n");
+                sb.append("• Boshlang'ich qoldiq, tasdiqlangan rasxodni bekor/tahrirlash\n");
+                sb.append("• Аудит (Excel bilan), tugma nomlari, MoySklad API kaliti\n");
+                sb.append("• Kontragent: HAMMANING eslatmalarini ko'radi\n");
+            }
+        }
+
+        sb.append("\n<b>Ko'rmaydi / qila olmaydi:</b>\n");
+        switch (x.getRole()) {
+            case KASSIR -> sb.append("• Boshqa kassalar, umumiy statistika, svod, "
+                    + "buxgalteriya hisoboti\n• Rasxodni o'zi tasdiqlash, sozlamalar, Аудит");
+            case BUXGALTER -> sb.append("• ⚙️ Настройка (foydalanuvchi/kassa boshqaruvi, "
+                    + "Аудит, tugma nomlari, MoySklad kaliti)\n• Boshqalarning qarz eslatmalari");
+            case SUPERADMIN -> sb.append("• Cheklov yo'q");
+        }
+
+        if (x.getRole() == Role.KASSIR && kassa != null)
+            sb.append("\n\nℹ️ Kassasi MoySklad otdeliga ").append(msBound
+                    ? "BOG'LANGAN — kirim/chiqim avtomatik tushadi"
+                    : "bog'lanMAGAN — MoySklad'dan avtomatik hech narsa kelmaydi, "
+                      + "faqat bot orqali yuritiladi");
+
+        sb.append("\n\n<b>Avtomatik xabarlar:</b> ");
+        switch (x.getRole()) {
+            case KASSIR -> sb.append("o'z kassasining kirim/chiqimi, rasxod javobi, "
+                    + "qarz eslatmalari, 21:00 kunlik eslatma");
+            case BUXGALTER, SUPERADMIN -> sb.append("MoySklad kirim/chiqim, STORNO/tuzatishlar, "
+                    + "so'rovlar, qarz eslatmalari");
+        }
+        return sb.toString();
+    }
+
     /* ---------- davr yordamchilari ---------- */
 
     private java.time.LocalDate[] periodOf(String code) {
@@ -1553,17 +1788,20 @@ public class AdminHandler {
         s.reset();
         List<uz.kassa.domain.Guest> guests = guestRepo.findAllByOrderByLastSeenDesc().stream()
                 .filter(g -> userRepo.findByTelegramId(g.getTelegramId()).isEmpty())
-                .limit(10).toList();
+                .limit(8).toList();
 
-        if (guests.isEmpty()) {
-            s.state = Session.State.ADM_AU_TGID;
-            sender.send(chatId, "👥 <b>Yangi foydalanuvchi</b>\n\n"
-                    + "Hozircha botga yozgan yangi odam yo'q.\n"
-                    + "Telegram ID sini qo'lda kiriting.\n"
-                    + "<i>Foydalanuvchi botga /start yozsa, ro'yxatda avtomatik chiqadi.</i>",
-                    cancelOnly());
-            return;
-        }
+        // MoySklad xodimlari (Владелец-сотрудник) — hali tizimda yo'qlari
+        List<String[]> emps = new ArrayList<>();
+        try {
+            List<AppUser> all = userRepo.findAll();
+            for (MoySkladClient.MsEmployee e : msClient.fetchEmployees()) {
+                boolean exists = all.stream()
+                        .anyMatch(x -> x.getFullName().equalsIgnoreCase(e.name()));
+                if (!exists) emps.add(new String[]{e.name(), e.phone()});
+                if (emps.size() >= 20) break;
+            }
+        } catch (Exception ignored) { }
+        s.data.put("msEmps", emps);
 
         s.state = Session.State.ADM_AU_PICK;
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
@@ -1575,10 +1813,42 @@ public class AdminHandler {
             if (label.length() > 40) label = label.substring(0, 40) + "…";
             rows.add(irow(btn("👤 " + label, "a:gu:" + g.getTelegramId())));
         }
+        for (int i = 0; i < emps.size(); i++) {
+            String label = emps.get(i)[0];
+            if (label.length() > 45) label = label.substring(0, 45) + "…";
+            rows.add(irow(btn("👔 " + label, "a:me:" + i)));
+        }
         rows.add(irow(btn("✍️ Telefon raqam bilan qidirish", "a:gu:m")));
         rows.add(irow(btn("❌ Bekor", "cx")));
         sender.send(chatId, "👥 <b>Yangi foydalanuvchi</b>\n\n"
-                + "Botga yozgan odamlar — birini tanlang:", inline(rows));
+                + (guests.isEmpty() ? "" : "👤 — botga yozgan odamlar\n")
+                + (emps.isEmpty() ? "" : "👔 — MoySklad xodimlari (Владелец-сотрудник): "
+                    + "tanlansangiz Telegram'siz yaratiladi, odam botga kirib telefonini "
+                    + "yuborsa avtomatik ulanadi\n")
+                + "\nBirini tanlang:", inline(rows));
+    }
+
+    /** MoySklad xodimi tanlandi — Telegram'siz foydalanuvchi sifatida yaratish yo'li. */
+    private void auEmp(Session s, String arg, long chatId, int msgId) {
+        if (s.state != Session.State.ADM_AU_PICK) return;
+        Object o = s.data.get("msEmps");
+        int i = Integer.parseInt(arg);
+        if (!(o instanceof List<?> l) || i < 0 || i >= l.size()) return;
+        String[] emp = (String[]) l.get(i);
+        s.data.remove("tgid");
+        s.data.put("name", emp[0]);
+        s.data.put("empPhone", emp[1] == null ? "" : emp[1]);
+        s.state = Session.State.ADM_AU_ROLE;
+        sender.edit(chatId, msgId, "👔 Tanlandi: <b>" + esc(emp[0]) + "</b>"
+                + (emp[1] == null || emp[1].isBlank() ? "" : " · " + esc(emp[1]))
+                + "\nℹ️ Telegram hali ulanmagan — u botga kirib «📱 Telefon raqamni "
+                + "yuborish»ni bossa avtomatik ulanadi"
+                + (emp[1] == null || emp[1].isBlank()
+                    ? " (MoySkladda telefoni yo'q — keyin jadvalda Telefon ustunini to'ldiring)" : "")
+                + "\n\nRolini tanlang:", inline(List.of(
+                irow(btn("👤 Kassir", "a:rl:K")),
+                irow(btn("🧮 Buxgalter", "a:rl:B"), btn("👑 SuperAdmin", "a:rl:S")),
+                irow(btn("❌ Bekor", "cx")))));
     }
 
     private void auPick(Session s, String arg, long chatId, int msgId) {
@@ -1702,17 +1972,25 @@ public class AdminHandler {
     }
 
     private void saveUser(Session s, Role role, Long kassaId, long chatId, int msgId) {
-        long tgId = s.getLong("tgid");
+        Long tgId = s.data.get("tgid") == null ? null : s.getLong("tgid");
         String name = s.getStr("name");
+        String phoneRaw = s.getStr("empPhone");
+        String phone = phoneRaw == null ? "" : phoneRaw.replaceAll("\\D", "");
         s.reset();
         userRepo.save(AppUser.builder()
-                .telegramId(tgId).fullName(name).role(role).kassaId(kassaId).active(true)
-                .build());
-        guestRepo.deleteById(tgId);   // ro'yxatga olindi — mehmonlar ro'yxatidan chiqadi
+                .telegramId(tgId).fullName(name).role(role).kassaId(kassaId)
+                .phone(phone.isEmpty() ? null : phone)
+                .active(true).build());
+        if (tgId != null) guestRepo.deleteById(tgId);   // ro'yxatga olindi — mehmonlardan chiqadi
         String where = kassaId == null ? "" : "\nKassa: " + esc(names.owner(OwnerType.KASSA, kassaId));
         sender.edit(chatId, msgId, "✅ Foydalanuvchi qo'shildi:\n<b>" + esc(name) + "</b> ("
-                + role + ")" + where + "\nTelegram ID: <code>" + tgId + "</code>\n\n"
-                + "Endi u botga <b>/start</b> yozsa — menyusi ochiladi.");
+                + role + ")" + where
+                + (tgId != null
+                    ? "\nTelegram ID: <code>" + tgId + "</code>\n\n"
+                      + "Endi u botga <b>/start</b> yozsa — menyusi ochiladi."
+                    : (phone.isEmpty() ? "" : "\nTelefon: <code>" + esc(phone) + "</code>")
+                      + "\n\nℹ️ Telegram hali ulanmagan — u botga kirib «📱 Telefon raqamni "
+                      + "yuborish»ni bossa avtomatik ulanadi."));
     }
 
     /* ==================== 🏪 KASSA QO'SHISH ==================== */

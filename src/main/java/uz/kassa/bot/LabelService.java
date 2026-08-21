@@ -31,9 +31,13 @@ public class LabelService {
             "👥 Фойдаланувчилар умумий", "🏦 Бухгалтерия",
             "💼 Салдо", "📲 Кликлар", "📊 Свод");
 
+    /** O'chirib bo'lmaydigan bo'lim — sozlamalarga kirish yo'li yopilib qolmasin. */
+    public static final String PROTECTED_LABEL = "🏪 KASSA";
+
     private final SettingsService settings;
     private volatile Map<String, String> toDisplay = Map.of();
     private volatile Map<String, String> toCanonical = Map.of();
+    private volatile java.util.Set<String> hidden = java.util.Set.of();
 
     public LabelService(SettingsService settings) {
         this.settings = settings;
@@ -43,16 +47,32 @@ public class LabelService {
     public void reload() {
         Map<String, String> d = new HashMap<>();
         Map<String, String> c = new HashMap<>();
+        java.util.Set<String> h = new java.util.HashSet<>();
         for (String canonical : RENAMABLE) {
             String v = settings.get("label." + canonical).orElse("").trim();
             if (!v.isEmpty() && !v.equals(canonical)) {
                 d.put(canonical, v);
                 c.put(v, canonical);
             }
+            if (!canonical.equals(PROTECTED_LABEL)
+                    && settings.get("label.off." + canonical).orElse("").equals("1"))
+                h.add(canonical);
         }
         toDisplay = d;
         toCanonical = c;
+        hidden = h;
         Keyboards.setDisplayMap(d);   // statik menyu quruvchilar ham yangi nomni ko'rsatsin
+        Keyboards.setHiddenSet(h);
+    }
+
+    /** Bo'lim SuperAdmin tomonidan o'chirilganmi (menyularda ko'rinmaydi). */
+    public boolean isHidden(String canonical) { return hidden.contains(canonical); }
+
+    /** Bo'limni o'chirish/yoqish. PROTECTED_LABEL hech qachon o'chirilmaydi. */
+    public void setHidden(String canonical, boolean off) {
+        if (canonical.equals(PROTECTED_LABEL)) return;
+        settings.set("label.off." + canonical, off ? "1" : "");
+        reload();
     }
 
     /** Foydalanuvchiga ko'rsatiladigan nom (o'zgartirilgan bo'lsa — yangisi). */

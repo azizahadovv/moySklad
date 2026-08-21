@@ -128,10 +128,24 @@ public class MoySkladSyncService {
                 && !somCurrencyIds.contains(currencyId);
     }
 
-    /** So'ralganda yangilash: oxirgi urinishdan maxAgeSec o'tgan bo'lsa sinxron qilinadi. */
+    /** Fon sinxroni uchun alohida oqim — foydalanuvchi so'rovini BLOKLAMAYDI. */
+    private final java.util.concurrent.ExecutorService syncExec =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "ms-sync");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * So'ralganda yangilash: eskirgan bo'lsa sinxron FONDA ishga tushadi, ko'rinish
+     * esa darhol joriy ma'lumot bilan ochiladi (30 soniyalik rejali sinxron baribir
+     * ishlab turadi). Avval bu joyda sinxron chaqiruv bo'lib, bitta foydalanuvchi
+     * pul ko'rinishini ochsa hamma 5-15 soniya kutib qolardi.
+     */
     public void syncIfStale(long maxAgeSec) {
         if (System.currentTimeMillis() - lastAttempt < maxAgeSec * 1000) return;
-        sync();
+        lastAttempt = System.currentTimeMillis();   // navbatda to'planib qolmasin
+        syncExec.submit(this::sync);
     }
 
     public synchronized void sync() {
