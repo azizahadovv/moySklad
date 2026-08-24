@@ -63,23 +63,76 @@ public class MoySkladSyncService {
 
     private volatile long lastAttempt = 0;
 
+    /**
+     * Xabar toshqiniga qarshi: BUGUNGI hujjat tuzatishlari alohida xabar bilan,
+     * ESKI (o'tgan kunlardagi) hujjat tuzatishlari esa faqat sanab boriladi va
+     * sikl oxirida bitta umumlashma xabar yuboriladi. sync()/reconcile()
+     * synchronized bo'lgani uchun oddiy int yetarli.
+     */
+    private int quietFixes = 0;
+
+    /** Tuzatish xabarini yuborish kerakmi: bugungi hujjat — ha; eski — sanaladi. */
+    private boolean loudFix(LocalDate docDate) {
+        if (docDate.equals(ledger.today())) return true;
+        quietFixes++;
+        return false;
+    }
+
+    /** Sikl oxirida jim tuzatishlar bo'yicha bitta umumlashma xabar. */
+    private void flushQuietFixes(String source) {
+        int n = quietFixes;
+        quietFixes = 0;
+        if (n > 0) notify.toBuxgalteriya("🔧 MoySklad " + source + ": o'tgan kunlardagi <b>" + n
+                + "</b> ta hujjat o'zgarishi (otdel/summa/storno) avtomatik tuzatildi. "
+                + "Tafsilotlar: Настройка → 📋 Аудит.", null);
+    }
+
     /** So'm (UZS) valyuta UUID lari — boshqa valyutadagi hujjatlar nazoratga olinmaydi. */
     private volatile java.util.Set<String> somCurrencyIds = java.util.Set.of();
 
     /** Bir siklda qayta ishlatiladigan xaritalar. */
     private record Ctx(Map<String, Long> storeToKassa, Map<String, Long> groupToKassa,
-                       Map<String, String> groupNames, Map<String, Long> catByName) {}
+                       Map<String, String> groupNames, Map<String, Long> catByName,
+                       java.util.Set<String> dupGroups) {}
+
+    /** Dublikat-otdel ogohlantirishi oxirgi yuborilgan vaqt (6 soatda 1 marta). */
+    private volatile long lastDupWarnAt = 0;
 
     private Ctx buildCtx() {
         Map<String, Long> storeToKassa = new HashMap<>();
         Map<String, Long> groupToKassa = new HashMap<>();
+        // Bitta otdel bir nechta faol kassaga biriktirilgan bo'lsa — sozlash xatosi:
+        // hujjatlar kassalar orasida sakramasligi uchun ENG BIRINCHI (kichik id)
+        // kassa qoladi, otdel-o'zgarish (reroute) esa bu guruh uchun to'xtatiladi.
+        java.util.Set<String> dupGroups = new java.util.HashSet<>();
+        Map<String, java.util.List<String>> dupNames = new HashMap<>();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
             if (k.getMoyskladStoreId() != null && !k.getMoyskladStoreId().isBlank())
                 storeToKassa.put(k.getMoyskladStoreId(), k.getId());
-            if (k.getMoyskladGroupId() != null && !k.getMoyskladGroupId().isBlank())
-                groupToKassa.put(k.getMoyskladGroupId(), k.getId());
+            if (k.getMoyskladGroupId() != null && !k.getMoyskladGroupId().isBlank()) {
+                String g = k.getMoyskladGroupId();
+                if (groupToKassa.containsKey(g)) {
+                    dupGroups.add(g);
+                    dupNames.computeIfAbsent(g, x -> new java.util.ArrayList<>(java.util.List.of(
+                            kassaRepo.findById(groupToKassa.get(g)).map(Kassa::getName).orElse("?"))))
+                            .add(k.getName());
+                } else groupToKassa.put(g, k.getId());
+            }
         }
         Map<String, String> groupNames = client.fetchGroups();
+
+        if (!dupGroups.isEmpty() && System.currentTimeMillis() - lastDupWarnAt > 6 * 3600_000L) {
+            lastDupWarnAt = System.currentTimeMillis();
+            StringBuilder sb = new StringBuilder("⚠️ <b>SOZLASH XATOSI</b> — bitta MoySklad otdeli "
+                    + "bir nechta kassaga biriktirilgan:\n");
+            for (String g : dupGroups)
+                sb.append("\n• <b>").append(TextUtil.esc(groupNames.getOrDefault(g, g)))
+                  .append("</b>: ").append(TextUtil.esc(String.join(", ", dupNames.get(g))));
+            sb.append("\n\nHujjatlar eng birinchi kassaga yoziladi, otdel-ko'chirishlar esa "
+                    + "TO'XTATILDI (xabar yog'ilib ketmasligi uchun). Sheets «Kassalar» varag'ida "
+                    + "yoki bazada otdelni faqat bitta kassada qoldiring.");
+            notify.toRole(uz.kassa.domain.Role.SUPERADMIN, sb.toString(), null);
+        }
 
         java.util.Set<String> som = new java.util.HashSet<>();
         client.fetchCurrencies().forEach((id, iso) -> {
@@ -92,7 +145,7 @@ public class MoySkladSyncService {
         for (Category c : categoryRepo.findByActiveTrueOrderByIdAsc())
             catByName.put(c.getName().trim().toLowerCase(), c.getId());
 
-        return new Ctx(storeToKassa, groupToKassa, groupNames, catByName);
+        return new Ctx(storeToKassa, groupToKassa, groupNames, catByName, dupGroups);
     }
 
     /**
@@ -159,6 +212,7 @@ public class MoySkladSyncService {
                 .orElse(now.minusDays(2))
                 .minusMinutes(props.getMoysklad().getSyncOverlapMinutes());
 
+        quietFixes = 0;
         int n = 0;
         try {
             Ctx ctx = buildCtx();
@@ -178,10 +232,12 @@ public class MoySkladSyncService {
         } catch (Exception e) {
             // Watermark SURILMAYDI — o'qilmagan hujjatlar keyingi siklda qayta so'raladi
             log.warn("MoySklad sinxron uzildi (watermark saqlanmadi): {}", e.getMessage());
+            flushQuietFixes("sinxron");
             return;
         }
 
         settings.set(LAST_SYNC_KEY, now.format(FMT));
+        flushQuietFixes("sinxron");
         if (n > 0) log.info("MoySklad sinxron: {} ta yozuv/tuzatish", n);
     }
 
@@ -203,6 +259,7 @@ public class MoySkladSyncService {
         LocalDate ep = epoch();
         if (ep.isAfter(from)) from = ep;   // kalibratsiyadan oldingi davrga kirilmaydi
 
+        quietFixes = 0;
         int n = 0;
         try {
             Ctx ctx = buildCtx();
@@ -237,8 +294,10 @@ public class MoySkladSyncService {
             }
         } catch (Exception e) {
             log.warn("MoySklad reconcile uzildi: {}", e.getMessage());
+            flushQuietFixes("tekshiruv");
             return;
         }
+        flushQuietFixes("tekshiruv");
         if (n > 0) log.info("MoySklad reconcile: {} ta yozuv/tuzatish", n);
     }
 
@@ -305,8 +364,9 @@ public class MoySkladSyncService {
                 // pastda yangi sana bilan qayta yoziladi
             } else {
                 if (op.getAmount() != sum && ledger.updateSyncAmount(op, sum)) {
-                    notify.toBuxgalteriya("✏️ MoySklad hujjat summasi o'zgargan — avtomatik tuzatildi: "
-                            + msId + " — yangi: " + TextUtil.fmt(sum) + " so'm", null);
+                    if (loudFix(d.date()))
+                        notify.toBuxgalteriya("✏️ MoySklad hujjat summasi o'zgargan — avtomatik tuzatildi: "
+                                + msId + " — yangi: " + TextUtil.fmt(sum) + " so'm", null);
                     return true;
                 }
                 return false;
@@ -345,9 +405,10 @@ public class MoySkladSyncService {
                 if (op.getAmount() != sum) {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
-                        notify.toBuxgalteriya("✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
-                                + "<b>" + TextUtil.esc(ownerName(op)) + "</b>: " + TextUtil.fmt(old)
-                                + " → " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
+                                    + "<b>" + TextUtil.esc(ownerName(op)) + "</b>: " + TextUtil.fmt(old)
+                                    + " → " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
                         return true;
                     }
                 }
@@ -404,21 +465,25 @@ public class MoySkladSyncService {
                 if (op.getAmount() != sum) {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
-                        notify.toBuxgalteriya("✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
-                                + docInfo(e) + "\n<b>" + TextUtil.esc(ownerName(op)) + "</b>: "
-                                + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
+                                    + docInfo(e) + "\n<b>" + TextUtil.esc(ownerName(op)) + "</b>: "
+                                    + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
                         changed = true;
                     }
                 }
-                if (op.getFromOwnerType() != wantOt
-                        || !java.util.Objects.equals(op.getFromOwnerId(), wantOid)) {
+                // Dublikat-otdel (bir otdel bir nechta kassada): egasi noaniq — ko'chirilmaydi
+                if ((op.getFromOwnerType() != wantOt
+                        || !java.util.Objects.equals(op.getFromOwnerId(), wantOid))
+                        && !ctx.dupGroups().contains(e.groupId())) {
                     String oldName = ownerName(op);
                     if (ledger.rerouteRasxod(op, wantOt, wantOid)) {
                         String newName = wantOt == OwnerType.BUXGALTERIYA ? "Buxgalteriya"
                                 : kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
-                        notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — chiqim ko'chirildi:\n"
-                                + docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
-                                + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — chiqim ko'chirildi:\n"
+                                    + docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
+                                    + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
                         log.info("Rasxod qayta yo'naltirildi: {} {} -> {}", msId, oldName, newName);
                         changed = true;
                     }
@@ -487,23 +552,27 @@ public class MoySkladSyncService {
                 if (op.getAmount() != sum) {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
-                        notify.toBuxgalteriya("✏️ MoySklad kirim summasi o'zgargan — avtomatik tuzatildi:\n"
-                                + docInfo(e) + "\n<b>" + TextUtil.esc(ownerName(op)) + "</b>: "
-                                + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum)
-                                + " so'm (" + mtLabel + ")", null);
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("✏️ MoySklad kirim summasi o'zgargan — avtomatik tuzatildi:\n"
+                                    + docInfo(e) + "\n<b>" + TextUtil.esc(ownerName(op)) + "</b>: "
+                                    + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum)
+                                    + " so'm (" + mtLabel + ")", null);
                         changed = true;
                     }
                 }
-                if (op.getToOwnerType() != wantOt
-                        || !java.util.Objects.equals(op.getToOwnerId(), wantOid)) {
+                // Dublikat-otdel (bir otdel bir nechta kassada): egasi noaniq — ko'chirilmaydi
+                if ((op.getToOwnerType() != wantOt
+                        || !java.util.Objects.equals(op.getToOwnerId(), wantOid))
+                        && !ctx.dupGroups().contains(e.groupId())) {
                     String oldName = ownerName(op);
                     if (ledger.reroutePrixod(op, wantOt, wantOid)) {
                         String newName = wantOt == OwnerType.BUXGALTERIYA ? "Buxgalteriya"
                                 : kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
-                        notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — kirim ko'chirildi:\n"
-                                + docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
-                                + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum)
-                                + " so'm (" + mtLabel + ")", null);
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — kirim ko'chirildi:\n"
+                                    + docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
+                                    + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum)
+                                    + " so'm (" + mtLabel + ")", null);
                         log.info("Kirim qayta yo'naltirildi: {} {} -> {}", msId, oldName, newName);
                         changed = true;
                     }
@@ -542,11 +611,13 @@ public class MoySkladSyncService {
         String kind = op.getType() == OpType.RASXOD ? "chiqim"
                 : op.getType() == OpType.VOZVRAT ? "vozvrat" : "kirim";
         String msId = op.getMoyskladId();
+        LocalDate opDate = op.getOpDate();
         if (!ledger.reverseSyncOp(op, reason)) return false;
-        notify.toBuxgalteriya("♻️ MoySklad STORNO — " + TextUtil.esc(reason) + ":\n"
-                + "<b>" + TextUtil.esc(owner) + "</b> — " + TextUtil.fmt(amount)
-                + " so'm (" + mtLabel(mt) + ", " + kind + ")"
-                + (info.isEmpty() ? "" : "\n" + info), null);
+        if (loudFix(opDate))
+            notify.toBuxgalteriya("♻️ MoySklad STORNO — " + TextUtil.esc(reason) + ":\n"
+                    + "<b>" + TextUtil.esc(owner) + "</b> — " + TextUtil.fmt(amount)
+                    + " so'm (" + mtLabel(mt) + ", " + kind + ")"
+                    + (info.isEmpty() ? "" : "\n" + info), null);
         log.info("STORNO {}: {} — {} so'm {}", msId, reason, amount, mt);
         return true;
     }

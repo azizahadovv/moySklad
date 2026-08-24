@@ -179,6 +179,13 @@ public class SheetsSyncService {
         return null;
     }
 
+    /** Otdel (group) boshqa FAOL kassaga biriktirilganmi (o'zidan tashqari). */
+    private boolean groupTaken(String groupId, Long exceptKassaId) {
+        return kassaRepo.findAll().stream().anyMatch(o -> o.isActive()
+                && groupId.equals(o.getMoyskladGroupId())
+                && (exceptKassaId == null || !o.getId().equals(exceptKassaId)));
+    }
+
     /** Kassalar varag'i: [ID, Nomi, Otdel ID, Otdel nomi, Faol]. Chala satrlar saqlanadi. */
     private void pullKassalar() {
         List<List<Object>> pending = new ArrayList<>();
@@ -206,8 +213,15 @@ public class SheetsSyncService {
                     }
                     if (kassaRepo.findAll().stream().anyMatch(k -> k.getName().equalsIgnoreCase(nomi)))
                         continue;   // allaqachon bor
+                    // Otdel boshqa faol kassada band bo'lsa — otdel'siz yaratiladi (dublikat taqiqlanadi)
+                    String newGroup = groupId;
+                    if (!newGroup.isBlank() && groupTaken(newGroup, null)) {
+                        log.warn("Sheets: «{}» uchun otdel {} boshqa faol kassada band — otdel'siz yaratildi",
+                                nomi, newGroup);
+                        newGroup = "";
+                    }
                     kassaRepo.save(Kassa.builder().name(nomi)
-                            .moyskladGroupId(groupId.isBlank() ? null : groupId)
+                            .moyskladGroupId(newGroup.isBlank() ? null : newGroup)
                             .active(faol).build());
                     log.info("Sheets: yangi kassa yaratildi — {}", nomi);
                     continue;
@@ -228,7 +242,12 @@ public class SheetsSyncService {
                     }
                     String cur = k.getMoyskladGroupId() == null ? "" : k.getMoyskladGroupId();
                     if (!gFinal.isBlank() && !gFinal.equals(kv[1]) && !gFinal.equals(cur)) {
-                        k.setMoyskladGroupId(gFinal); ch = true;
+                        // Bitta otdel FAQAT bitta faol kassada bo'lishi mumkin — aks holda
+                        // hujjatlar kassalar orasida ko'chib, xabar toshqini bo'ladi
+                        if (groupTaken(gFinal, k.getId()))
+                            log.warn("Sheets: kassa #{} uchun otdel {} boshqa faol kassada band — qo'llanmadi",
+                                    k.getId(), gFinal);
+                        else { k.setMoyskladGroupId(gFinal); ch = true; }
                     }
                     if (!faolN.equals(kv[2]) && faol != k.isActive()) { k.setActive(faol); ch = true; }
                     if (ch) {

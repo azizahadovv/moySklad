@@ -67,6 +67,8 @@ public class AdminHandler {
             case ADM_IB_NAQD -> { ibNaqd(s, text, chatId); return true; }
             case ADM_IB_KLIK -> { ibFinish(u, s, text, chatId); return true; }
             case ADM_IB_SANA -> { ibSana(u, s, text, chatId); return true; }
+            case ADM_KR_SUM -> { krSum(s, text, chatId); return true; }
+            case ADM_KR_IZOH -> { krFinish(u, s, text, chatId); return true; }
             case ADM_CK_SUM -> { ckSum(s, text, chatId); return true; }
             case ADM_CK_SANA -> { ckSana(u, s, text, chatId); return true; }
             case ADM_RXE_SUM -> { rxEditSum(u, s, text, chatId); return true; }
@@ -154,6 +156,8 @@ public class AdminHandler {
             case "gr" -> akGroup(s, arg, chatId, msgId);
             case "ib" -> ibOwner(s, arg, chatId, msgId);
             case "ibd" -> ibSanaBtn(u, s, arg, chatId, msgId);
+            case "kro" -> krOwner(s, arg, chatId, msgId);
+            case "krm" -> krMt(s, arg, chatId, msgId);
             case "ckq" -> ckStart(s, arg, chatId, msgId);
             case "ckd" -> ckSanaBtn(u, s, arg, chatId, msgId);
             case "ux" -> deactivate(u, Long.parseLong(arg), chatId, msgId);
@@ -170,12 +174,20 @@ public class AdminHandler {
 
     private static final List<String> PERIODS =
             List.of("📆 Bugun", "Kecha", "7 kun", "30 kun", "Shu oy", "🗓 Kalendar");
+    /** Kassa kartasi bo'limlari (reply-menyu). */
+    private static final List<String> KASSA_MENU =
+            List.of("💰 Бугунги тушум", "📆 Давр танлаш", "💵 Топширилмаган пул");
+    /** Основной отдел (Buxgalteriya) kartasi bo'limlari. */
+    private static final List<String> OSN_MENU =
+            List.of("💵 Пул қолдиғи", "🏦 Ҳисобот");
+    private static final String OSN_LABEL = "🏦 Отдел основной";
     private static final List<String> SOZLASH_MENU =
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
-                    "🧾 Расходлар", "📋 Аудит", "🏷 Тугма номлари",
-                    "🔑 MoySklad API", "👁 Ҳуқуқлар");
+                    "🛠 Корректировка", "🧾 Расходлар", "📋 Аудит",
+                    "🏷 Тугма номлари", "🔑 MoySklad API", "👁 Ҳуқуқлар");
     private static final List<String> STAT_MENU =
-            List.of("🧾 Карзлар реестр", "📜 История", "👥 Фойдаланувчилар умумий",
+            List.of("🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
+                    "👥 Фойдаланувчилар умумий",
                     "🏦 Бухгалтерия", "💼 Салдо", "📲 Кликлар", "📊 Свод");
     private static final List<String> SOZUSER_MENU =
             List.of("➕ Фойдаланувчи қўшиш", "🔄 Рол ўзгартириш", "🚫 Фойдаланувчини ўчириш");
@@ -250,6 +262,14 @@ public class AdminHandler {
         return out;
     }
 
+    /** 🏬 Отдел ro'yxati: Основной отдел (Buxgalteriya) + faol kassalar. */
+    private List<String> otdelLabels() {
+        List<String> out = new ArrayList<>();
+        out.add(OSN_LABEL);
+        out.addAll(kassaLabels());
+        return out;
+    }
+
     private Kassa kassaByLabel(String text) {
         String name = text.startsWith("🏪 ") ? text.substring(3).trim() : text.trim();
         return kassaRepo.findByActiveTrueOrderByIdAsc().stream()
@@ -273,7 +293,7 @@ public class AdminHandler {
             case "panel" -> {
                 switch (text) {
                     case "🏬 Отдел" -> navTo(u, s, "otdel", chatId,
-                            "🏬 <b>Отдел</b>\n\nKassani tanlang:", kassaLabels());
+                            "🏬 <b>Отдел</b>\n\nKassani tanlang:", otdelLabels());
                     case "⚙️ Настройка" -> {
                         if (u.getRole() != Role.SUPERADMIN) return false;
                         navTo(u, s, "sozlash", chatId, "⚙️ <b>Настройка</b>", SOZLASH_MENU);
@@ -285,11 +305,15 @@ public class AdminHandler {
                 }
             }
             case "otdel" -> {
+                if (text.equals(OSN_LABEL)) {
+                    navTo(u, s, "kassab", chatId,
+                            "🏦 <b>Отдел основной</b> (Буxгалтерия)\n\nBo'limni tanlang:", OSN_MENU);
+                    return true;
+                }
                 Kassa k = kassaByLabel(text);
                 if (k == null) return false;
                 navTo(u, s, "kassa:" + k.getId(), chatId,
-                        "🏪 <b>" + esc(k.getName()) + "</b>\n\nBo'limni tanlang:",
-                        List.of("💰 Бугунги тушум", "📆 Давр танлаш"));
+                        "🏪 <b>" + esc(k.getName()) + "</b>\n\nBo'limni tanlang:", KASSA_MENU);
             }
             case "kassa" -> {
                 long id = idOf(nav);
@@ -297,6 +321,17 @@ public class AdminHandler {
                     case "💰 Бугунги тушум" -> { syncService.syncIfStale(45); kassaTushum(s, id, chatId, 0); }
                     case "📆 Давр танлаш" -> navTo(u, s, "davr:" + id, chatId,
                             "📆 <b>Давр танлаш</b>\n\nDavrni tanlang:", PERIODS);
+                    case "💵 Топширилмаган пул" -> {
+                        syncService.syncIfStale(45);
+                        kassaTopshirilmagan(s, id, chatId, 0);
+                    }
+                    default -> { return false; }
+                }
+            }
+            case "kassab" -> {
+                switch (text) {
+                    case "💵 Пул қолдиғи" -> { syncService.syncIfStale(45); osnovnoyQoldiq(s, chatId); }
+                    case "🏦 Ҳисобот" -> buxReport(s, chatId);
                     default -> { return false; }
                 }
             }
@@ -314,6 +349,7 @@ public class AdminHandler {
                     case "👥 Фойдаланувчилар" -> navTo(u, s, "sozuser", chatId,
                             "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
                     case "💼 Бошланғич қолдиқ" -> { ibStart(s, chatId); s.data.put("nav", "sozlash"); }
+                    case "🛠 Корректировка" -> { krStart(s, chatId); s.data.put("nav", "sozlash"); }
                     case "🧾 Расходлар" -> rxList(s, chatId, 0);
                     case "📋 Аудит" -> auditMenu(s, chatId, 0);
                     case "🏷 Тугма номлари" -> labelList(s, chatId, 0);
@@ -565,13 +601,13 @@ public class AdminHandler {
             }
             case "otdel", "sozlash", "stat" -> navTo(u, s, "panel", chatId,
                     panelTitle(u), panelLabels(u));
-            case "kassa" -> navTo(u, s, "otdel", chatId,
-                    "🏬 <b>Отдел</b>\n\nKassani tanlang:", kassaLabels());
+            case "kassa", "kassab" -> navTo(u, s, "otdel", chatId,
+                    "🏬 <b>Отдел</b>\n\nKassani tanlang:", otdelLabels());
             case "davr" -> {
                 long id = idOf(nav);
                 navTo(u, s, "kassa:" + id, chatId,
                         "🏪 <b>" + esc(names.owner(OwnerType.KASSA, id)) + "</b>\n\nBo'limni tanlang:",
-                        List.of("💰 Бугунги тушум", "📆 Давр танлаш"));
+                        KASSA_MENU);
             }
             case "sozkassa", "sozuser" -> navTo(u, s, "sozlash", chatId, "⚙️ <b>Настройка</b>",
                     SOZLASH_MENU);
@@ -607,10 +643,10 @@ public class AdminHandler {
         String[] a = arg.split(":");
         // Buxgalter panel callbacklaridan faqat ko'rish + pul qabul qilishga ruxsatli
         if (u.getRole() == Role.BUXGALTER
-                && !java.util.Set.of("qb", "qm", "kt", "kr", "kpp", "sdk").contains(a[0])) return;
+                && !java.util.Set.of("qb", "qm", "kt", "kr", "kpp", "sdk", "kq", "bq").contains(a[0])) return;
         // Pul ko'rsatadigan sahifalar ochilganda avval MoySklad'dan yangilanadi
         switch (a[0]) {
-            case "kt", "kr", "kpp", "sdk" -> syncService.syncIfStale(45);
+            case "kt", "kr", "kpp", "sdk", "kq", "bq" -> syncService.syncIfStale(45);
             default -> { }
         }
         switch (a[0]) {
@@ -618,6 +654,8 @@ public class AdminHandler {
             case "otd"  -> otdel(chatId, msgId);
             case "k"    -> kassaMenu(Long.parseLong(a[1]), chatId, msgId);
             case "kt"   -> kassaTushum(s, Long.parseLong(a[1]), chatId, msgId);
+            case "kq"   -> kassaTopshirilmagan(s, Long.parseLong(a[1]), chatId, msgId);
+            case "bq"   -> osnovnoyQoldiq(s, chatId);
             case "kd"   -> kassaDavr(Long.parseLong(a[1]), chatId, msgId);
             case "kpp"  -> kassaPeriodStats(s, Long.parseLong(a[1]), a[2], chatId, msgId);
             case "set"  -> settingsMenu(chatId, msgId);
@@ -666,6 +704,7 @@ public class AdminHandler {
 
     private void otdel(long chatId, int msgId) {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn(OSN_LABEL, "a:p:bq")));
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
             rows.add(irow(btn("🏪 " + k.getName(), "a:p:k:" + k.getId())));
         rows.add(irow(bk("a:p:main")));
@@ -677,6 +716,7 @@ public class AdminHandler {
         show(chatId, msgId, "🏪 <b>" + esc(name) + "</b>\n\nBo'limni tanlang:", List.of(
                 irow(btn("💰 Бугунги тушум", "a:p:kt:" + id)),
                 irow(btn("💸 Расход", "a:p:kr:" + id)),
+                irow(btn("💵 Топширилмаган пул", "a:p:kq:" + id)),
                 irow(btn("📆 Давр танлаш", "a:p:kd:" + id)),
                 irow(bk("a:p:otd"))));
     }
@@ -697,6 +737,65 @@ public class AdminHandler {
                 irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id))));
         if (msgId > 0) sender.edit(chatId, msgId, text, qb);
         else sendContent(s, chatId, text, qb);
+    }
+
+    /**
+     * 💵 Топширилмаган пул — kassaning buxgalteriyaga hali topshirilmagan puli:
+     * joriy qo'ldagi qoldiq (naqd/click) + topshirilmagan yopilgan kunlar ro'yxati.
+     */
+    private void kassaTopshirilmagan(Session s, long id, long chatId, int msgId) {
+        Balance n = ledger.view(OwnerType.KASSA, id, MoneyType.NAQD);
+        Balance k = ledger.view(OwnerType.KASSA, id, MoneyType.KLIK);
+        List<DayRecord> days = submissionService.submittableDays(id);
+
+        StringBuilder sb = new StringBuilder("💵 <b>Топширилмаган пул</b> — "
+                + esc(names.owner(OwnerType.KASSA, id)) + "\n\n"
+                + "Қўлдаги қолдиқ (буxгалтерияга топширилмаган):\n"
+                + "💵 Нақд: <b>" + fmt(n.getAmount()) + "</b> so'm"
+                + (n.getReserved() > 0 ? " (банд: " + fmt(n.getReserved()) + ")" : "") + "\n"
+                + "📲 Click: <b>" + fmt(k.getAmount()) + "</b> so'm"
+                + (k.getReserved() > 0 ? " (банд: " + fmt(k.getReserved()) + ")" : "") + "\n"
+                + "➕ <b>Жами: " + fmt(n.getAmount() + k.getAmount()) + "</b> so'm\n");
+
+        if (days.isEmpty()) {
+            sb.append("\n✅ Топширилмаган ёпилган кун йўқ");
+        } else {
+            long dn = 0, dk = 0;
+            sb.append("\n⏳ Топширилмаган ёпилган кунлар: <b>").append(days.size()).append("</b> та\n");
+            for (DayRecord d : days) {
+                dn += d.remainNaqd(); dk += d.remainKlik();
+                sb.append("• ").append(d.getDate().format(DF))
+                  .append(" — Нақд ").append(fmt(d.remainNaqd()))
+                  .append(" · Click ").append(fmt(d.remainKlik())).append("\n");
+            }
+            sb.append("Кунлар жами: Нақд <b>").append(fmt(dn))
+              .append("</b> · Click <b>").append(fmt(dk)).append("</b> so'm");
+        }
+        InlineKeyboardMarkup qb = inline(List.of(
+                irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id))));
+        if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), qb);
+        else sendContent(s, chatId, sb.toString(), qb);
+    }
+
+    /** 🏦 Основной отдел (Buxgalteriya) pul qoldig'i + kassalarda turgan topshirilmagan pul. */
+    private void osnovnoyQoldiq(Session s, long chatId) {
+        Balance n = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD);
+        Balance k = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
+        long kn = 0, kk = 0;
+        for (Kassa kas : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            kn += ledger.view(OwnerType.KASSA, kas.getId(), MoneyType.NAQD).getAmount();
+            kk += ledger.view(OwnerType.KASSA, kas.getId(), MoneyType.KLIK).getAmount();
+        }
+        String text = "🏦 <b>Отдел основной</b> (Буxгалтерия) — пул қолдиғи\n\n"
+                + "💵 Нақд: <b>" + fmt(n.getAmount()) + "</b> so'm"
+                + (n.getReserved() > 0 ? " (банд: " + fmt(n.getReserved()) + ")" : "") + "\n"
+                + "📲 Click: <b>" + fmt(k.getAmount()) + "</b> so'm"
+                + (k.getReserved() > 0 ? " (банд: " + fmt(k.getReserved()) + ")" : "") + "\n"
+                + "➕ <b>Жами: " + fmt(n.getAmount() + k.getAmount()) + "</b> so'm\n\n"
+                + "🏪 Кассаларда (ҳали топширилмаган):\n"
+                + "💵 Нақд: <b>" + fmt(kn) + "</b> · 📲 Click: <b>" + fmt(kk) + "</b>\n"
+                + "➕ <b>Жами: " + fmt(kn + kk) + "</b> so'm";
+        sendContent(s, chatId, text, null);
     }
 
     /** Расход: bugungi chiqimlar ro'yxati. */
@@ -2144,6 +2243,97 @@ public class AdminHandler {
                 + "📅 Sana: <b>" + date.format(DF) + "</b>\n"
                 + "💵 Naqd: <b>" + fmt(naqd) + "</b> so'm\n"
                 + "📲 Click: <b>" + fmt(klik) + "</b> so'm");
+    }
+
+    /* ==================== 🛠 KORREKTIROVKA (har bir otdel uchun) ==================== */
+
+    /** Korrektirovka: otdel (Buxgalteriya yoki istalgan kassa) tanlanadi. Faqat SuperAdmin. */
+    private void krStart(Session s, long chatId) {
+        s.reset(); s.state = Session.State.ADM_KR_OWNER;
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("🏦 Буxгалтерия (Основной)", "a:kro:B")));
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn("🏪 " + k.getName(), "a:kro:K" + k.getId())));
+        rows.add(irow(btn("❌ Bekor", "cx")));
+        sender.send(chatId, "🛠 <b>Корректировка</b>\n\n"
+                + "Balans qo'lda tuzatiladigan otdelni tanlang:", inline(rows));
+    }
+
+    private void krOwner(Session s, String arg, long chatId, int msgId) {
+        if (s.state != Session.State.ADM_KR_OWNER) return;
+        if (arg.equals("B")) {
+            s.data.put("krT", OwnerType.BUXGALTERIYA);
+            s.data.put("krId", LedgerService.BUX_ID);
+        } else {
+            s.data.put("krT", OwnerType.KASSA);
+            s.data.put("krId", Long.parseLong(arg.substring(1)));
+        }
+        OwnerType ot = (OwnerType) s.data.get("krT");
+        long oid = s.getLong("krId");
+        long n = ledger.view(ot, oid, MoneyType.NAQD).getAmount();
+        long k = ledger.view(ot, oid, MoneyType.KLIK).getAmount();
+        s.state = Session.State.ADM_KR_MT;
+        sender.edit(chatId, msgId, "🛠 <b>" + esc(names.owner(ot, oid)) + "</b>\n\n"
+                        + "💵 Naqd: <b>" + fmt(n) + "</b> so'm\n"
+                        + "📲 Click: <b>" + fmt(k) + "</b> so'm\n\n"
+                        + "Qaysi pul turi tuzatiladi?",
+                inline(List.of(
+                        irow(btn("💵 Naqd", "a:krm:NAQD"), btn("📲 Click", "a:krm:KLIK")),
+                        irow(btn("❌ Bekor", "cx")))));
+    }
+
+    private void krMt(Session s, String arg, long chatId, int msgId) {
+        if (s.state != Session.State.ADM_KR_MT) return;
+        MoneyType mt = MoneyType.valueOf(arg);
+        s.data.put("krMt", mt);
+        long cur = ledger.view((OwnerType) s.data.get("krT"), s.getLong("krId"), mt).getAmount();
+        s.state = Session.State.ADM_KR_SUM;
+        sender.edit(chatId, msgId, "🛠 <b>" + esc(names.owner((OwnerType) s.data.get("krT"),
+                        s.getLong("krId"))) + "</b> — " + mtLabel(mt)
+                + "\nJoriy balans: <b>" + fmt(cur) + "</b> so'm\n\n"
+                + "Tuzatish summasini kiriting:\n"
+                + "• musbat — qo'shiladi (masalan <code>500000</code>)\n"
+                + "• manfiy — ayriladi (masalan <code>-500000</code>)");
+    }
+
+    private void krSum(Session s, String text, long chatId) {
+        String t = text.trim();
+        boolean neg = t.startsWith("-");
+        long v = parseAmount(t);
+        if (v <= 0) {
+            sender.send(chatId, "⚠️ Nolga teng bo'lmagan summa kiriting, masalan "
+                    + "<code>500000</code> yoki <code>-500000</code>");
+            return;
+        }
+        s.data.put("krSum", neg ? -v : v);
+        s.state = Session.State.ADM_KR_IZOH;
+        sender.send(chatId, "Summa: <b>" + fmt(neg ? -v : v) + "</b> so'm\n\n"
+                + "✍️ Sababini yozing (auditda saqlanadi):", cancelOnly());
+    }
+
+    private void krFinish(AppUser u, Session s, String text, long chatId) {
+        OwnerType ot = (OwnerType) s.data.get("krT");
+        long oid = s.getLong("krId");
+        MoneyType mt = (MoneyType) s.data.get("krMt");
+        long sum = s.getLong("krSum");
+        String reason = text.trim().equals("-") ? "Korrektirovka" : text.trim();
+        s.reset();
+
+        ledger.postAdjustment(OpType.KORREKTIROVKA, ot, oid, mt, sum, reason, u.getId());
+        long after = ledger.view(ot, oid, mt).getAmount();
+        String owner = names.owner(ot, oid);
+
+        sender.send(chatId, "✅ <b>Korrektirovka bajarildi</b> — " + esc(owner) + "\n"
+                + mtLabel(mt) + ": <b>" + (sum > 0 ? "+" : "") + fmt(sum) + "</b> so'm\n"
+                + "Yangi balans: <b>" + fmt(after) + "</b> so'm\n"
+                + "Sabab: " + esc(reason));
+
+        String info = "🛠 Korrektirovka — <b>" + esc(owner) + "</b>: <b>"
+                + (sum > 0 ? "+" : "") + fmt(sum) + "</b> so'm (" + mtLabel(mt) + ")\n"
+                + "Yangi balans: <b>" + fmt(after) + "</b> so'm\n"
+                + "Sabab: " + esc(reason) + "\nKim: " + esc(u.getFullName());
+        notify.toBuxgalteriya(info, null);
+        if (ot == OwnerType.KASSA) notify.toKassa(oid, info, null);
     }
 
     /* ==================== 👤 FOYDALANUVCHILAR ==================== */
