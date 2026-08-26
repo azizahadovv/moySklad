@@ -237,11 +237,15 @@ public class BalansService {
     /**
      * Osnovnoy otdel (Buxgalteriya)ning BUGUNGI harakati: {kirim, rasxod} —
      * MoySklad va bot orqali kiritilganlar birga (balansga ta'sir qilganlari).
+     * KORREKTIROVKA/BOSHLANGICH texnik tuzatishlar hisobga OLINMAYDI —
+     * bu qator faqat haqiqiy pul aylanmasini ko'rsatadi (MoySklad bilan mos).
      */
     private long[] osnovnoyToday(LocalDate today) {
         long in = 0, out = 0;
         for (Operation o : opRepo.byPeriod(today, today)) {
             if (o.getStatus() != OpStatus.TASDIQLANGAN || o.getMoneyType() == MoneyType.TERMINAL)
+                continue;
+            if (o.getType() == OpType.KORREKTIROVKA || o.getType() == OpType.BOSHLANGICH)
                 continue;
             if (o.getToOwnerType() == OwnerType.BUXGALTERIYA) in += o.getAmount();
             if (o.getFromOwnerType() == OwnerType.BUXGALTERIYA) out += o.getAmount();
