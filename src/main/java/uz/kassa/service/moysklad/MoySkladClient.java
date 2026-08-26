@@ -95,7 +95,7 @@ public class MoySkladClient {
     public record MsExpense(String id, String docNo, LocalDate date, long sumTiyin, String storeId,
                             String groupId, String expenseItem, String description,
                             String agent, String state, String currencyId, double rateValue,
-                            boolean applicable) {}
+                            boolean applicable, String accountId) {}
 
     /** Bitta hujjatning API'dagi holati (o'chirilganlikni aniqlash uchun). */
     public enum DocStatus { OK, UNAPPLIED, DELETED, UNKNOWN }
@@ -134,7 +134,7 @@ public class MoySkladClient {
                     "",
                     r.path("description").asText(""),
                     "", "", currencyOf(r), rateOf(r),
-                    r.path("applicable").asBoolean(true)));
+                    r.path("applicable").asBoolean(true), accountOf(r)));
         }
         return out;
     }
@@ -155,7 +155,7 @@ public class MoySkladClient {
                     agentOf(r),
                     r.path("state").path("name").asText(""),
                     currencyOf(r), rateOf(r),
-                    r.path("applicable").asBoolean(true)));
+                    r.path("applicable").asBoolean(true), accountOf(r)));
         }
         return out;
     }
@@ -176,7 +176,7 @@ public class MoySkladClient {
                     agentOf(r),
                     r.path("state").path("name").asText(""),
                     currencyOf(r), rateOf(r),
-                    r.path("applicable").asBoolean(true)));
+                    r.path("applicable").asBoolean(true), accountOf(r)));
         }
         return out;
     }
@@ -197,7 +197,7 @@ public class MoySkladClient {
                     agentOf(r),
                     r.path("state").path("name").asText(""),
                     currencyOf(r), rateOf(r),
-                    r.path("applicable").asBoolean(true)));
+                    r.path("applicable").asBoolean(true), accountOf(r)));
         }
         return out;
     }
@@ -297,7 +297,7 @@ public class MoySkladClient {
                     r.path("description").asText(""),
                     agentOf(r),
                     r.path("state").path("name").asText(""),
-                    currencyOf(r), rateOf(r), true));
+                    currencyOf(r), rateOf(r), true, accountOf(r)));
         }
         return out;
     }
@@ -387,6 +387,11 @@ public class MoySkladClient {
     /** Hujjat egasining otdeli (Владелец-отдел) UUID si. */
     private String groupOf(JsonNode r) {
         return lastSegment(r.path("group").path("meta").path("href").asText(""));
+    }
+
+    /** To'lov qabul qilingan tashkilot hisobi (organizationAccount) UUID si. */
+    private String accountOf(JsonNode r) {
+        return lastSegment(r.path("organizationAccount").path("meta").path("href").asText(""));
     }
 
     /** Hujjat valyutasi UUID si (rate.currency). */

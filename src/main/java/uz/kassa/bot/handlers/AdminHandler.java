@@ -131,7 +131,7 @@ public class AdminHandler {
         // Buxgalter: panel ko'rinishlari, pul qabul qilish, kassa nomidan rasxod,
         // kalendar va Баланс
         if (u.getRole() == Role.BUXGALTER
-                && !java.util.Set.of("p", "qbu", "qbd", "cal", "krx", "bl").contains(cmd))
+                && !java.util.Set.of("p", "qbu", "qbd", "cal", "krx", "bl", "rxm").contains(cmd))
             return false;
 
         // Ҳуқуқлар — faqat asosiy (yaratuvchi) SuperAdmin o'zgartira oladi
@@ -147,6 +147,7 @@ public class AdminHandler {
             case "qbu" -> qbUser(u, s, arg, chatId, msgId);
             case "qbd" -> qbDate(u, s, arg, chatId, msgId);
             case "cal" -> calCb(u, s, arg, chatId, msgId);
+            case "rxm" -> rasxodMenu(s, chatId, msgId);
             case "rxl" -> rxList(s, chatId, msgId);
             case "rxc" -> rxCard(Long.parseLong(arg), chatId, msgId);
             case "rxx" -> rxConfirm(Long.parseLong(arg), chatId, msgId);
@@ -232,8 +233,9 @@ public class AdminHandler {
     private List<String> panelLabels(AppUser u) {
         return u.getRole() == Role.SUPERADMIN
                 ? List.of("🏬 Отдел", "⚙️ Настройка", "📈 Статистика",
-                          "💰 Бугунги тушум", "🏪 Кассалар холати")
-                : List.of("🏬 Отдел", "📈 Статистика", "💰 Бугунги тушум", "🏪 Кассалар холати");
+                          "💰 Бугунги тушум", "🧾 Расходлар", "🏪 Кассалар холати")
+                : List.of("🏬 Отдел", "📈 Статистика", "💰 Бугунги тушум",
+                          "🧾 Расходлар", "🏪 Кассалар холати");
     }
 
     private List<String> statLabels(AppUser u) {
@@ -335,6 +337,7 @@ public class AdminHandler {
                     case "📈 Статистика" -> navTo(u, s, "stat", chatId,
                             "📈 <b>Статистика</b>", statLabels(u));
                     case "💰 Бугунги тушум" -> tushumAll(s, chatId);
+                    case "🧾 Расходлар" -> rasxodMenu(s, chatId, 0);
                     case "🏪 Кассалар холати" -> bux.overview(chatId);
                     default -> { return false; }
                 }
@@ -1271,6 +1274,113 @@ public class AdminHandler {
         sendContent(s, chatId, sb.toString(), null);
     }
 
+    /** 🧾 Бугунги расход — kassalar bo'yicha (💰 Бугунги тушумнинг rasxod ko'zgusi). */
+    /** 🧾 Расходлар — avval otdel, keyin sana tanlanadi. */
+    private void rasxodMenu(Session s, long chatId, int msgId) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("➕ Барчаси", "a:cal:o:rxa")));
+        rows.add(irow(btn("🏦 Отдел основной", "a:cal:o:rxo")));
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
+            rows.add(irow(btn("🏪 " + k.getName(), "a:cal:o:rxk" + k.getId())));
+        }
+        String text = "🧾 <b>Расходлар</b>\n\nOtdelni tanlang:";
+        if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
+        else sendContent(s, chatId, text, inline(rows));
+    }
+
+    /** rxa — barchasi, rxo — Отдел основной, rxk<id> — bitta kassa. */
+    private void rasxodByCtx(Session s, long chatId, int msgId, String ctx, java.time.LocalDate date) {
+        if (ctx.equals("rxa")) { rasxodAll(s, chatId, msgId, date); return; }
+        if (ctx.equals("rxo")) {
+            rasxodOwner(s, chatId, msgId, OwnerType.BUXGALTERIYA, LedgerService.BUX_ID,
+                    "🏦 Отдел основной", date, ctx);
+            return;
+        }
+        if (ctx.startsWith("rxk")) {
+            long kid = Long.parseLong(ctx.substring(3));
+            String name = kassaRepo.findById(kid).map(Kassa::getName).orElse("Kassa #" + kid);
+            rasxodOwner(s, chatId, msgId, OwnerType.KASSA, kid, "🏪 " + name, date, ctx);
+        }
+    }
+
+    /** Bitta otdel/kassaning tanlangan kundagi rasxodi — har bir yozuv kimga/necha ekani bilan. */
+    private void rasxodOwner(Session s, long chatId, int msgId, OwnerType ot, Long oid, String label,
+                             java.time.LocalDate date, String calCtx) {
+        syncService.syncIfStale(45);
+        long naqd = 0, klik = 0;
+        StringBuilder lines = new StringBuilder();
+        for (Operation o : opRepo.byPeriod(date, date)) {
+            if (o.getStatus() != OpStatus.TASDIQLANGAN || o.getType() != OpType.RASXOD) continue;
+            if (o.getFromOwnerType() != ot || !oid.equals(o.getFromOwnerId())) continue;
+            if (o.getMoneyType() == MoneyType.KLIK) klik += o.getAmount(); else naqd += o.getAmount();
+            lines.append("• ").append(fmt(o.getAmount())).append(" so'm (")
+                 .append(o.getMoneyType() == MoneyType.KLIK ? "📲" : "💵").append(")")
+                 .append(o.getComment() == null || o.getComment().isBlank() ? "" : " — " + esc(o.getComment()))
+                 .append("\n");
+        }
+        StringBuilder sb = new StringBuilder("🧾 <b>" + label + "</b>\n📅 " + date.format(DF) + "\n\n");
+        sb.append(lines.length() == 0 ? "Rasxod yo'q.\n" : lines);
+        sb.append("\n➕ <b>Жами: ").append(fmt(naqd + klik)).append("</b> so'm")
+          .append(" (💵 ").append(fmt(naqd)).append(" · 📲 ").append(fmt(klik)).append(")");
+
+        InlineKeyboardMarkup kb = inline(List.of(
+                irow(btn("📆 Кун танлаш", "a:cal:o:" + calCtx)),
+                irow(bk("a:rxm"))));
+        if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), kb);
+        else sendContent(s, chatId, sb.toString(), kb);
+    }
+
+    /** 🧾 Расход — tanlangan kun, otdellar kesimida, har bir chiqim kimga/necha ekani bilan. */
+    private void rasxodAll(Session s, long chatId, int msgId, java.time.LocalDate date) {
+        syncService.syncIfStale(45);
+        List<Operation> ops = opRepo.byPeriod(date, date).stream()
+                .filter(o -> o.getStatus() == OpStatus.TASDIQLANGAN && o.getType() == OpType.RASXOD)
+                .toList();
+
+        StringBuilder sb = new StringBuilder("🧾 <b>РАСХОД</b>\n📅 " + date.format(DF) + "\n");
+        long totNaqd = 0, totKlik = 0;
+
+        long osnNaqd = 0;
+        StringBuilder osnLines = new StringBuilder();
+        for (Operation o : ops) {
+            if (o.getFromOwnerType() != OwnerType.BUXGALTERIYA) continue;
+            osnNaqd += o.getAmount();
+            osnLines.append("  • ").append(fmt(o.getAmount())).append(" so'm")
+                    .append(o.getComment() == null || o.getComment().isBlank() ? "" : " — " + esc(o.getComment()))
+                    .append("\n");
+        }
+        totNaqd += osnNaqd;
+        sb.append("\n🏦 <b>Отдел основной</b> — <b>").append(fmt(osnNaqd)).append("</b> so'm\n").append(osnLines);
+
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
+            long n = 0, kl = 0;
+            StringBuilder lines = new StringBuilder();
+            for (Operation o : ops) {
+                if (o.getFromOwnerType() != OwnerType.KASSA || !k.getId().equals(o.getFromOwnerId())) continue;
+                if (o.getMoneyType() == MoneyType.KLIK) kl += o.getAmount(); else n += o.getAmount();
+                lines.append("  • ").append(fmt(o.getAmount())).append(" so'm (")
+                     .append(o.getMoneyType() == MoneyType.KLIK ? "📲" : "💵").append(")")
+                     .append(o.getComment() == null || o.getComment().isBlank() ? "" : " — " + esc(o.getComment()))
+                     .append("\n");
+            }
+            totNaqd += n; totKlik += kl;
+            sb.append("\n<b>").append(esc(k.getName())).append("</b> — <b>").append(fmt(n + kl)).append("</b> so'm\n")
+              .append(lines);
+        }
+
+        sb.append("\n➕ <b>ЖАМИ: ").append(fmt(totNaqd + totKlik)).append("</b> so'm")
+          .append("\n  💵 Нақд: ").append(fmt(totNaqd))
+          .append(" · 📲 Click: ").append(fmt(totKlik));
+
+        InlineKeyboardMarkup kb = inline(List.of(
+                irow(btn("📆 Кун танлаш", "a:cal:o:rxa")),
+                irow(bk("a:rxm"))));
+        if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), kb);
+        else sendContent(s, chatId, sb.toString(), kb);
+    }
+
     /* ==================================================================
      * 🗓 KALENDAR — davr (bir yoki bir necha kun) tanlash.
      * ctx: "k<id>" — kassa davr statistikasi, "x" — umumiy Excel,
@@ -1288,10 +1398,11 @@ public class AdminHandler {
     }
 
     /** Bir-sanali kontekstlar: q — pul qabul, ib — boshlang'ich qoldiq, ck — Click qoldiq,
-     *  kr — korrektirovka sanasi, krx — kassa nomidan rasxod sanasi. */
+     *  kr — korrektirovka sanasi, krx — kassa nomidan rasxod sanasi,
+     *  rxa/rxo/rxk<id> — Расходлар bo'limida kun tanlash (barchasi/osnovnoy/kassa). */
     private boolean calSingle(String ctx) {
         return ctx.equals("q") || ctx.equals("ib") || ctx.equals("ck")
-                || ctx.equals("kr") || ctx.equals("krx");
+                || ctx.equals("kr") || ctx.equals("krx") || ctx.startsWith("rx");
     }
 
     private void calShow(Session s, long chatId, int msgId, String ctx, java.time.YearMonth ym) {
@@ -1372,6 +1483,7 @@ public class AdminHandler {
                     }
                     s.data.remove("calFrom");
                     s.data.remove("calCtx");
+                    if (ctx.startsWith("rx")) { rasxodByCtx(s, chatId, msgId, ctx, d); return; }
                     switch (ctx) {
                         case "q" -> qbCommit(u, s, d, chatId, msgId);
                         case "ib" -> {

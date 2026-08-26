@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uz.kassa.domain.*;
+import uz.kassa.repo.ClickAccountRepo;
 import uz.kassa.repo.DayRepo;
 import uz.kassa.repo.KassaRepo;
 import uz.kassa.repo.OperationRepo;
@@ -41,6 +42,7 @@ public class BalansService {
     private final KassaRepo kassaRepo;
     private final DayRepo dayRepo;
     private final OperationRepo opRepo;
+    private final ClickAccountRepo clickRepo;
     private final uz.kassa.config.AppProps props;
 
     /* ==================== Buxgalter/SuperAdmin: barcha kassalar ==================== */
@@ -118,9 +120,22 @@ public class BalansService {
             }
             sb.append("💼 Klik hisobi (jami yig'ilgan): <b>").append(fmt(bal)).append("</b> so'm\n");
         }
+
+        long sumClick = 0;
+        List<ClickAccount> clicks = clickRepo.findByActiveTrueOrderByIdAsc();
+        if (!clicks.isEmpty()) {
+            sb.append("\n📲 <b>Alohida klik hisoblari</b>\n");
+            for (ClickAccount c : clicks) {
+                long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                sumClick += bal;
+                sb.append("• ").append(esc(c.getName())).append(": <b>").append(fmt(bal)).append("</b> so'm\n");
+            }
+        }
+
         sb.append("\n➕ <b>УМУМИЙ КЛИК</b> (kassalar hisoblari")
-          .append(bk.getAmount() != 0 ? " + осн." : "").append("): <b>")
-          .append(fmt(sumBal + bk.getAmount())).append("</b> so'm");
+          .append(bk.getAmount() != 0 ? " + осн." : "").append(clicks.isEmpty() ? "" : " + alohida hisoblar")
+          .append("): <b>")
+          .append(fmt(sumBal + bk.getAmount() + sumClick)).append("</b> so'm");
         return sb.toString();
     }
 
@@ -152,8 +167,16 @@ public class BalansService {
               .append("</b> = <b>").append(fmt(dn + bal)).append("</b> so'm\n");
         }
 
+        long sumClick = 0;
+        List<ClickAccount> clicks = clickRepo.findByActiveTrueOrderByIdAsc();
+        for (ClickAccount c : clicks) {
+            long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+            sumClick += bal;
+            sb.append("📲 <b>").append(esc(c.getName())).append("</b>: <b>").append(fmt(bal)).append("</b> so'm\n");
+        }
+
         long totalNaqd = bn.getAmount() + sumNaqd;
-        long totalKlik = bk.getAmount() + sumKlikBal;
+        long totalKlik = bk.getAmount() + sumKlikBal + sumClick;
         sb.append("\n➕ <b>УМУМИЙ</b>\n")
           .append("💵 Нақд: <b>").append(fmt(totalNaqd)).append("</b> so'm\n")
           .append("📲 Клик: <b>").append(fmt(totalKlik)).append("</b> so'm\n")

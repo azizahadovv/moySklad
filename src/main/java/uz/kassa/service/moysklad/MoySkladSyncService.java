@@ -7,6 +7,7 @@ import uz.kassa.bot.TextUtil;
 import uz.kassa.config.AppProps;
 import uz.kassa.domain.*;
 import uz.kassa.repo.CategoryRepo;
+import uz.kassa.repo.ClickAccountRepo;
 import uz.kassa.repo.KassaRepo;
 import uz.kassa.repo.OperationRepo;
 import uz.kassa.service.LedgerService;
@@ -56,6 +57,7 @@ public class MoySkladSyncService {
     private final LedgerService ledger;
     private final KassaRepo kassaRepo;
     private final CategoryRepo categoryRepo;
+    private final ClickAccountRepo clickRepo;
     private final OperationRepo opRepo;
     private final SettingsService settings;
     private final NotificationService notify;
@@ -100,7 +102,7 @@ public class MoySkladSyncService {
     /** Bir siklda qayta ishlatiladigan xaritalar. */
     private record Ctx(Map<String, Long> storeToKassa, Map<String, Long> groupToKassa,
                        Map<String, String> groupNames, Map<String, Long> catByName,
-                       java.util.Set<String> dupGroups) {}
+                       java.util.Set<String> dupGroups, Map<String, Long> accountToClick) {}
 
     /** Dublikat-otdel ogohlantirishi oxirgi yuborilgan vaqt (6 soatda 1 marta). */
     private volatile long lastDupWarnAt = 0;
@@ -156,7 +158,14 @@ public class MoySkladSyncService {
         for (Category c : categoryRepo.findByActiveTrueOrderByIdAsc())
             catByName.put(c.getName().trim().toLowerCase(), c.getId());
 
-        return new Ctx(storeToKassa, groupToKassa, groupNames, catByName, dupGroups);
+        // MoySklad "organizationAccount" -> Click hisobi: shu hisobga tushgan Клик
+        // to'lovlari otdel/kassa o'rniga aynan shu hisobga alohida yoziladi.
+        Map<String, Long> accountToClick = new HashMap<>();
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc())
+            if (c.getMoyskladAccountId() != null && !c.getMoyskladAccountId().isBlank())
+                accountToClick.put(c.getMoyskladAccountId(), c.getId());
+
+        return new Ctx(storeToKassa, groupToKassa, groupNames, catByName, dupGroups, accountToClick);
     }
 
     /**
@@ -584,6 +593,13 @@ public class MoySkladSyncService {
         Long kassaId = ctx.groupToKassa().get(e.groupId());
         OwnerType wantOt = kassaId != null ? OwnerType.KASSA : OwnerType.BUXGALTERIYA;
         Long wantOid = kassaId != null ? kassaId : LedgerService.BUX_ID;
+        // Клик to'lovi — MoySklad hisobi (organizationAccount) bo'yicha nomlangan Click
+        // hisobiga bog'langan bo'lsa, otdel/kassa o'rniga aynan shu hisobga yoziladi
+        // (bitta otdelda bir nechta klik hisobi bo'lishi mumkin — aralashib ketmasin).
+        if (mt == MoneyType.KLIK) {
+            Long clickId = ctx.accountToClick().get(e.accountId());
+            if (clickId != null) { wantOt = OwnerType.CLICK; wantOid = clickId; }
+        }
         String fx = fxNote(e);
         String comment = joinNote(e.agent(), e.description());
         if (!fx.isEmpty()) comment = comment.isEmpty() ? fx : fx + " · " + comment;
@@ -628,8 +644,7 @@ public class MoySkladSyncService {
                         && !ctx.dupGroups().contains(e.groupId())) {
                     String oldName = ownerName(op);
                     if (ledger.reroutePrixod(op, wantOt, wantOid)) {
-                        String newName = wantOt == OwnerType.BUXGALTERIYA ? "Отдел Основной"
-                                : kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
+                        String newName = ownerDisplayName(wantOt, wantOid);
                         if (loudFix(e.date()))
                             notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — kirim ko'chirildi:\n"
                                     + docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
@@ -646,12 +661,16 @@ public class MoySkladSyncService {
         boolean posted = ledger.postPrixodSync(wantOt, wantOid, mt, sum, e.date(), msId, comment);
         if (posted && shouldNotify(e)) {
             if (wantOt == OwnerType.KASSA) {
-                String kassaName = kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
+                String kassaName = ownerDisplayName(wantOt, wantOid);
                 String text = "💰 MoySklad kirim: <b>" + TextUtil.esc(kassaName)
                         + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (" + mtLabel + ")"
                         + "\n" + docInfo(e);
                 notify.toKassa(wantOid, text, null);
                 notify.toBuxgalteriya(text, null);
+            } else if (wantOt == OwnerType.CLICK) {
+                notify.toBuxgalteriya("💰 MoySklad kirim: <b>" + TextUtil.esc(ownerDisplayName(wantOt, wantOid))
+                        + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (" + mtLabel + ")"
+                        + "\n" + docInfo(e), null);
             } else {
                 String otdel = ctx.groupNames().getOrDefault(e.groupId(), "");
                 notify.toBuxgalteriya("💰 MoySklad kirim: <b>Отдел Основной</b>"
@@ -688,7 +707,14 @@ public class MoySkladSyncService {
     private String ownerName(Operation op) {
         OwnerType ot = op.getType() == OpType.PRIXOD ? op.getToOwnerType() : op.getFromOwnerType();
         Long oid = op.getType() == OpType.PRIXOD ? op.getToOwnerId() : op.getFromOwnerId();
+        return ownerDisplayName(ot, oid);
+    }
+
+    /** Egasi nomi: Отдел Основной / kassa nomi / Click hisobi nomi. */
+    private String ownerDisplayName(OwnerType ot, Long oid) {
         if (ot == OwnerType.BUXGALTERIYA) return "Отдел Основной";
+        if (ot == OwnerType.CLICK)
+            return clickRepo.findById(oid).map(ClickAccount::getName).orElse("Klik #" + oid);
         return kassaRepo.findById(oid).map(Kassa::getName).orElse("Kassa #" + oid);
     }
 

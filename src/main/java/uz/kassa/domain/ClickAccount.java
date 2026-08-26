@@ -14,6 +14,10 @@ public class ClickAccount {
     @Column(nullable = false)
     private String name;
 
+    /** MoySklad "organizationAccount" UUID — shu hisobga tushgan Klik to'lovlari avtomatik biriktiriladi. */
+    @Column(name = "moysklad_account_id")
+    private String moyskladAccountId;
+
     @Builder.Default
     private boolean active = true;
 
