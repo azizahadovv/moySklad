@@ -29,7 +29,13 @@ public class LabelService {
             // Статистика bo'limi
             "🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
             "👥 Фойдаланувчилар умумий", "🏦 Бухгалтерия",
-            "💼 Салдо", "📲 Кликлар", "📊 Свод");
+            "💼 Салдо", "📲 Кликлар", "📊 Свод",
+            // Kassir: 📊 КАССАМ paneli ichidagi bo'limlar
+            "💸 Расход", "🧾 Қарзларим", "📊 Excel",
+            // Kassa kartasi (buxgalter/superadmin — 🏬 Отдел ichida)
+            "💵 Топширилмаган пул",
+            // Отдел основной kartasi (buxgalteriya)
+            "💵 Пул қолдиғи", "🏦 Ҳисобот");
 
     /** O'chirib bo'lmaydigan bo'lim — sozlamalarga kirish yo'li yopilib qolmasin. */
     public static final String PROTECTED_LABEL = "🏪 KASSA";

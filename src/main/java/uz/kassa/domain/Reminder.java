@@ -63,6 +63,26 @@ public class Reminder {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
+    /** Amalda hisoblangan jami to'langan summa (avtomatik va qo'lda ichidan kattasi). */
+    @Builder.Default
+    private long repaid = 0;
+
+    /** Tasdiqlangan qo'lda to'lovlar yig'indisi. */
+    @Builder.Default
+    @Column(name = "repaid_manual", nullable = false)
+    private long repaidManual = 0;
+
+    /** Tasdiq kutayotgan qo'lda to'lov summasi (null — kutayotgani yo'q). */
+    @Column(name = "pending_manual_amount")
+    private Long pendingManualAmount;
+
+    /** Tasdiq kutayotgan to'lovni kiritgan foydalanuvchi. */
+    @Column(name = "pending_manual_by")
+    private Long pendingManualBy;
+
+    /** Qolgan qarz (manfiy bo'lmaydi). */
+    public long remain() { return Math.max(0, amount - repaid); }
+
     public java.util.Set<Integer> remindDaySet() {
         java.util.Set<Integer> out = new java.util.TreeSet<>();
         for (String p : remindDays.split(","))

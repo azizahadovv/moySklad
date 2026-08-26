@@ -226,7 +226,8 @@ public class MoySkladClient {
 
     /**
      * Kontragent balansi (Взаиморасчёты), SO'MDA. null — olinmadi (ruxsat/tarmoq).
-     * Musbat — kontragent bizga qarzdor, manfiy — biz unga qarzdormiz.
+     * Ushbu MoySklad hisobida: manfiy — kontragent bizga qarzdor, musbat — biz unga
+     * qarzdormiz (MoySklad'ning o'z "Баланс" ustuni bilan bir xil ishora — tekshirilgan).
      */
     public Long fetchAgentBalanceSom(String agentId) {
         try {

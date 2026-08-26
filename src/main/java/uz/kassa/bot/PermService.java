@@ -70,14 +70,33 @@ public class PermService {
         return m == null ? null : m.get(canonical);
     }
 
-    /** Foydalanuvchi shu bo'limni ko'rishi/ishlatishi mumkinmi. */
+    /** SuperAdmin shu user uchun kamida bitta bo'lim huquqini aniq belgilaganmi. */
+    public boolean userConfigured(long userId) { return userOv.containsKey(userId); }
+
+    /** SuperAdmin shu kassa uchun kamida bitta bo'lim huquqini aniq belgilaganmi. */
+    public boolean kassaConfigured(long kassaId) { return kassaOv.containsKey(kassaId); }
+
+    /**
+     * Foydalanuvchi shu bo'limni ko'rishi/ishlatishi mumkinmi.
+     * Agar SuperAdmin shu user (yoki uning kassasi) uchun huquqlar bo'limini umuman
+     * sozlagan bo'lsa — shu darajada RO'YXATDAN TASHQARI (belgilanmagan) bo'limlar
+     * endi "meros" emas, balki TAQIQLANGAN hisoblanadi: faqat aniq ✅ berilganlar ko'rinadi.
+     * Hech narsa sozlanmagan (yangi/nazoratsiz) user/kassa uchun — eski xatti-harakat:
+     * umumiy holat (global yoqilgan/o'chirilgan) bo'yicha ochiq.
+     */
     public boolean visible(AppUser u, String canonical) {
         if (u.getRole() == Role.SUPERADMIN) return true;
-        Boolean o = userOverride(u.getId(), canonical);
-        if (o != null) return o;
+        Map<String, Boolean> um = userOv.get(u.getId());
+        if (um != null) {
+            Boolean o = um.get(canonical);
+            return o != null && o;
+        }
         if (u.getKassaId() != null) {
-            o = kassaOverride(u.getKassaId(), canonical);
-            if (o != null) return o;
+            Map<String, Boolean> km = kassaOv.get(u.getKassaId());
+            if (km != null) {
+                Boolean o = km.get(canonical);
+                return o != null && o;
+            }
         }
         return !labelSvc.isHidden(canonical);
     }

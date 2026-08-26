@@ -86,11 +86,20 @@ public final class Keyboards {
 
     /** Panel darajasi uchun menu: 2 tadan qator + «⬅️ Orqaga». */
     public static ReplyKeyboardMarkup levelMenu(List<String> labels) {
+        return levelMenu(labels, c -> true);
+    }
+
+    /** Panel darajasi uchun menu — PermService prediati bilan filtrlanadi. */
+    public static ReplyKeyboardMarkup levelMenu(List<String> labels,
+                                                 java.util.function.Predicate<String> visible) {
+        List<String> shown = labels.stream()
+                .filter(l -> !RENAMABLE_CHECK.test(l) || visible.test(l))
+                .map(Keyboards::disp).toList();
         List<KeyboardRow> rows = new ArrayList<>();
-        for (int i = 0; i < labels.size(); i += 2) {
+        for (int i = 0; i < shown.size(); i += 2) {
             KeyboardRow r = new KeyboardRow();
-            r.add(new KeyboardButton(labels.get(i)));
-            if (i + 1 < labels.size()) r.add(new KeyboardButton(labels.get(i + 1)));
+            r.add(new KeyboardButton(shown.get(i)));
+            if (i + 1 < shown.size()) r.add(new KeyboardButton(shown.get(i + 1)));
             rows.add(r);
         }
         rows.add(row("⬅️ Orqaga"));
@@ -99,6 +108,9 @@ public final class Keyboards {
         m.setResizeKeyboard(true);
         return m;
     }
+
+    private static final java.util.function.Predicate<String> RENAMABLE_CHECK =
+            uz.kassa.bot.LabelService.RENAMABLE::contains;
 
     public static ReplyKeyboardMarkup buxMenu(boolean superadmin) {
         // Bosh menyu — faqat bitta panel; qolgan hammasi 🏪 KASSA ichida

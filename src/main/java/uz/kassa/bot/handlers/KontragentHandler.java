@@ -66,6 +66,7 @@ public class KontragentHandler {
             case KG_MN_INFO -> { mnInfo(s, text, chatId); return true; }
             case KG_SUM -> { wzSum(s, text, chatId); return true; }
             case KG_IZOH -> { wzIzoh(u, s, text, chatId); return true; }
+            case KG_PAY_AMOUNT -> { payAmount(u, s, text, chatId); return true; }
             case KG_AU_TGID -> { auTgId(u, s, text, chatId); return true; }
             case KG_AU_NAME -> { auName(u, s, text, chatId); return true; }
             case KG_RN_NAME -> { rnName(u, s, text, chatId); return true; }
@@ -127,6 +128,9 @@ public class KontragentHandler {
             case "v" -> card(u, Long.parseLong(arg), chatId, msgId);
             case "f" -> closeRem(u, Long.parseLong(arg), true, chatId, msgId);
             case "x" -> closeRem(u, Long.parseLong(arg), false, chatId, msgId);
+            case "pw" -> payStart(s, Long.parseLong(arg), chatId, msgId);
+            case "pa" -> payDecide(u, arg, true, chatId, msgId);
+            case "pr" -> payDecide(u, arg, false, chatId, msgId);
             case "st" -> staffMenu(u, chatId, msgId);
             case "sa" -> staffAddStart(u, s, chatId, msgId);
             case "sg" -> staffGuest(s, arg, chatId, msgId);
@@ -187,23 +191,28 @@ public class KontragentHandler {
 
         Long bal = msClient.fetchAgentBalanceSom(id);
         if (bal == null) sb.append("\n💼 MoySklad balansi: <i>olinmadi</i>\n");
-        else if (bal > 0) sb.append("\n💼 MoySklad balansi: <b>").append(fmt(bal))
-                .append("</b> so'm — 🟢 kontragent BIZGA qarzdor\n");
         else if (bal < 0) sb.append("\n💼 MoySklad balansi: <b>").append(fmt(-bal))
+                .append("</b> so'm — 🟢 kontragent BIZGA qarzdor\n");
+        else if (bal > 0) sb.append("\n💼 MoySklad balansi: <b>").append(fmt(bal))
                 .append("</b> so'm — 🔴 biz kontragentga QARZDORMIZ\n");
         else sb.append("\n💼 MoySklad balansi: <b>0</b> so'm\n");
 
         List<Reminder> act = reminders.activeForAgent(id);
         if (!act.isEmpty()) {
             sb.append("\n🔔 <b>Faol eslatmalar (").append(act.size()).append(" ta):</b>\n");
-            for (Reminder r : act)
+            for (Reminder r : act) {
                 sb.append("• ").append(fmt(r.getAmount())).append(" so'm — ")
-                  .append(r.getDueDate().format(DF)).append("\n");
+                  .append(r.getDueDate().format(DF));
+                if (r.getRepaid() > 0)
+                    sb.append(" (to'landi ").append(fmt(r.getRepaid()))
+                      .append(" · qoldiq ").append(fmt(r.remain())).append(")");
+                sb.append("\n");
+            }
         }
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("➕ Qarz eslatmasi qo'shish", "kg:n:" + id)));
         for (Reminder r : act)
-            rows.add(irow(btn("📄 #" + r.getId() + " · " + fmt(r.getAmount()) + " · "
+            rows.add(irow(btn("📄 #" + r.getId() + " · " + fmt(r.remain()) + " · "
                     + r.getDueDate().format(DF), "kg:v:" + r.getId())));
         rows.add(irow(bk("kg:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
@@ -461,7 +470,7 @@ public class KontragentHandler {
         for (Reminder r : list) {
             if (shown++ >= 15) break;
             rows.add(irow(btn("📄 #" + r.getId() + " · " + r.getAgentName() + " · "
-                    + fmt(r.getAmount()) + " · " + r.getDueDate().format(DF), "kg:v:" + r.getId())));
+                    + fmt(r.remain()) + " · " + r.getDueDate().format(DF), "kg:v:" + r.getId())));
         }
         if (!list.isEmpty()) sb.append("\nBatafsil ko'rish uchun tanlang:");
         rows.add(irow(bk("kg:m")));
@@ -477,6 +486,10 @@ public class KontragentHandler {
             return;
         }
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        if (r.getPendingManualAmount() != null)
+            rows.add(irow(btn("⏳ Tasdiq kutilmoqda: " + fmt(r.getPendingManualAmount()) + " so'm", "kg:m")));
+        else if (r.remain() > 0)
+            rows.add(irow(btn("💵 Qisman to'lov kiritish", "kg:pw:" + id)));
         if (r.getCreatorUserId().equals(u.getId()) || u.getRole() == Role.SUPERADMIN)
             rows.add(irow(btn("✅ Bajarildi (yopish)", "kg:f:" + id),
                           btn("🚫 Bekor qilish", "kg:x:" + id)));
@@ -495,6 +508,48 @@ public class KontragentHandler {
         for (Long uid : r.recipientSet())
             if (!uid.equals(u.getId()))
                 userRepo.findById(uid).ifPresent(x -> notify.toUser(x.getTelegramId(), text));
+    }
+
+    /* ==================== 💵 QISMAN TO'LOV ==================== */
+
+    private void payStart(Session s, long id, long chatId, int msgId) {
+        Reminder r = reminders.find(id).orElse(null);
+        if (r == null) { sender.edit(chatId, msgId, "⚠️ Eslatma topilmadi yoki allaqachon yopilgan."); return; }
+        s.state = Session.State.KG_PAY_AMOUNT;
+        s.data.put("kgPayId", id);
+        sender.edit(chatId, msgId, "💵 <b>Qisman to'lov</b>\n\nQoldiq: <b>" + fmt(r.remain())
+                + "</b> so'm\n\nTo'langan summani kiriting:", inline(List.of(irow(bk("kg:v:" + id)))));
+    }
+
+    private void payAmount(AppUser u, Session s, String text, long chatId) {
+        long id = s.getLong("kgPayId");
+        s.reset();
+        long sum = parseAmount(text);
+        Reminder r = reminders.requestManualPayment(id, u, sum);
+        sender.send(chatId, "📨 So'rov yuborildi: <b>" + fmt(sum) + "</b> so'm to'lov — "
+                + "buxgalter/SuperAdmin tasdig'i kutilmoqda.");
+        String note = "❓ <b>" + esc(u.getFullName()) + "</b> qarz eslatmasiga to'lov kiritishni so'rayapti:\n\n"
+                + reminders.render(r, false) + "\n\n💵 To'lov: <b>" + fmt(sum) + "</b> so'm";
+        InlineKeyboardMarkup kb = inline(List.of(irow(
+                btn("✅ Tasdiqlash", "kg:pa:" + id + "." + u.getId()),
+                btn("❌ Rad etish", "kg:pr:" + id + "." + u.getId()))));
+        notify.toRole(Role.BUXGALTER, note, kb);
+        notify.toRole(Role.SUPERADMIN, note, kb);
+    }
+
+    /** arg: "<reminderId>.<requesterId>" */
+    private void payDecide(AppUser admin, String arg, boolean approve, long chatId, int msgId) {
+        long id = Long.parseLong(arg.split("\\.")[0]);
+        long reqId = Long.parseLong(arg.split("\\.")[1]);
+        Reminder r = approve ? reminders.approveManualPayment(id, admin) : reminders.rejectManualPayment(id, admin);
+        String st = approve ? "✅ Tasdiqlandi" : "❌ Rad etildi";
+        sender.edit(chatId, msgId, "📄 Eslatma #" + id + " to'lovi — " + st + "\n\n" + reminders.render(r, false));
+        String text = approve
+                ? "✅ To'lov so'rovingiz tasdiqlandi: <b>" + esc(r.getAgentName()) + "</b> — qoldiq: "
+                    + fmt(r.remain()) + " so'm.\n✍️ " + esc(admin.getFullName())
+                : "❌ To'lov so'rovingiz rad etildi: <b>" + esc(r.getAgentName()) + "</b>.\n✍️ "
+                    + esc(admin.getFullName());
+        userRepo.findById(reqId).ifPresent(x -> notify.toUser(x.getTelegramId(), text));
     }
 
     /* ==================== ⚙️ НАСТРОЙКА (o'z otdeli) ==================== */

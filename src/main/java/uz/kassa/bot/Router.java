@@ -152,8 +152,8 @@ public class Router {
             // Audit: kim qachon chatni tozalagani yoziladi (Telegram o'chirilgan
             // xabarlar MATNINI bermaydi — faqat fakt qayd etiladi)
             audit.log(user.getId(), "CHAT_TOZALANDI", "chat", chatId,
-                    user.getFullName() + " chatni tozaladi (~800 xabar o'chirildi)");
-            sender.clearChat(chatId, m.getMessageId(), 800);
+                    user.getFullName() + " chatni to'liq tozaladi (barcha yozishmalar)");
+            sender.clearChat(chatId, m.getMessageId());
             sender.send(chatId, "🏦 <b>NSB bot</b>\n\n"
                     + "Ushbu bot <b>NewStarBukhara</b> kompaniyasi uchun kassa va "
                     + "kontragentlar hisobini yuritish maqsadida yaratilgan.\n\n"

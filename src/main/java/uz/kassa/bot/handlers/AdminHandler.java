@@ -199,8 +199,9 @@ public class AdminHandler {
 
     private List<String> panelLabels(AppUser u) {
         return u.getRole() == Role.SUPERADMIN
-                ? List.of("🏬 Отдел", "⚙️ Настройка", "📈 Статистика", "💰 Бугунги тушум")
-                : List.of("🏬 Отдел", "📈 Статистика", "💰 Бугунги тушум");
+                ? List.of("🏬 Отдел", "⚙️ Настройка", "📈 Статистика",
+                          "💰 Бугунги тушум", "🏪 Кассалар холати")
+                : List.of("🏬 Отдел", "📈 Статистика", "💰 Бугунги тушум", "🏪 Кассалар холати");
     }
 
     private List<String> statLabels(AppUser u) {
@@ -301,6 +302,7 @@ public class AdminHandler {
                     case "📈 Статистика" -> navTo(u, s, "stat", chatId,
                             "📈 <b>Статистика</b>", statLabels(u));
                     case "💰 Бугунги тушум" -> tushumAll(s, chatId);
+                    case "🏪 Кассалар холати" -> bux.overview(chatId);
                     default -> { return false; }
                 }
             }
@@ -1749,11 +1751,14 @@ public class AdminHandler {
             rows.add(r);
         }
         rows.add(irow(bk(subj.equals("user") ? "a:prc:" + id : "a:prko")));
+        boolean configured = subj.equals("user") ? permSvc.userConfigured(id) : permSvc.kassaConfigured(id);
         sender.edit(chatId, msgId, "⚙️ <b>Бўлим ҳуқуқлари</b> — "
                 + (subj.equals("user") ? "👤 " : "🏪 ") + esc(who) + "\n\n"
                 + "Tugmani bosib holatni almashtiring:\n"
-                + "belgisiz — umumiy holat (meros) · 🚫 — taqiqlangan · ✅ — ruxsat berilgan\n"
-                + "<i>O'zgarish foydalanuvchida /start yoki menyu qayta ochilganda ko'rinadi.</i>",
+                + "🚫 — taqiqlangan · ✅ — ruxsat berilgan · belgisiz — "
+                + (configured ? "TAQIQLANGAN (kamida bitta ✅/🚫 belgilangач, belgilanmaganlar ko'rinmaydi)"
+                              : "umumiy holat (hali hech narsa belgilanmagan)")
+                + "\n<i>O'zgarish foydalanuvchida /start yoki menyu qayta ochilganda ko'rinadi.</i>",
                 inline(rows));
     }
 

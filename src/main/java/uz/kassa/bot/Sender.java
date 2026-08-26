@@ -109,16 +109,16 @@ public class Sender {
     }
 
     /**
-     * Chatni tozalash: joriy xabardan orqaga `count` ta xabarni o'chiradi.
-     * Bot API deleteMessages (100 talik partiyalar) — topilmaganlari jim o'tkaziladi.
-     * Fonda ishlaydi, botni bloklamaydi.
+     * Chatni to'liq tozalash: 1-xabardan {@code fromMessageId}gacha — BARCHA yozishmalarni o'chiradi.
+     * Bot API deleteMessages (100 talik partiyalar) — topilmaganlari/o'chirib bo'lmaydiganlari
+     * (masalan 48 soatdan eski, Telegram cheklovi) jim o'tkaziladi. Fonda ishlaydi, botni bloklamaydi.
      */
-    public void clearChat(long chatId, int fromMessageId, int count) {
+    public void clearChat(long chatId, int fromMessageId) {
         new Thread(() -> {
             try {
                 String token = bot().getBotToken();
                 java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient();
-                int start = Math.max(1, fromMessageId - count + 1);
+                int start = 1;
                 StringBuilder ids = new StringBuilder();
                 int inBatch = 0;
                 for (int i = fromMessageId; i >= start; i--) {

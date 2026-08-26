@@ -37,6 +37,7 @@ public class KassirHandler {
     private final DayRepo dayRepo;
     private final OperationRepo opRepo;
     private final uz.kassa.webapp.ExcelReportService excelReport;
+    private final PermService permSvc;
 
     /* ============================ MATN ============================ */
 
@@ -437,7 +438,7 @@ public class KassirHandler {
         String name = u.getKassaId() == null ? "?" : names.owner(OwnerType.KASSA, u.getKassaId());
         s.data.put("knav", "panel");
         kSend(s, chatId, "📊 <b>КАССАМ</b> — " + esc(name) + "\n\nBo'limni tanlang:",
-                levelMenu(KASSAM_MENU));
+                levelMenu(KASSAM_MENU, c -> permSvc.visible(u, c)));
     }
 
     /** Panel prompt-xabarini yuborish, oldingisini o'chirib — chat toza qoladi. */
@@ -455,7 +456,7 @@ public class KassirHandler {
                 s.data.remove("knav");
                 Object prev = s.data.remove("panelMsg");
                 if (prev instanceof Integer i) sender.deleteMessage(chatId, i);
-                sender.send(chatId, "🏠 Bosh menyu", kassirMenu());
+                sender.send(chatId, "🏠 Bosh menyu", kassirMenu(c -> permSvc.visible(u, c)));
             } else knavPanel(u, s, chatId);
             return true;
         }
