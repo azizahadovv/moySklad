@@ -40,6 +40,21 @@ public interface OperationRepo extends JpaRepository<Operation, Long> {
     List<Operation> byPeriod(@Param("from") java.time.LocalDate from,
                              @Param("to") java.time.LocalDate to);
 
+    /**
+     * Sanadan KEYINGI, balansga ta'sir qilgan (TASDIQLANGAN) operatsiyalar —
+     * «o'sha kun oxiridagi balans»ni hisoblash uchun (korrektirovka).
+     */
+    @Query("""
+        select o from Operation o
+        where o.opDate > :after and o.moneyType = :mt
+          and o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and ((o.fromOwnerType = :ot and o.fromOwnerId = :oid)
+            or (o.toOwnerType = :ot and o.toOwnerId = :oid))
+        """)
+    List<Operation> balanceOpsAfter(@Param("ot") OwnerType ot, @Param("oid") Long oid,
+                                    @Param("mt") MoneyType mt,
+                                    @Param("after") java.time.LocalDate after);
+
     /** Egaga yuborilgan, qabul kutayotgan o'tkazmalar. */
     @Query("""
         select o from Operation o

@@ -438,6 +438,23 @@ public class LedgerService {
         return op;
     }
 
+    /**
+     * Balans TANLANGAN KUN OXIRIDA qancha bo'lgan: joriy balansdan o'sha kundan
+     * KEYIN (op_date > date) o'tgan tasdiqlangan harakatlar ayirib tashlanadi.
+     * O'tgan sana bilan korrektirovka qilishda ishlatiladi — bugungi
+     * prixod-rasxodlar korrektirovka ichiga «yutilib» ketmasligi uchun.
+     */
+    @Transactional(readOnly = true)
+    public long balanceAsOf(OwnerType ot, Long oid, MoneyType mt, LocalDate date) {
+        long cur = view(ot, oid, mt).getAmount();
+        long after = 0;
+        for (Operation o : opRepo.balanceOpsAfter(ot, oid, mt, date)) {
+            if (o.getToOwnerType() == ot && oid.equals(o.getToOwnerId())) after += o.getAmount();
+            if (o.getFromOwnerType() == ot && oid.equals(o.getFromOwnerId())) after -= o.getAmount();
+        }
+        return cur - after;
+    }
+
     /* ==================== ♻️ NOL BOSHLASH ==================== */
 
     /**

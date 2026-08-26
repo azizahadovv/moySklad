@@ -2410,30 +2410,78 @@ public class AdminHandler {
         krTimeChosen(s, t, chatId, 0);
     }
 
-    /** Soat ham tanlandi — ENDI summa so'raladi. */
+    /** Soat ham tanlandi — ENDI summa so'raladi (o'tgan sanada — o'sha kungi balansga nisbatan). */
     private void krTimeChosen(Session s, java.time.LocalTime time, long chatId, int msgId) {
         String hhmm = time.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
         s.data.put("krVaqt", hhmm);
         MoneyType mt = (MoneyType) s.data.get("krMt");
-        long cur = ledger.view((OwnerType) s.data.get("krT"), s.getLong("krId"), mt).getAmount();
+        OwnerType ot = (OwnerType) s.data.get("krT");
+        long oid = s.getLong("krId");
+        java.time.LocalDate date = java.time.LocalDate.parse(s.getStr("krDate"));
+        long cur = ledger.view(ot, oid, mt).getAmount();
+        // O'tgan sana: o'sha kun oxiridagi balans — keyingi kunlarning harakatlarisiz.
+        // Tuzatish shu qiymatga nisbatan kiritiladi, bugungi prixod-rasxodlar saqlanadi.
+        boolean past = date.isBefore(ledger.today());
+        long asOf = past ? ledger.balanceAsOf(ot, oid, mt, date) : cur;
+        s.data.put("krAsOf", asOf);
         s.state = Session.State.ADM_KR_SUM;
-        String txt = "📅 <b>" + java.time.LocalDate.parse(s.getStr("krDate")).format(DF)
-                + " " + hhmm + "</b> — " + mtLabel(mt)
-                + "\nJoriy balans: <b>" + fmt(cur) + "</b> so'm\n\n"
-                + "Tuzatish summasini kiriting:\n"
-                + "• musbat — qo'shiladi (masalan <code>500000</code>)\n"
-                + "• manfiy — ayriladi (masalan <code>-500000</code>)";
-        if (msgId > 0) sender.edit(chatId, msgId, txt);
-        else sender.send(chatId, txt);
+        StringBuilder txt = new StringBuilder("📅 <b>" + date.format(DF) + " " + hhmm + "</b> — "
+                + mtLabel(mt) + "\n");
+        if (past) {
+            txt.append("📆 ").append(date.format(DF)).append(" kun oxiridagi balans: <b>")
+               .append(fmt(asOf)).append("</b> so'm\n")
+               .append("📊 Hozirgi balans: <b>").append(fmt(cur))
+               .append("</b> so'm (keyingi kunlar harakatlari bilan)\n");
+        } else {
+            txt.append("Joriy balans: <b>").append(fmt(cur)).append("</b> so'm\n");
+        }
+        txt.append("\nTuzatish summasini kiriting:\n")
+           .append("• musbat — qo'shiladi (masalan <code>500000</code>)\n")
+           .append("• manfiy — ayriladi (masalan <code>-500000</code>)\n")
+           .append("• yoki <code>=</code> bilan O'SHA KUNGI bo'lishi kerak bo'lgan balans ")
+           .append("(masalan <code>=423461000</code>) — farqni tizim o'zi hisoblaydi");
+        if (past) txt.append("\n\nℹ️ Keyingi kunlardagi prixod-rasxodlar saqlanadi — "
+                + "ular tuzatish ustiga qo'shilib boradi.");
+        if (msgId > 0) sender.edit(chatId, msgId, txt.toString());
+        else sender.send(chatId, txt.toString());
     }
 
     private void krSum(Session s, String text, long chatId) {
-        String t = text.trim();
+        String t = text.trim().replace(" ", "");
+        long asOf = s.getLong("krAsOf");
+
+        // «=maqsad» — o'sha kungi balans shu bo'lishi kerak; farqni tizim hisoblaydi
+        if (t.startsWith("=")) {
+            String body = t.substring(1);
+            boolean negTarget = body.startsWith("-");
+            long target = parseAmount(body);
+            if (target < 0) {
+                sender.send(chatId, "⚠️ Maqsad balansni raqamda kiriting, masalan "
+                        + "<code>=423461000</code>");
+                return;
+            }
+            if (negTarget) target = -target;
+            long delta = target - asOf;
+            if (delta == 0) {
+                sender.send(chatId, "ℹ️ Balans allaqachon <b>" + fmt(target)
+                        + "</b> so'm — tuzatish shart emas. Boshqa summa kiriting yoki bekor qiling:",
+                        cancelOnly());
+                return;
+            }
+            s.data.put("krSum", delta);
+            s.state = Session.State.ADM_KR_IZOH;
+            sender.send(chatId, "📆 O'sha kungi balans: <b>" + fmt(asOf) + "</b> → maqsad: <b>"
+                    + fmt(target) + "</b> so'm\nFarq (tuzatish): <b>"
+                    + (delta > 0 ? "+" : "") + fmt(delta) + "</b> so'm\n\n"
+                    + "✍️ Sababini yozing (auditda saqlanadi):", cancelOnly());
+            return;
+        }
+
         boolean neg = t.startsWith("-");
         long v = parseAmount(t);
         if (v <= 0) {
             sender.send(chatId, "⚠️ Nolga teng bo'lmagan summa kiriting, masalan "
-                    + "<code>500000</code> yoki <code>-500000</code>");
+                    + "<code>500000</code>, <code>-500000</code> yoki <code>=423461000</code>");
             return;
         }
         s.data.put("krSum", neg ? -v : v);
@@ -2453,27 +2501,36 @@ public class AdminHandler {
         long oid = s.getLong("krId");
         MoneyType mt = (MoneyType) s.data.get("krMt");
         long sum = s.getLong("krSum");
+        long asOf = s.getLong("krAsOf");
         java.time.LocalDate date = java.time.LocalDate.parse(s.getStr("krDate"));
         String hhmm = s.getStr("krVaqt");
         String reasonBase = s.getStr("krReason");
         // Soat operations jadvalida alohida ustunsiz — izoh oxiriga qayd etiladi
         String reason = reasonBase + " [" + date.format(DF) + " " + hhmm + "]";
+        boolean past = date.isBefore(ledger.today());
         s.reset();
 
         ledger.postAdjustment(OpType.KORREKTIROVKA, ot, oid, mt, sum, reason, u.getId(), date);
         long after = ledger.view(ot, oid, mt).getAmount();
         String owner = names.owner(ot, oid);
+        // O'tgan sana: o'sha kun oxiri endi qancha bo'ldi — bugungi harakatlar saqlangan
+        String asOfLine = past
+                ? "📆 " + date.format(DF) + " kun oxiri endi: <b>" + fmt(asOf + sum) + "</b> so'm\n"
+                : "";
 
         sender.send(chatId, "✅ <b>Korrektirovka bajarildi</b> — " + esc(owner) + "\n"
                 + mtLabel(mt) + ": <b>" + (sum > 0 ? "+" : "") + fmt(sum) + "</b> so'm\n"
                 + "📅 Sana: <b>" + date.format(DF) + " " + hhmm + "</b>\n"
-                + "Yangi balans: <b>" + fmt(after) + "</b> so'm\n"
+                + asOfLine
+                + "Hozirgi balans: <b>" + fmt(after) + "</b> so'm"
+                + (past ? " (keyingi kunlar harakatlari bilan)" : "") + "\n"
                 + "Sabab: " + esc(reasonBase));
 
         String info = "🛠 Korrektirovka — <b>" + esc(owner) + "</b>: <b>"
                 + (sum > 0 ? "+" : "") + fmt(sum) + "</b> so'm (" + mtLabel(mt) + ")\n"
                 + "📅 Sana: <b>" + date.format(DF) + " " + hhmm + "</b>\n"
-                + "Yangi balans: <b>" + fmt(after) + "</b> so'm\n"
+                + asOfLine
+                + "Hozirgi balans: <b>" + fmt(after) + "</b> so'm\n"
                 + "Sabab: " + esc(reason) + "\nKim: " + esc(u.getFullName());
         notify.toBuxgalteriya(info, null);
         if (ot == OwnerType.KASSA) notify.toKassa(oid, info, null);

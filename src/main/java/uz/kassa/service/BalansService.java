@@ -127,10 +127,11 @@ public class BalansService {
         sb.append("\n🏦 <b>Отдел основной</b>: 💵 <b>").append(fmt(bn.getAmount()))
           .append("</b> · 📲 <b>").append(fmt(bk.getAmount()))
           .append("</b> = <b>").append(fmt(bn.getAmount() + bk.getAmount())).append("</b> so'm\n");
-        long msOsn = osnovnoyPrixodToday(today);
-        if (msOsn > 0)
-            sb.append("🟢 MoySklad prixod (bugun, osnovnoy): <b>")
-              .append(fmt(msOsn)).append("</b> so'm\n");
+        long[] osn = osnovnoyToday(today);
+        if (osn[0] > 0 || osn[1] > 0)
+            sb.append("🟢 Bugungi kirim: <b>").append(fmt(osn[0]))
+              .append("</b> · 🔴 Bugungi rasxod: <b>").append(fmt(osn[1]))
+              .append("</b> so'm\n");
 
         long sumNaqd = 0, sumKlikBal = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
@@ -233,14 +234,18 @@ public class BalansService {
                 .toList();
     }
 
-    /** Bugun MoySklad'dan osnovnoy otdelga (Buxgalteriyaga) tushgan prixodlar. */
-    private long osnovnoyPrixodToday(LocalDate today) {
-        long sum = 0;
+    /**
+     * Osnovnoy otdel (Buxgalteriya)ning BUGUNGI harakati: {kirim, rasxod} —
+     * MoySklad va bot orqali kiritilganlar birga (balansga ta'sir qilganlari).
+     */
+    private long[] osnovnoyToday(LocalDate today) {
+        long in = 0, out = 0;
         for (Operation o : opRepo.byPeriod(today, today)) {
-            if (o.getType() != OpType.PRIXOD || o.getMoyskladId() == null) continue;
-            if (o.getToOwnerType() != OwnerType.BUXGALTERIYA) continue;
-            sum += o.getAmount();
+            if (o.getStatus() != OpStatus.TASDIQLANGAN || o.getMoneyType() == MoneyType.TERMINAL)
+                continue;
+            if (o.getToOwnerType() == OwnerType.BUXGALTERIYA) in += o.getAmount();
+            if (o.getFromOwnerType() == OwnerType.BUXGALTERIYA) out += o.getAmount();
         }
-        return sum;
+        return new long[]{in, out};
     }
 }
