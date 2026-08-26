@@ -44,6 +44,7 @@ public final class Keyboards {
         addRowIf(rows, visible, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
         addRowIf(rows, visible, "💸 Rasxod", "🔁 O'tkazma");
         addRowIf(rows, visible, "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ");
+        addRowIf(rows, visible, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
         m.setResizeKeyboard(true);
@@ -53,6 +54,7 @@ public final class Keyboards {
     public static ReplyKeyboardMarkup buxMenu(java.util.function.Predicate<String> visible) {
         List<KeyboardRow> rows = new ArrayList<>();
         addRowIf(rows, visible, "🏪 KASSA", "🤝 КОНТРАГЕНТ");
+        addRowIf(rows, visible, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
         m.setResizeKeyboard(true);
@@ -67,7 +69,7 @@ public final class Keyboards {
             "👥 Foydalanuvchi qo'shish", "🏪 Kassa qo'shish",
             "💼 Boshlang'ich qoldiq", "👤 Foydalanuvchilar",
             "👑 АДМИН ПАНЕЛ", "💰 БУГУНГИ ТУШУМ", "📊 ПАНЕЛ", "📊 КАССАМ", "🏪 KASSA",
-            "🤝 КОНТРАГЕНТ");
+            "🤝 КОНТРАГЕНТ", "💰 Баланс");
 
     public static boolean isMenuLabel(String text) { return MENU_LABELS.contains(text); }
 
@@ -78,6 +80,7 @@ public final class Keyboards {
         addVisibleRow(rows, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
         addVisibleRow(rows, "💸 Rasxod", "🔁 O'tkazma");
         addVisibleRow(rows, "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ");
+        addVisibleRow(rows, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
         m.setResizeKeyboard(true);
@@ -116,6 +119,7 @@ public final class Keyboards {
         // Bosh menyu — faqat bitta panel; qolgan hammasi 🏪 KASSA ichida
         List<KeyboardRow> rows = new ArrayList<>();
         addVisibleRow(rows, "🏪 KASSA", "🤝 КОНТРАГЕНТ");
+        addVisibleRow(rows, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
         m.setResizeKeyboard(true);

@@ -94,7 +94,8 @@ public class MoySkladClient {
      *  applicable=false — hujjat o'tkazilmagan (bekor qilingan) — yozuv STORNO qilinadi. */
     public record MsExpense(String id, String docNo, LocalDate date, long sumTiyin, String storeId,
                             String groupId, String expenseItem, String description,
-                            String agent, String state, String currencyId, boolean applicable) {}
+                            String agent, String state, String currencyId, double rateValue,
+                            boolean applicable) {}
 
     /** Bitta hujjatning API'dagi holati (o'chirilganlikni aniqlash uchun). */
     public enum DocStatus { OK, UNAPPLIED, DELETED, UNKNOWN }
@@ -132,7 +133,7 @@ public class MoySkladClient {
                     groupOf(r),
                     "",
                     r.path("description").asText(""),
-                    "", "", currencyOf(r),
+                    "", "", currencyOf(r), rateOf(r),
                     r.path("applicable").asBoolean(true)));
         }
         return out;
@@ -153,7 +154,7 @@ public class MoySkladClient {
                     r.path("description").asText(""),
                     agentOf(r),
                     r.path("state").path("name").asText(""),
-                    currencyOf(r),
+                    currencyOf(r), rateOf(r),
                     r.path("applicable").asBoolean(true)));
         }
         return out;
@@ -174,7 +175,7 @@ public class MoySkladClient {
                     r.path("description").asText(""),
                     agentOf(r),
                     r.path("state").path("name").asText(""),
-                    currencyOf(r),
+                    currencyOf(r), rateOf(r),
                     r.path("applicable").asBoolean(true)));
         }
         return out;
@@ -195,7 +196,7 @@ public class MoySkladClient {
                     r.path("description").asText(""),
                     agentOf(r),
                     r.path("state").path("name").asText(""),
-                    currencyOf(r),
+                    currencyOf(r), rateOf(r),
                     r.path("applicable").asBoolean(true)));
         }
         return out;
@@ -296,7 +297,7 @@ public class MoySkladClient {
                     r.path("description").asText(""),
                     agentOf(r),
                     r.path("state").path("name").asText(""),
-                    currencyOf(r), true));
+                    currencyOf(r), rateOf(r), true));
         }
         return out;
     }
@@ -391,6 +392,11 @@ public class MoySkladClient {
     /** Hujjat valyutasi UUID si (rate.currency). */
     private String currencyOf(JsonNode r) {
         return lastSegment(r.path("rate").path("currency").path("meta").path("href").asText(""));
+    }
+
+    /** Hujjatda kiritilgan valyuta kursi (rate.value); yo'q bo'lsa 0. */
+    private double rateOf(JsonNode r) {
+        return r.path("rate").path("value").asDouble(0);
     }
 
     /** Valyutalar: UUID -> ISO kod (UZS, USD...). Xatoda bo'sh map. */

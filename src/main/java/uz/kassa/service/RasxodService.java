@@ -17,6 +17,8 @@ public class RasxodService {
     private final OperationRepo opRepo;
     private final DayService dayService;
     private final AuditService audit;
+    private final uz.kassa.repo.DayRepo dayRepo;
+    private final uz.kassa.repo.SubmissionRepo subRepo;
 
     /** Kassir so'rovi: summa REZERVGA olinadi, buxgalter tasdig'i kutiladi. */
     @Transactional
@@ -148,6 +150,54 @@ public class RasxodService {
                 .createdBy(bux.getId()).decidedBy(bux.getId()).decidedAt(Instant.now())
                 .build());
         audit.log(bux.getId(), "BUX_RASXOD", "operation", op.getId(), mt + " " + amount);
+        return op;
+    }
+
+    /**
+     * Buxgalter/Admin KASSA NOMIDAN rasxod kiritadi (hisobot qabulida yoki kassa
+     * kartasidan): darhol TASDIQLANGAN, tanlangan sananing kun yozuviga tushadi,
+     * kassa balansidan (naqd yoki kassaning o'z KLIK hisobidan) ayriladi —
+     * pul allaqachon sarflangan fakt, shuning uchun balans manfiyga tushishi mumkin.
+     * Agar shu kun KUTILAYOTGAN hisobot ichida bo'lsa — hisobot summasi va rezerv
+     * mos ravishda kamaytiriladi (kun qoldig'i o'zgargani uchun).
+     */
+    @Transactional
+    public Operation directForKassa(AppUser by, Long kassaId, MoneyType mt, long amount,
+                                    Long categoryId, String comment, java.time.LocalDate date) {
+        if (mt == MoneyType.TERMINAL)
+            throw new BusinessException("Terminal pulidan rasxod qilib bo'lmaydi");
+        if (amount <= 0) throw new BusinessException("Summa noldan katta bo'lishi kerak");
+
+        // Rezervsiz, tekshiruvsiz ayirish — fakt qayd etiladi (manfiy bo'lishi mumkin)
+        ledger.credit(OwnerType.KASSA, kassaId, mt, -amount);
+        dayService.addRasxod(kassaId, date, mt, amount);
+
+        // Kun kutilayotgan hisobotda bo'lsa — hisobot summasi va rezervni moslashtirish
+        DayRecord day = dayRepo.findByKassaIdAndDate(kassaId, date).orElse(null);
+        if (day != null && day.getStatus() == DayStatus.TOPSHIRILGAN) {
+            for (Submission sub : subRepo.findByStatusOrderByIdAsc(SubmissionStatus.KUTILMOQDA)) {
+                if (!sub.getKassaId().equals(kassaId) || !sub.getDayIds().contains(day.getId())) continue;
+                long cut = Math.min(amount, mt == MoneyType.NAQD ? sub.getNaqd() : sub.getKlik());
+                if (cut > 0) {
+                    if (mt == MoneyType.NAQD) sub.setNaqd(sub.getNaqd() - cut);
+                    else sub.setKlik(sub.getKlik() - cut);
+                    ledger.unreserve(OwnerType.KASSA, kassaId, mt, cut);
+                    subRepo.save(sub);
+                }
+                break;
+            }
+        }
+
+        Operation op = opRepo.save(Operation.builder()
+                .type(OpType.RASXOD).moneyType(mt).amount(amount)
+                .fromOwnerType(OwnerType.KASSA).fromOwnerId(kassaId)
+                .status(OpStatus.TASDIQLANGAN)
+                .categoryId(categoryId).comment(comment)
+                .opDate(date)
+                .createdBy(by.getId()).decidedBy(by.getId()).decidedAt(Instant.now())
+                .build());
+        audit.log(by.getId(), "RASXOD_BUX_KASSA", "operation", op.getId(),
+                "kassa=" + kassaId + " " + mt + " " + amount + " sana=" + date);
         return op;
     }
 }

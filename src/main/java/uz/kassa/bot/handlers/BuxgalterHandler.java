@@ -208,17 +208,25 @@ public class BuxgalterHandler {
             StringBuilder detail = new StringBuilder();
             dayRepo.findAllById(sub.getDayIds()).stream()
                     .sorted((a, b) -> a.getDate().compareTo(b.getDate()))
-                    .forEach(d -> detail.append("• ").append(d.getDate().format(DF))
-                            .append(" — Naqd ").append(fmt(d.remainNaqd()))
-                            .append(" · Click ").append(fmt(d.remainKlik())).append("\n"));
+                    .forEach(d -> {
+                        detail.append("• ").append(d.getDate().format(DF))
+                              .append(" — Naqd ").append(fmt(d.remainNaqd()))
+                              .append(" · Click ").append(fmt(d.remainKlik()));
+                        if (d.getRasxodNaqd() + d.getRasxodKlik() > 0)
+                            detail.append(" (💸 rasxod: ").append(fmt(d.getRasxodNaqd()))
+                                  .append(" · ").append(fmt(d.getRasxodKlik())).append(")");
+                        detail.append("\n");
+                    });
             sender.send(chatId, "📤 <b>Hisobot</b> #" + sub.getId() + " — <b>"
                     + esc(names.owner(OwnerType.KASSA, sub.getKassaId())) + "</b>\n\n" + detail
                     + "\nJami: Naqd <b>" + fmt(sub.getNaqd()) + "</b> · Click <b>"
-                    + fmt(sub.getKlik()) + "</b> so'm",
+                    + fmt(sub.getKlik()) + "</b> so'm"
+                    + "\nℹ️ Click summasi qabul qilinganda kassaning o'z hisobida qoladi.",
                     inline(List.of(
                             irow(btn("✅ To'liq qabul", "sb:f:" + sub.getId())),
                             irow(btn("🟡 Qisman qabul", "sb:p:" + sub.getId()),
-                                 btn("❌ Rad etish", "sb:r:" + sub.getId())))));
+                                 btn("❌ Rad etish", "sb:r:" + sub.getId())),
+                            irow(btn("💸 Rasxod kiritish (kassa nomidan)", "sb:x:" + sub.getId())))));
             shown++;
         }
 
@@ -439,8 +447,9 @@ public class BuxgalterHandler {
         }
         s.data.put("accN", v);
         s.state = Session.State.SBP_KLIK;
-        sender.send(chatId, "✍️ Haqiqatda olingan <b>CLICK</b> summani kiriting "
-                + "(0 dan " + fmt(s.getLong("maxK")) + " gacha):");
+        sender.send(chatId, "✍️ Hisobotda tasdiqlanadigan <b>CLICK</b> summani kiriting "
+                + "(0 dan " + fmt(s.getLong("maxK")) + " gacha).\n"
+                + "<i>Click puli kassaning o'z hisobida qoladi — bu faqat hisobotni yopish uchun:</i>");
     }
 
     private void partialKlik(AppUser u, Session s, String text, long chatId) {
@@ -468,7 +477,8 @@ public class BuxgalterHandler {
         notify.toKassa(sub.getKassaId(), "🟡 Hisobot #" + sub.getId() + " qisman qabul qilindi.\n"
                 + "Qabul: Naqd <b>" + fmt(accN) + "</b> · Click <b>" + fmt(v) + "</b> so'm\n"
                 + "Farq (qarzdorlik): Naqd <b>" + fmt(debtN) + "</b> · Click <b>" + fmt(debtK)
-                + "</b> so'm — tegishli kunlar ochiq qoldi, keyingi topshiriqda yopiladi.", null);
+                + "</b> so'm — tegishli kunlar ochiq qoldi, keyingi topshiriqda yopiladi."
+                + (v > 0 ? "\nℹ️ Click pulingiz o'z hisobingizda qoladi." : ""), null);
         sender.send(chatId, "Qisman qabul qilindi ✔️");
     }
 

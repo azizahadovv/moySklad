@@ -87,8 +87,15 @@ public class MoySkladSyncService {
                 + "Tafsilotlar: Настройка → 📋 Аудит.", null);
     }
 
-    /** So'm (UZS) valyuta UUID lari — boshqa valyutadagi hujjatlar nazoratga olinmaydi. */
+    /** So'm (UZS) valyuta UUID lari — boshqa valyutadagi hujjatlar kurs bilan so'mga o'giriladi. */
     private volatile java.util.Set<String> somCurrencyIds = java.util.Set.of();
+
+    /** Valyuta UUID -> ISO kod (USD, RUB...) — xabar/izohlarda ko'rsatish uchun. */
+    private volatile java.util.Map<String, String> currencyIso = java.util.Map.of();
+
+    /** «Kurs kiritilmagan» ogohlantirishi har hujjat uchun bir marta yuboriladi. */
+    private final java.util.Set<String> noRateWarned =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** Bir siklda qayta ishlatiladigan xaritalar. */
     private record Ctx(Map<String, Long> storeToKassa, Map<String, Long> groupToKassa,
@@ -134,11 +141,15 @@ public class MoySkladSyncService {
             notify.toRole(uz.kassa.domain.Role.SUPERADMIN, sb.toString(), null);
         }
 
-        java.util.Set<String> som = new java.util.HashSet<>();
-        client.fetchCurrencies().forEach((id, iso) -> {
-            if (iso.equalsIgnoreCase("UZS")) som.add(id);
-        });
-        somCurrencyIds = som;
+        java.util.Map<String, String> isoMap = client.fetchCurrencies();
+        if (!isoMap.isEmpty()) {   // xatoda eski ro'yxat saqlanadi — filtr o'chib qolmasin
+            java.util.Set<String> som = new java.util.HashSet<>();
+            isoMap.forEach((id, iso) -> {
+                if (iso.equalsIgnoreCase("UZS")) som.add(id);
+            });
+            somCurrencyIds = som;
+            currencyIso = isoMap;
+        }
 
         // «Статья расходов» nomi tizim kategoriyasiga mos kelsa — avtomatik biriktiriladi
         Map<String, Long> catByName = new HashMap<>();
@@ -172,13 +183,43 @@ public class MoySkladSyncService {
         return existing.isEmpty() && docDate.isBefore(epoch());
     }
 
-    /**
-     * So'mda emasligini aniqlash: hujjat dollarga o'tkazilgan bo'lsa (masalan
-     * postavchikga to'lov $ da qayta hisoblangan) — u tizim nazoratidan chiqadi.
-     */
+    /** So'mda emasligini aniqlash (hujjat valyutasi UZS emas). */
     private boolean notSom(String currencyId) {
         return !somCurrencyIds.isEmpty() && !currencyId.isEmpty()
                 && !somCurrencyIds.contains(currencyId);
+    }
+
+    /**
+     * Hujjat summasi SO'MDA: so'm hujjat — o'z summasi; valyuta hujjat —
+     * MoySklad'da kiritilgan kurs (rate.value) bilan so'mga o'giriladi
+     * (masalan $1 000 × 12 000 = 12 000 000). Kurs KIRITILMAGAN valyuta
+     * hujjatida -1 qaytadi — tizim o'zidan kurs taxmin qilmaydi.
+     */
+    private long somSum(MoySkladClient.MsExpense e) {
+        if (!notSom(e.currencyId())) return e.sumTiyin() / 100;
+        if (e.rateValue() <= 0) return -1;
+        return Math.round(e.sumTiyin() / 100.0 * e.rateValue());
+    }
+
+    /** Valyuta hujjati izohi uchun belgi: «💱 1 000 USD × 12 000». */
+    private String fxNote(MoySkladClient.MsExpense e) {
+        if (!notSom(e.currencyId())) return "";
+        String iso = currencyIso.getOrDefault(e.currencyId(), "valyuta");
+        return "💱 " + TextUtil.fmt(e.sumTiyin() / 100) + " " + iso + " × " + trimRate(e.rateValue());
+    }
+
+    private String trimRate(double v) {
+        return v == Math.rint(v) ? TextUtil.fmt((long) v) : String.valueOf(v);
+    }
+
+    /** Kurs kiritilmagan valyuta hujjati — bir marta ogohlantirish. */
+    private void warnNoRate(MoySkladClient.MsExpense e) {
+        if (!noRateWarned.add(e.id())) return;
+        String iso = currencyIso.getOrDefault(e.currencyId(), "valyuta");
+        notify.toBuxgalteriya("💱⚠️ MoySklad hujjatida <b>valyuta kursi kiritilmagan</b> — "
+                + "tizimga o'tkazilmadi:\n" + docInfo(e)
+                + "\nSumma: <b>" + TextUtil.fmt(e.sumTiyin() / 100) + " " + TextUtil.esc(iso)
+                + "</b>\nMoySklad'da kursni kiriting — keyingi sinxronda avtomatik kiradi.", null);
     }
 
     /** Fon sinxroni uchun alohida oqim — foydalanuvchi so'rovini BLOKLAMAYDI. */
@@ -385,13 +426,20 @@ public class MoySkladSyncService {
 
     /** «Выплата денег» — savdo nuqtasi kassasidan NAQD chiqim (fakt, tasdiqsiz). */
     private boolean applyDrawerExpense(MoySkladClient.MsExpense e, Ctx ctx) {
-        long sum = e.sumTiyin() / 100;
+        long sum = somSum(e);   // valyuta hujjati MoySklad kursi bilan so'mga o'giriladi
         String msId = "dc:" + e.id();
+        String fx = fxNote(e);
         String comment = joinNote(e.expenseItem(), e.description());
+        if (!fx.isEmpty()) comment = comment.isEmpty() ? fx : fx + " · " + comment;
         Optional<Operation> existing = opRepo.findByMoyskladId(msId);
         if (skipNewPreEpoch(e.date(), existing)) return false;
 
-        if (!e.applicable() || sum <= 0) {
+        if (sum < 0) {   // valyuta hujjati, kurs kiritilmagan — taxmin qilinmaydi
+            warnNoRate(e);
+            return existing.isPresent()
+                    && storno(existing.get(), "valyuta kursi kiritilmagan", docInfo(e));
+        }
+        if (!e.applicable() || sum == 0) {
             return existing.isPresent()
                     && storno(existing.get(),
                         !e.applicable() ? "hujjat o'tkazilishi bekor qilingan" : "summa nolga tushirilgan", "");
@@ -438,20 +486,27 @@ public class MoySkladSyncService {
      * O'zgarishlar avtomatik tuzatiladi: summa (delta), otdel (reroute), sana (storno+qayta).
      */
     private boolean applyCashout(MoySkladClient.MsExpense e, Ctx ctx) {
-        long sum = e.sumTiyin() / 100;
+        long sum = somSum(e);   // valyuta hujjati MoySklad kursi bilan so'mga o'giriladi
         String msId = "co:" + e.id();
+        String fx = fxNote(e);
         String comment = joinNote(e.expenseItem(), e.description());
+        if (!fx.isEmpty()) comment = comment.isEmpty() ? fx : fx + " · " + comment;
         Long kassaId = ctx.groupToKassa().get(e.groupId());
         OwnerType wantOt = kassaId != null ? OwnerType.KASSA : OwnerType.BUXGALTERIYA;
         Long wantOid = kassaId != null ? kassaId : LedgerService.BUX_ID;
         Optional<Operation> existing = opRepo.findByMoyskladId(msId);
         if (skipNewPreEpoch(e.date(), existing)) return false;
 
-        if (!e.applicable() || notSom(e.currencyId()) || sum <= 0) {
+        if (sum < 0) {   // valyuta hujjati, kurs kiritilmagan — taxmin qilinmaydi
+            warnNoRate(e);
+            return existing.isPresent()
+                    && storno(existing.get(), "valyuta kursi kiritilmagan", docInfo(e));
+        }
+        if (!e.applicable() || sum == 0) {
             return existing.isPresent()
                     && storno(existing.get(),
                         !e.applicable() ? "hujjat o'tkazilishi bekor qilingan"
-                                : sum <= 0 ? "summa nolga tushirilgan" : "hujjat valyutaga o'tkazilgan",
+                                : "summa nolga tushirilgan",
                         docInfo(e));
         }
 
@@ -525,20 +580,27 @@ public class MoySkladSyncService {
      * sana/pul turi (storno + qayta yozish), bekor qilingan hujjat (storno).
      */
     private boolean applyIncome(MoySkladClient.MsExpense e, MoneyType mt, String msId, Ctx ctx) {
-        long sum = e.sumTiyin() / 100;
+        long sum = somSum(e);   // valyuta hujjati MoySklad kursi bilan so'mga o'giriladi
         Long kassaId = ctx.groupToKassa().get(e.groupId());
         OwnerType wantOt = kassaId != null ? OwnerType.KASSA : OwnerType.BUXGALTERIYA;
         Long wantOid = kassaId != null ? kassaId : LedgerService.BUX_ID;
+        String fx = fxNote(e);
         String comment = joinNote(e.agent(), e.description());
+        if (!fx.isEmpty()) comment = comment.isEmpty() ? fx : fx + " · " + comment;
         String mtLabel = mtLabel(mt);
         Optional<Operation> existing = opRepo.findByMoyskladId(msId);
         if (skipNewPreEpoch(e.date(), existing)) return false;
 
-        if (!e.applicable() || notSom(e.currencyId()) || sum <= 0) {
+        if (sum < 0) {   // valyuta hujjati, kurs kiritilmagan — taxmin qilinmaydi
+            warnNoRate(e);
+            return existing.isPresent()
+                    && storno(existing.get(), "valyuta kursi kiritilmagan", docInfo(e));
+        }
+        if (!e.applicable() || sum == 0) {
             return existing.isPresent()
                     && storno(existing.get(),
                         !e.applicable() ? "hujjat o'tkazilishi bekor qilingan"
-                                : sum <= 0 ? "summa nolga tushirilgan" : "hujjat valyutaga o'tkazilgan",
+                                : "summa nolga tushirilgan",
                         docInfo(e));
         }
 

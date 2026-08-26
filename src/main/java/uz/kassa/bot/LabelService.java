@@ -22,7 +22,7 @@ public class LabelService {
             // Bosh menyu
             "🏪 KASSA", "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ",
             "💸 Rasxod", "🔁 O'tkazma", "📤 Hisobot topshirish",
-            "🤝 КОНТРАГЕНТ",
+            "🤝 КОНТРАГЕНТ", "💰 Баланс",
             // Panel darajasi
             "🏬 Отдел", "⚙️ Настройка", "📈 Статистика", "💰 Бугунги тушум",
             "📆 Давр танлаш",

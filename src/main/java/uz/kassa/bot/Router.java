@@ -353,10 +353,23 @@ public class Router {
                 sender.edit(chatId, msgId, "📤 Hisobot #" + sub.getId() + " — "
                         + esc(names.owner(OwnerType.KASSA, sub.getKassaId()))
                         + "\nNaqd <b>" + fmt(sub.getNaqd()) + "</b> · Click <b>" + fmt(sub.getKlik()) + "</b> so'm"
-                        + "\n\n✅ <b>To'liq qabul qilindi</b> — " + esc(user.getFullName()));
+                        + "\n\n✅ <b>To'liq qabul qilindi</b> — " + esc(user.getFullName())
+                        + (sub.getKlik() > 0
+                            ? "\nℹ️ Click summasi kassaning o'z hisobida qoladi — buxgalteriyaga o'tkazilmaydi."
+                            : ""));
                 notify.toKassa(sub.getKassaId(), "✅ Hisobot #" + sub.getId()
                         + " to'liq qabul qilindi: Naqd <b>" + fmt(sub.getNaqd())
-                        + "</b> · Click <b>" + fmt(sub.getKlik()) + "</b> so'm", null);
+                        + "</b> · Click <b>" + fmt(sub.getKlik()) + "</b> so'm"
+                        + (sub.getKlik() > 0
+                            ? "\nℹ️ Click pulingiz o'z hisobingizda qoladi." : ""), null);
+            }
+            case "x" -> {
+                // 💸 Hisobot kunlari bo'yicha kassa nomidan rasxod kiritish
+                Submission sub = subRepo.findById(subId)
+                        .orElseThrow(() -> new BusinessException("Hisobot topilmadi"));
+                if (sub.getStatus() != SubmissionStatus.KUTILMOQDA)
+                    throw new BusinessException("Bu hisobot allaqachon ko'rib chiqilgan");
+                admin.krxStartForSub(user, s, sub, chatId);
             }
             case "p" -> {
                 Submission sub = subRepo.findById(subId)

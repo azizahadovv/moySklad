@@ -102,6 +102,17 @@ public class Jobs {
         }
     }
 
+    /**
+     * Kun yopilishini QOPLASH: 00:00 dagi cron faqat bot o'sha paytda ishlab
+     * turganda otiladi — bot yarim tunda o'chiq bo'lsa, kunlar OCHIQ qolib,
+     * kassir hisobot topshira olmay qolardi. Ishga tushgach 30 soniyada va
+     * keyin har soatda o'tgan kunlar yopib boriladi (idempotent).
+     */
+    @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT30S")
+    public void closeDaysCatchup() {
+        closeDays();
+    }
+
     /** Har kuni app.reminder-hour (standart 21:00) — kassirlarga eslatma (TZ 7.2). */
     @Scheduled(cron = "0 0 ${app.reminder-hour:21} * * *", zone = "Asia/Tashkent")
     public void reminder() {

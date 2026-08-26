@@ -31,6 +31,7 @@ public class LedgerService {
     private final DayService dayService;
     private final AuditService audit;
     private final AppProps props;
+    private final uz.kassa.repo.DayRepo dayRepo;
 
     public LocalDate today() { return LocalDate.now(props.zoneId()); }
 
@@ -411,10 +412,22 @@ public class LedgerService {
         b.setAmount(b.getAmount() + signedAmount);
         touch(b);
 
+        // Kassa korrektirovkasi tanlangan SANANING kun yozuviga ham tushadi —
+        // balans va kunlar kesimi (Баланс bo'limi) bir-biridan uzoqlashib ketmasin.
+        LocalDate d = date == null ? today() : date;
+        if (type == OpType.KORREKTIROVKA && ot == OwnerType.KASSA) {
+            if (signedAmount > 0) dayService.addKirim(oid, d, mt, signedAmount);
+            else dayService.addChiqim(oid, d, mt, -signedAmount);
+            DayRecord day = dayService.getOrCreate(oid, d);
+            if (day.getStatus() == DayStatus.QABUL_QILINGAN
+                    && (day.remainNaqd() != 0 || day.remainKlik() != 0))
+                day.setStatus(DayStatus.YOPILGAN);
+        }
+
         Operation.OperationBuilder ob = Operation.builder()
                 .type(type).moneyType(mt).amount(Math.abs(signedAmount))
                 .status(OpStatus.TASDIQLANGAN)
-                .comment(reason).opDate(date == null ? today() : date)
+                .comment(reason).opDate(d)
                 .createdBy(byUserId).decidedBy(byUserId).decidedAt(Instant.now());
         if (signedAmount > 0) ob.toOwnerType(ot).toOwnerId(oid);
         else ob.fromOwnerType(ot).fromOwnerId(oid);
@@ -423,5 +436,54 @@ public class LedgerService {
         audit.log(byUserId, type.name(), "operation", op.getId(),
                 ot + ":" + oid + " " + mt + " " + signedAmount + " | " + reason);
         return op;
+    }
+
+    /* ==================== ♻️ NOL BOSHLASH ==================== */
+
+    /**
+     * ♻️ Nol boshlash (faqat SuperAdmin): beforeExclusive dan OLDINGI barcha
+     * OCHIQ/YOPILGAN kunlar QABUL_QILINGAN deb yopiladi, ularning qoldig'i kassa
+     * balansidan KORREKTIROVKA operatsiyasi bilan chiqariladi — kassa hisobni
+     * 0 dan boshlaydi. Bugungi (beforeExclusive) kun saqlanadi, tarix jurnalda qoladi.
+     * @return {yopilgan naqd, yopilgan klik, kunlar soni}
+     */
+    @Transactional
+    public long[] resetKassaBefore(Long kassaId, LocalDate beforeExclusive, Long byUserId) {
+        List<DayRecord> days = dayRepo.findByKassaIdAndStatusInOrderByDateAsc(
+                        kassaId, List.of(DayStatus.OCHIQ, DayStatus.YOPILGAN)).stream()
+                .filter(d -> d.getDate().isBefore(beforeExclusive)).toList();
+        long n = 0, k = 0;
+        for (DayRecord d : days) {
+            n += d.remainNaqd();
+            k += d.remainKlik();
+            d.setCoveredNaqd(d.netNaqd());
+            d.setCoveredKlik(d.netKlik());
+            d.setStatus(DayStatus.QABUL_QILINGAN);
+        }
+        dayRepo.saveAll(days);
+        resetOp(kassaId, MoneyType.NAQD, n, beforeExclusive, byUserId);
+        resetOp(kassaId, MoneyType.KLIK, k, beforeExclusive, byUserId);
+        audit.log(byUserId, "NOL_BOSHLASH", "kassa", kassaId,
+                "naqd=" + n + " klik=" + k + " kunlar=" + days.size()
+                        + " before=" + beforeExclusive);
+        return new long[]{n, k, days.size()};
+    }
+
+    /** Yopilgan kunlar qoldig'ini balansdan chiqarish + jurnal yozuvi. */
+    private void resetOp(Long kassaId, MoneyType mt, long closedRemain,
+                         LocalDate before, Long byUserId) {
+        if (closedRemain == 0) return;
+        Balance b = lock(OwnerType.KASSA, kassaId, mt);
+        b.setAmount(b.getAmount() - closedRemain);
+        touch(b);
+        Operation.OperationBuilder ob = Operation.builder()
+                .type(OpType.KORREKTIROVKA).moneyType(mt).amount(Math.abs(closedRemain))
+                .status(OpStatus.TASDIQLANGAN)
+                .comment("♻️ Nol boshlash: " + before + " gacha kunlar yopildi")
+                .opDate(today())
+                .createdBy(byUserId).decidedBy(byUserId).decidedAt(Instant.now());
+        if (closedRemain > 0) ob.fromOwnerType(OwnerType.KASSA).fromOwnerId(kassaId);
+        else ob.toOwnerType(OwnerType.KASSA).toOwnerId(kassaId);
+        opRepo.save(ob.build());
     }
 }

@@ -127,6 +127,12 @@ public class SubmissionService {
     public Operation directCollect(Long kassaId, MoneyType mt, long amount,
                                    AppUser by, String topshirgan, java.time.LocalDate date) {
         if (amount <= 0) throw new BusinessException("Summa noldan katta bo'lishi kerak");
+        // KLIK siyosati: buxgalteriya klik pulini QABUL QILMAYDI — klik har bir
+        // kassaning o'z hisobida yig'iladi, hisobot esa «📤 Hisobot topshirish»
+        // orqali topshiriladi va qabul qilinadi.
+        if (mt == MoneyType.KLIK)
+            throw new BusinessException("Klik puli qabul qilinmaydi — u kassaning o'z hisobida "
+                    + "yig'iladi. Klik hisoboti kassir yuborgan hisobot orqali yopiladi.");
 
         if (mt != MoneyType.TERMINAL) {
             ledger.settle(OwnerType.KASSA, kassaId, mt, 0, amount);
@@ -187,20 +193,19 @@ public class SubmissionService {
     private Submission decide(Submission sub, AppUser by, long accNaqd, long accKlik, String comment) {
         Long kassaId = sub.getKassaId();
 
-        // Kassa: rezerv to'liq bo'shatiladi, faqat qabul qilingan qism ayriladi.
+        // Kassa NAQD: rezerv to'liq bo'shatiladi, faqat qabul qilingan qism ayriladi.
         if (sub.getNaqd() > 0)
             ledger.settle(OwnerType.KASSA, kassaId, MoneyType.NAQD, sub.getNaqd(), accNaqd);
+        // KLIK siyosati: klik puli BUXGALTERIYAGA O'TMAYDI — har bir kassa o'z klik
+        // hisobini o'zi jamlaydi. Hisobot qabulida faqat rezerv bo'shatiladi,
+        // kunlar «hisobot topshirilgan» deb qoplanadi, pul kassada qoladi.
         if (sub.getKlik() > 0)
-            ledger.settle(OwnerType.KASSA, kassaId, MoneyType.KLIK, sub.getKlik(), accKlik);
+            ledger.unreserve(OwnerType.KASSA, kassaId, MoneyType.KLIK, sub.getKlik());
 
-        // Buxgalteriya: qabul qilingan pul kiradi + TOPSHIRIQ operatsiyalari.
+        // Buxgalteriya: faqat NAQD kiradi + TOPSHIRIQ operatsiyasi.
         if (accNaqd > 0) {
             ledger.credit(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD, accNaqd);
             opRepo.save(topshiriqOp(sub, MoneyType.NAQD, accNaqd, by));
-        }
-        if (accKlik > 0) {
-            ledger.credit(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK, accKlik);
-            opRepo.save(topshiriqOp(sub, MoneyType.KLIK, accKlik, by));
         }
 
         // Kunlarni FIFO qoplash: eng eski kundan boshlab.

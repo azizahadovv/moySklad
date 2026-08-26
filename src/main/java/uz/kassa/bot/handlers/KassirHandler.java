@@ -38,6 +38,7 @@ public class KassirHandler {
     private final OperationRepo opRepo;
     private final uz.kassa.webapp.ExcelReportService excelReport;
     private final PermService permSvc;
+    private final uz.kassa.service.BalansService balansSvc;
 
     /* ============================ MATN ============================ */
 
@@ -66,6 +67,16 @@ public class KassirHandler {
             }
             case "🔁 O'tkazma" -> { trStart(u, s, chatId); yield true; }
             case "📤 Hisobot topshirish" -> { sbStart(u, s, chatId); yield true; }
+            case "💰 Баланс" -> {
+                if (u.getKassaId() == null) {
+                    sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan");
+                } else {
+                    sender.send(chatId, balansSvc.buildKassa(u.getKassaId(),
+                            names.owner(OwnerType.KASSA, u.getKassaId()),
+                            uz.kassa.service.BalansService.JAMI), balansKb());
+                }
+                yield true;
+            }
             case "🧾 Qarzlarim" -> { debts(u, chatId); yield true; }
             case "📜 Tarix" -> {
                 sender.send(chatId, "📜 <b>Tranzaksiyalar tarixi</b>\n\nDavrni tanlang:",
@@ -136,12 +147,26 @@ public class KassirHandler {
             }
             case "sd" -> sbCreate(u, s, arg, chatId, msgId);
             case "hp" -> historyPeriod(u, arg, chatId, msgId);
+            case "bl" -> {   // 💰 Баланс ko'rinishini almashtirish
+                if (u.getKassaId() == null) return true;
+                sender.edit(chatId, msgId, balansSvc.buildKassa(u.getKassaId(),
+                        names.owner(OwnerType.KASSA, u.getKassaId()),
+                        arg.isEmpty() ? 'j' : arg.charAt(0)), balansKb());
+            }
             default -> { return false; }
         }
         return true;
     }
 
     /* ============================ 📊 / 💰 ============================ */
+
+    /** 💰 Баланс ko'rinishlari orasida almashish tugmalari. */
+    private InlineKeyboardMarkup balansKb() {
+        return inline(List.of(irow(
+                btn("💵 Нақд", "k:bl:n"),
+                btn("📲 Клик", "k:bl:k"),
+                btn("💰 Жами", "k:bl:j"))));
+    }
 
     private void today(AppUser u, long chatId) {
         Long kid = u.getKassaId();
@@ -375,20 +400,35 @@ public class KassirHandler {
         List<DayRecord> days = dayRepo.findAllById(sub.getDayIds()).stream()
                 .sorted((a, b) -> a.getDate().compareTo(b.getDate())).toList();
         StringBuilder detail = new StringBuilder();
-        for (DayRecord d : days)
+        long rasxN = 0, rasxK = 0;
+        for (DayRecord d : days) {
             detail.append("• ").append(d.getDate().format(DF))
                   .append(" — Naqd ").append(fmt(d.remainNaqd()))
-                  .append(" · Click ").append(fmt(d.remainKlik())).append("\n");
+                  .append(" · Click ").append(fmt(d.remainKlik()));
+            if (d.getRasxodNaqd() + d.getRasxodKlik() > 0)
+                detail.append(" (💸 rasxod: ").append(fmt(d.getRasxodNaqd()))
+                      .append(" · ").append(fmt(d.getRasxodKlik())).append(")");
+            detail.append("\n");
+            rasxN += d.getRasxodNaqd();
+            rasxK += d.getRasxodKlik();
+        }
 
         InlineKeyboardMarkup kb = inline(List.of(
                 irow(btn("✅ To'liq qabul", "sb:f:" + sub.getId())),
                 irow(btn("🟡 Qisman qabul", "sb:p:" + sub.getId()),
-                     btn("❌ Rad etish", "sb:r:" + sub.getId()))));
+                     btn("❌ Rad etish", "sb:r:" + sub.getId())),
+                irow(btn("💸 Rasxod kiritish (kassa nomidan)", "sb:x:" + sub.getId()))));
         notify.toBuxgalteriya("📤 <b>Hisobot</b> #" + sub.getId() + " — <b>"
                 + esc(names.owner(OwnerType.KASSA, sub.getKassaId())) + "</b>\n"
                 + "Kassir: " + esc(u.getFullName()) + "\n\n" + detail
                 + "\nJami: Naqd <b>" + fmt(sub.getNaqd()) + "</b> · Click <b>"
-                + fmt(sub.getKlik()) + "</b> so'm", kb);
+                + fmt(sub.getKlik()) + "</b> so'm"
+                + (rasxN + rasxK > 0
+                    ? "\n💸 Kunlar rasxodi: Naqd <b>" + fmt(rasxN) + "</b> · Click <b>"
+                      + fmt(rasxK) + "</b> so'm"
+                    : "\n💸 Bu kunlarda rasxod kiritilmagan — kerak bo'lsa "
+                      + "«Rasxod kiritish» tugmasi orqali kassa nomidan kiriting.")
+                + "\nℹ️ Click summasi qabul qilinganda kassaning o'z hisobida qoladi.", kb);
 
         sender.edit(chatId, msgId, "✅ Hisobot #" + sub.getId() + " yuborildi ("
                 + sub.getDayIds().size() + " kun).\n"
