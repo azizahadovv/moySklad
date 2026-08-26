@@ -10,7 +10,9 @@ import uz.kassa.repo.OperationRepo;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Tizim yadrosi — LEDGER (TZ 5-bo'lim invariantlari):
@@ -502,5 +504,43 @@ public class LedgerService {
         if (closedRemain > 0) ob.fromOwnerType(OwnerType.KASSA).fromOwnerId(kassaId);
         else ob.toOwnerType(OwnerType.KASSA).toOwnerId(kassaId);
         opRepo.save(ob.build());
+    }
+
+    /* ==================== ✅ YAXLITLIK TEKSHIRUVI ==================== */
+
+    /** Balans qatoridagi nomuvofiqlik: saqlangan va operatsiyalardan qayta hisoblangan qiymat farq qiladi. */
+    public record Mismatch(OwnerType ownerType, Long ownerId, MoneyType moneyType, long expected, long actual) {
+        public long diff() { return actual - expected; }
+    }
+
+    /**
+     * Har bir balans qatorini TASDIQLANGAN operatsiyalar tarixidan qayta hisoblab,
+     * saqlangan Balance.amount bilan solishtiradi. Farq topilsa — o'sha qator
+     * qaytariladi (bo'sh ro'yxat — hammasi mos). TERMINAL balansda yuritilmaydi,
+     * shuning uchun hisobga olinmaydi.
+     */
+    @Transactional(readOnly = true)
+    public List<Mismatch> verifyIntegrity() {
+        Map<Balance.Key, Long> computed = new HashMap<>();
+        for (Operation o : opRepo.findAll()) {
+            if (o.getMoneyType() == MoneyType.TERMINAL || o.getStatus() != OpStatus.TASDIQLANGAN) continue;
+            long amt = o.getAmount();
+            if (o.getToOwnerType() != null)
+                computed.merge(new Balance.Key(o.getToOwnerType(), o.getToOwnerId(), o.getMoneyType()),
+                        amt, Long::sum);
+            if (o.getFromOwnerType() != null)
+                computed.merge(new Balance.Key(o.getFromOwnerType(), o.getFromOwnerId(), o.getMoneyType()),
+                        -amt, Long::sum);
+        }
+        List<Mismatch> issues = new java.util.ArrayList<>();
+        for (Balance b : balanceRepo.findAll()) {
+            if (b.getMoneyType() == MoneyType.TERMINAL) continue;
+            Balance.Key key = new Balance.Key(b.getOwnerType(), b.getOwnerId(), b.getMoneyType());
+            long expected = computed.getOrDefault(key, 0L);
+            if (expected != b.getAmount())
+                issues.add(new Mismatch(b.getOwnerType(), b.getOwnerId(), b.getMoneyType(),
+                        expected, b.getAmount()));
+        }
+        return issues;
     }
 }

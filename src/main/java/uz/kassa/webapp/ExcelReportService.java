@@ -125,8 +125,9 @@ public class ExcelReportService {
         Map<String, long[]> agg = new LinkedHashMap<>();   // nom -> [kn,kk,kt,cn,ck]
         if (only != null) agg.put(only.getName(), new long[5]);
         else {
-            for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) agg.put(k.getName(), new long[5]);
-            agg.put("Buxgalteriya", new long[5]);
+            for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+                if (!k.isCashless()) agg.put(k.getName(), new long[5]);
+            agg.put("Отдел Основной", new long[5]);
         }
 
         for (Operation o : ops) {
@@ -148,7 +149,7 @@ public class ExcelReportService {
         for (Map.Entry<String, long[]> e : agg.entrySet()) {
             long[] a = e.getValue();
             for (int i = 0; i < 5; i++) tot[i] += a[i];
-            boolean bux = e.getKey().equals("Buxgalteriya");
+            boolean bux = e.getKey().equals("Отдел Основной");
             OwnerType ot = bux ? OwnerType.BUXGALTERIYA : OwnerType.KASSA;
             Long oid = bux ? LedgerService.BUX_ID :
                     kassaRepo.findByActiveTrueOrderByIdAsc().stream()
@@ -243,7 +244,7 @@ public class ExcelReportService {
     /* ---------------- yordamchi ---------------- */
 
     private String ownerName(OwnerType ot, Long oid) {
-        return ot == OwnerType.BUXGALTERIYA ? "Buxgalteriya" : names.owner(ot, oid);
+        return ot == OwnerType.BUXGALTERIYA ? "Отдел Основной" : names.owner(ot, oid);
     }
     private void row(Sheet sh, int idx, CellStyle st, Object... vals) {
         Row r = sh.createRow(idx);

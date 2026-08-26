@@ -32,6 +32,7 @@ public class Jobs {
     private final KassaRepo kassaRepo;
     private final DayRepo dayRepo;
     private final NotificationService notify;
+    private final uz.kassa.bot.NameService names;
 
     /** Tez sinxron — realtime'ga yaqin: har 30 soniyada yangi/o'zgargan hujjatlar. */
     @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT15S")
@@ -68,6 +69,37 @@ public class Jobs {
             reminderService.tick();
         } catch (Exception e) {
             log.warn("Eslatma tick xatosi: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * ✅ Balans yaxlitligi: har bir balans qatorini operatsiyalar tarixidan qayta
+     * hisoblab, saqlangan qiymat bilan solishtiradi — kod xatosi yoki qo'lda
+     * (SQL) tuzatishdan qolgan nomuvofiqlikni ushlab, buxgalteriya/SuperAdmin'ga
+     * xabar beradi. Mos bo'lsa — jim (spam bo'lmasin).
+     */
+    @Scheduled(fixedDelayString = "PT30M", initialDelayString = "PT3M")
+    public void ledgerIntegrity() {
+        try {
+            List<LedgerService.Mismatch> issues = ledger.verifyIntegrity();
+            if (issues.isEmpty()) return;
+            StringBuilder sb = new StringBuilder("⚠️ <b>Balans nomuvofiqligi topildi!</b>\n"
+                    + "Saqlangan qiymat operatsiyalar tarixiga mos kelmayapti:\n");
+            for (LedgerService.Mismatch m : issues) {
+                String owner = m.ownerType() == OwnerType.BUXGALTERIYA
+                        ? "Отдел Основной" : names.owner(m.ownerType(), m.ownerId());
+                String mt = switch (m.moneyType()) {
+                    case KLIK -> "📲 Klik"; case TERMINAL -> "💳 Terminal"; default -> "💵 Naqd";
+                };
+                sb.append("\n<b>").append(TextUtil.esc(owner)).append("</b> (").append(mt).append("): ")
+                  .append("kutilgan ").append(TextUtil.fmt(m.expected()))
+                  .append(" · haqiqiy ").append(TextUtil.fmt(m.actual()))
+                  .append(" · farq <b>").append(TextUtil.fmt(m.diff())).append("</b> so'm");
+            }
+            notify.toRole(Role.SUPERADMIN, sb.toString(), null);
+            log.warn("Balans nomuvofiqligi: {} ta qator", issues.size());
+        } catch (Exception e) {
+            log.error("Balans tekshiruvi xatosi: {}", e.getMessage(), e);
         }
     }
 

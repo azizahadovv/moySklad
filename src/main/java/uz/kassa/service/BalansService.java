@@ -57,30 +57,34 @@ public class BalansService {
     private String allNaqd() {
         LocalDate today = ledger.today();
         Balance bn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD);
-        StringBuilder sb = header("💵 <b>БАЛАНС — НАҚД</b>");
-        sb.append("\n🏦 <b>Отдел основной</b>: <b>").append(fmt(bn.getAmount())).append("</b> so'm\n");
+
+        StringBuilder body = new StringBuilder();
+        body.append("\n🏦 <b>Отдел основной</b>\nФакт: <b>").append(fmt(bn.getAmount())).append("</b> so'm\n");
 
         long sum = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
             List<DayRecord> days = openDays(k.getId()).stream()
                     .filter(d -> d.remainNaqd() != 0).toList();
-            sb.append("\n🏪 <b>").append(esc(k.getName())).append("</b>\n");
+            body.append("\n🏪 <b>").append(esc(k.getName())).append("</b>\n");
             if (days.isEmpty()) {
-                sb.append("✅ Topshirilmagan naqd yo'q\n");
+                body.append("✅ Topshirilmagan naqd yo'q\n");
                 continue;
             }
             long dn = 0;
             for (DayRecord d : days) {
                 dn += d.remainNaqd();
-                sb.append("• ").append(d.getDate().format(DF))
+                body.append("• ").append(d.getDate().format(DF))
                   .append(d.getDate().equals(today) ? " (bugun)" : "")
                   .append(" — <b>").append(fmt(d.remainNaqd())).append("</b> so'm\n");
             }
             sum += dn;
-            sb.append("⏳ Jami: <b>").append(fmt(dn)).append("</b> so'm\n");
+            body.append("⏳ Jami: <b>").append(fmt(dn)).append("</b> so'm\n");
         }
-        sb.append("\n➕ <b>УМУМИЙ НАҚД</b> (осн. + kassalardagi topshirilmagan): <b>")
-          .append(fmt(bn.getAmount() + sum)).append("</b> so'm");
+
+        StringBuilder sb = header("💵 <b>БАЛАНС — НАҚД</b>");
+        sb.append("\n➕ <b>УМУМИЙ НАҚД</b>  <b>").append(fmt(bn.getAmount() + sum)).append("</b> so'm\n");
+        sb.append(body);
         return sb.toString();
     }
 
@@ -96,6 +100,7 @@ public class BalansService {
 
         long sumBal = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
             long bal = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
             sumBal += bal;
             List<DayRecord> days = openDays(k.getId()).stream()
@@ -125,8 +130,10 @@ public class BalansService {
         Balance bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
         StringBuilder sb = header("💰 <b>БАЛАНС — ЖАМИ</b>");
         sb.append("\n🏦 <b>Отдел основной</b>: 💵 <b>").append(fmt(bn.getAmount()))
-          .append("</b> · 📲 <b>").append(fmt(bk.getAmount()))
-          .append("</b> = <b>").append(fmt(bn.getAmount() + bk.getAmount())).append("</b> so'm\n");
+          .append("</b> so'm\n");
+        if (bk.getAmount() != 0)
+            sb.append("<i>⚠️ Отдел основнойда ").append(fmt(bk.getAmount()))
+              .append(" so'm klik ham bor — otdelga bog'lanmagan hujjat, tekshiring.</i>\n");
         long[] osn = osnovnoyToday(today);
         if (osn[0] > 0 || osn[1] > 0)
             sb.append("🟢 Bugungi kirim: <b>").append(fmt(osn[0]))
@@ -135,6 +142,7 @@ public class BalansService {
 
         long sumNaqd = 0, sumKlikBal = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
             long dn = openDays(k.getId()).stream().mapToLong(DayRecord::remainNaqd).sum();
             long bal = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
             sumNaqd += dn;

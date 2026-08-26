@@ -420,7 +420,7 @@ public class SheetsSyncService {
 
     private String owner(OwnerType t, Long id) {
         if (t == null) return "";
-        return t == OwnerType.BUXGALTERIYA ? "Buxgalteriya" : names.owner(t, id);
+        return t == OwnerType.BUXGALTERIYA ? "Отдел Основной" : names.owner(t, id);
     }
 
     private void pushOperatsiyalar() throws Exception {
@@ -448,6 +448,7 @@ public class SheetsSyncService {
                 "Terminal (bugun)", "JAMI"));
         long tn = 0, tk = 0, tt = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
             var n = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD);
             var kl = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK);
             long term = dayRepo.findByKassaIdAndDate(k.getId(), ledger.today())
@@ -459,7 +460,7 @@ public class SheetsSyncService {
         }
         var bn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD);
         var bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
-        rows.add(List.of("Buxgalteriya", bn.getAmount(), bn.getReserved(),
+        rows.add(List.of("Отдел Основной", bn.getAmount(), bn.getReserved(),
                 bk.getAmount(), bk.getReserved(), 0, bn.getAmount() + bk.getAmount()));
         long ck = 0;
         for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {

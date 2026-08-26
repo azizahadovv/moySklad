@@ -23,6 +23,11 @@ public class Kassa {
     @Builder.Default
     private boolean active = true;
 
+    /** Haqiqiy naqd kassa emas (masalan «Отдел Али» — faqat kontragent xodimlari guruhi).
+     *  Pul hisobotlarida (Бугунги тушум, Баланс) ko'rsatilmaydi. */
+    @Builder.Default
+    private boolean cashless = false;
+
     @Builder.Default
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();

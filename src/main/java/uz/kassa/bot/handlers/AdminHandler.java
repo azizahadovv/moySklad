@@ -98,7 +98,7 @@ public class AdminHandler {
             case "💰 БУГУНГИ ТУШУМ" -> { tushumAll(s, chatId); return true; }
             case "💰 Баланс" -> {
                 syncService.syncIfStale(45);
-                sendContent(s, chatId, balansSvc.buildAll(uz.kassa.service.BalansService.JAMI),
+                sendContent(s, chatId, balansSvc.buildAll(uz.kassa.service.BalansService.NAQD),
                         balansKb());
                 return true;
             }
@@ -291,7 +291,8 @@ public class AdminHandler {
 
     private List<String> kassaLabels() {
         List<String> out = new ArrayList<>();
-        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) out.add("🏪 " + k.getName());
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+            if (!k.isCashless()) out.add("🏪 " + k.getName());
         return out;
     }
 
@@ -1252,6 +1253,7 @@ public class AdminHandler {
                 + ledger.today().format(DF) + "\n");
         long tn = 0, tk = 0, tt = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
             DayRecord d = dayRepo.findByKassaIdAndDate(k.getId(), ledger.today()).orElse(null);
             long n = d == null ? 0 : d.getPrixodNaqd();
             long kl = d == null ? 0 : d.getPrixodKlik();

@@ -73,7 +73,7 @@ public class KassirHandler {
                 } else {
                     sender.send(chatId, balansSvc.buildKassa(u.getKassaId(),
                             names.owner(OwnerType.KASSA, u.getKassaId()),
-                            uz.kassa.service.BalansService.JAMI), balansKb());
+                            uz.kassa.service.BalansService.NAQD), balansKb());
                 }
                 yield true;
             }

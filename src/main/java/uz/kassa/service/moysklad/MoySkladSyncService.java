@@ -533,7 +533,7 @@ public class MoySkladSyncService {
                         && !ctx.dupGroups().contains(e.groupId())) {
                     String oldName = ownerName(op);
                     if (ledger.rerouteRasxod(op, wantOt, wantOid)) {
-                        String newName = wantOt == OwnerType.BUXGALTERIYA ? "Buxgalteriya"
+                        String newName = wantOt == OwnerType.BUXGALTERIYA ? "Отдел Основной"
                                 : kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
                         if (loudFix(e.date()))
                             notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — chiqim ko'chirildi:\n"
@@ -560,7 +560,7 @@ public class MoySkladSyncService {
                 notify.toBuxgalteriya(text, null);
             } else {
                 String otdel = ctx.groupNames().getOrDefault(e.groupId(), "");
-                notify.toBuxgalteriya("💸 MoySklad rasxodi (Расходный ордер): <b>Buxgalteriya</b>"
+                notify.toBuxgalteriya("💸 MoySklad rasxodi (Расходный ордер): <b>Отдел Основной</b>"
                         + (otdel.isEmpty() ? "" : " · " + TextUtil.esc(otdel))
                         + " — <b>" + TextUtil.fmt(sum) + "</b> so'm (💵 Naqd)"
                         + "\n" + docInfo(e)
@@ -628,7 +628,7 @@ public class MoySkladSyncService {
                         && !ctx.dupGroups().contains(e.groupId())) {
                     String oldName = ownerName(op);
                     if (ledger.reroutePrixod(op, wantOt, wantOid)) {
-                        String newName = wantOt == OwnerType.BUXGALTERIYA ? "Buxgalteriya"
+                        String newName = wantOt == OwnerType.BUXGALTERIYA ? "Отдел Основной"
                                 : kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
                         if (loudFix(e.date()))
                             notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — kirim ko'chirildi:\n"
@@ -654,7 +654,7 @@ public class MoySkladSyncService {
                 notify.toBuxgalteriya(text, null);
             } else {
                 String otdel = ctx.groupNames().getOrDefault(e.groupId(), "");
-                notify.toBuxgalteriya("💰 MoySklad kirim: <b>Buxgalteriya</b>"
+                notify.toBuxgalteriya("💰 MoySklad kirim: <b>Отдел Основной</b>"
                         + (otdel.isEmpty() ? "" : " · " + TextUtil.esc(otdel))
                         + " — <b>" + TextUtil.fmt(sum) + "</b> so'm (" + mtLabel + ")"
                         + "\n" + docInfo(e), null);
@@ -688,7 +688,7 @@ public class MoySkladSyncService {
     private String ownerName(Operation op) {
         OwnerType ot = op.getType() == OpType.PRIXOD ? op.getToOwnerType() : op.getFromOwnerType();
         Long oid = op.getType() == OpType.PRIXOD ? op.getToOwnerId() : op.getFromOwnerId();
-        if (ot == OwnerType.BUXGALTERIYA) return "Buxgalteriya";
+        if (ot == OwnerType.BUXGALTERIYA) return "Отдел Основной";
         return kassaRepo.findById(oid).map(Kassa::getName).orElse("Kassa #" + oid);
     }
 
@@ -718,7 +718,7 @@ public class MoySkladSyncService {
     private void checkNegative(OwnerType ot, Long oid, String sabab) {
         long bal = ledger.view(ot, oid, MoneyType.NAQD).getAmount();
         if (bal < 0) {
-            String name = ot == OwnerType.BUXGALTERIYA ? "Buxgalteriya"
+            String name = ot == OwnerType.BUXGALTERIYA ? "Отдел Основной"
                     : kassaRepo.findById(oid).map(Kassa::getName).orElse("Kassa #" + oid);
             notify.toBuxgalteriya("⚠️ " + sabab + " natijasida <b>" + TextUtil.esc(name)
                     + "</b> NAQD balansi manfiy: " + TextUtil.fmt(bal)

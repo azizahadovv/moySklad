@@ -139,6 +139,7 @@ public class BuxgalterHandler {
         StringBuilder sb = new StringBuilder("🏪 <b>Kassalar holati</b>\n");
         long totN = 0, totK = 0, totT = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;
             Balance n = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD);
             Balance kl = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK);
             long term = dayRepo.findByKassaIdAndDate(k.getId(), ledger.today())
@@ -158,7 +159,7 @@ public class BuxgalterHandler {
         }
         Balance bn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD);
         Balance bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
-        sb.append("\n🏦 <b>Buxgalteriya</b>\n  💵 Naqd: ").append(fmt(bn.getAmount()))
+        sb.append("\n🏦 <b>Отдел Основной</b>\n  💵 Naqd: ").append(fmt(bn.getAmount()))
           .append("\n  📲 Click: ").append(fmt(bk.getAmount()))
           .append("\n  ➕ <b>Jami: ").append(fmt(bn.getAmount() + bk.getAmount())).append("</b> so'm");
         sb.append("\n\n💰 <b>UMUMIY</b> (kassalar + buxgalteriya)")
@@ -390,7 +391,7 @@ public class BuxgalterHandler {
             case QARZ_QAYTARISH -> " (qarz qaytarish)";
         };
         notify.toKassa(toId, "🔁 <b>Sizga o'tkazma</b> #" + op.getId() + kindTxt + "\n\n"
-                + "Kimdan: <b>Buxgalteriya</b>\n"
+                + "Kimdan: <b>Отдел Основной</b>\n"
                 + "Summa: <b>" + fmt(amt) + "</b> so'm (" + mtLabel(mt) + ")\n"
                 + (comment.isEmpty() ? "" : "Izoh: " + esc(comment) + "\n")
                 + "\nPulni qabul qilganingizni tasdiqlang:",
