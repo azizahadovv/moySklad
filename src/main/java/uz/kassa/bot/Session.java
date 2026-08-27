@@ -26,6 +26,7 @@ public class Session {
         ADM_LB_NAME,
         // MoySklad API kalitini kiritish
         ADM_MS_TOKEN,
+        ADM_CG_ID,
         // 🤝 Kontragent (qarz daftari) oqimlari
         KG_SEARCH, KG_MN_NAME, KG_MN_INFO, KG_SUM, KG_IZOH,
         KG_AU_TGID, KG_AU_NAME, KG_RN_NAME, KG_PAY_AMOUNT

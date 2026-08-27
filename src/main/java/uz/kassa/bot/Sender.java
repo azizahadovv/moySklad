@@ -147,6 +147,39 @@ public class Sender {
         http.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
     }
 
+    private volatile Long cachedBotId;
+
+    /** Botning o'z Telegram ID si (GetChatMember uchun kerak) — bir marta olinib keshlanadi. */
+    private long botId() throws TelegramApiException {
+        Long id = cachedBotId;
+        if (id == null) cachedBotId = id = bot().execute(
+                new org.telegram.telegrambots.meta.api.methods.GetMe()).getId();
+        return id;
+    }
+
+    /** Chat haqida ma'lumot (guruh/kanal ID to'g'riligini va nomini tekshirish uchun). null — topilmadi/ruxsat yo'q. */
+    public org.telegram.telegrambots.meta.api.objects.Chat getChat(long chatId) {
+        try {
+            return bot().execute(org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat
+                    .builder().chatId(String.valueOf(chatId)).build());
+        } catch (TelegramApiException e) {
+            log.debug("getChat ({}): {}", chatId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Botning shu chatdagi holati: "administrator", "member", "left", "kicked"... null — aniqlanmadi. */
+    public String botStatusInChat(long chatId) {
+        try {
+            var cm = bot().execute(org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember
+                    .builder().chatId(String.valueOf(chatId)).userId(botId()).build());
+            return cm.getStatus();
+        } catch (TelegramApiException e) {
+            log.debug("getChatMember ({}): {}", chatId, e.getMessage());
+            return null;
+        }
+    }
+
     public void answer(String callbackId) {
         try {
             bot().execute(AnswerCallbackQuery.builder().callbackQueryId(callbackId).build());

@@ -49,6 +49,8 @@ public class AdminHandler {
     private final uz.kassa.repo.SubmissionRepo subRepo;
     private final uz.kassa.repo.CategoryRepo categoryRepo;
     private final uz.kassa.service.BalansService balansSvc;
+    private final uz.kassa.service.SettingsService settings;
+    private final uz.kassa.scheduler.Jobs jobs;
 
     private static final java.time.format.DateTimeFormatter DF =
             java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy");
@@ -76,6 +78,7 @@ public class AdminHandler {
             case ADM_CK_SANA -> { ckSana(u, s, text, chatId); return true; }
             case ADM_LB_NAME -> { labelName(s, text, chatId); return true; }
             case ADM_MS_TOKEN -> { msTokenSave(u, s, text, chatId); return true; }
+            case ADM_CG_ID -> { cgIdSave(u, s, text, chatId); return true; }
             default -> { }
         }
 
@@ -163,6 +166,28 @@ public class AdminHandler {
                         + "MoySklad → Sozlamalar → Tokenlar bo'limidan olinadi.\n"
                         + "Bekor qilish uchun «-» yuboring.");
             }
+            case "cg" -> clickGroupMenu(s, chatId, msgId);
+            case "cge" -> {
+                s.state = Session.State.ADM_CG_ID;
+                sender.edit(chatId, msgId, "📲 <b>Click гуруҳи</b>\n\n"
+                        + "1) Botni (@" + esc(props.getBot().getUsername()) + ") kerakli guruh/kanalga "
+                        + "ADMIN qilib qo'shing.\n"
+                        + "2) Shu guruhning ID sini yuboring (odatda manfiy son, mas. -1001234567890).\n\n"
+                        + "<i>Guruh ID sini bilmasangiz — botni guruhga qo'shib, guruhda istalgan "
+                        + "xabar yozing, keyin @userinfobot yoki shunga o'xshash vosita bilan ID'ni "
+                        + "toping.</i>\n\nBekor qilish uchun «-» yuboring.");
+            }
+            case "cgt" -> {
+                sender.edit(chatId, msgId, "⏳ Test yuborilmoqda...");
+                jobs.clickHourlyReport();
+                clickGroupMenu(s, chatId, msgId);
+            }
+            case "cgx" -> {
+                settings.set(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY, "");
+                audit.log(u.getId(), "CLICK_GROUP_OCHIRILDI", "settings", null,
+                        u.getFullName() + " Click guruhini o'chirdi");
+                clickGroupMenu(s, chatId, msgId);
+            }
             case "gu" -> auPick(s, arg, chatId, msgId);
             case "me" -> auEmp(s, arg, chatId, msgId);
             case "rl" -> auRole(s, arg, chatId, msgId);
@@ -205,7 +230,7 @@ public class AdminHandler {
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
                     "🛠 Корректировка", "📋 Аудит",
                     "🏷 Тугма номлари", "🔑 MoySklad API", "👁 Ҳуқуқлар",
-                    "♻️ Нол бошлаш");
+                    "📲 Click гуруҳи", "♻️ Нол бошлаш");
     private static final List<String> STAT_MENU =
             List.of("🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
                     "👥 Фойдаланувчилар умумий",
@@ -383,6 +408,7 @@ public class AdminHandler {
                     case "📋 Аудит" -> auditMenu(s, chatId, 0);
                     case "🏷 Тугма номлари" -> labelList(s, chatId, 0);
                     case "🔑 MoySklad API" -> msToken(s, chatId, 0);
+                    case "📲 Click гуруҳи" -> clickGroupMenu(s, chatId, 0);
                     case "👁 Ҳуқуқлар" -> {
                         if (!isCreator(u)) {
                             sendContent(s, chatId, "⚠️ Ҳуқуқлар bo'limini faqat asosiy "
@@ -1010,9 +1036,9 @@ public class AdminHandler {
         show(chatId, msgId, "⚙️ <b>Настройка</b>", List.of(
                 irow(btn("🏪 Касса", "a:p:sk")),
                 irow(btn("👥 Фойдаланувчилар", "a:p:su")),
-                irow(btn("🧾 Расходлар", "a:rxl"), btn("📋 Аудит", "a:audm")),
+                irow(btn("📋 Аудит", "a:audm")),
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
-                irow(btn("👁 Ҳуқуқлар", "a:prm")),
+                irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📲 Click гуруҳи", "a:cg")),
                 irow(bk("a:p:main"))));
     }
 
@@ -1749,6 +1775,84 @@ public class AdminHandler {
                     + "Kalit to'g'ri bo'lsa, sinxron o'zi tiklanadi. Holatni "
                     + "🔑 MoySklad API bo'limidan qayta tekshiring.");
         }
+    }
+
+    /* ==================================================================
+     * 📲 CLICK ГУРУҲИ — har soatda Click qoldiqlari yuboriladigan
+     * guruh/kanal. ID kiritilganda bot shu chatda ADMIN/A'ZO ekanligi
+     * darhol tekshiriladi — noto'g'ri ID yoki bot qo'shilmagan chat
+     * sababli keyinchalik jim ishlamay qolmasligi uchun.
+     * ================================================================== */
+
+    private void clickGroupMenu(Session s, long chatId, int msgId) {
+        String idStr = settings.get(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY).orElse("").trim();
+        String status;
+        if (idStr.isBlank()) {
+            status = "🔴 <b>Belgilanmagan</b>";
+        } else {
+            long gid = 0;
+            try { gid = Long.parseLong(idStr); } catch (NumberFormatException ignored) { }
+            var chat = gid != 0 ? sender.getChat(gid) : null;
+            String botStat = gid != 0 ? sender.botStatusInChat(gid) : null;
+            boolean canPost = "administrator".equals(botStat) || "member".equals(botStat)
+                    || "creator".equals(botStat);
+            String name = chat != null ? (chat.getTitle() != null ? chat.getTitle() : chat.getUserName()) : null;
+            status = canPost
+                    ? "🟢 <b>" + esc(name != null ? name : ("ID " + idStr)) + "</b> (ID: <code>" + idStr + "</code>)"
+                    : "🟠 ID: <code>" + idStr + "</code> — bot bu chatda topilmadi yoki chiqarib "
+                            + "yuborilgan, qayta tekshiring/qo'shing.";
+        }
+        String text = "📲 <b>Click гуруҳи</b>\n\n"
+                + "Har soatning boshida (00 daqiqada) shu guruh/kanalga barcha Click "
+                + "hisoblarining MoySklad bilan tenglashtirilgan qoldig'i yuboriladi.\n\n"
+                + "Holat: " + status;
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("✏️ ID kiritish/o'zgartirish", "a:cge")));
+        if (!idStr.isBlank()) {
+            rows.add(irow(btn("🧪 Hozir test yuborish", "a:cgt")));
+            rows.add(irow(btn("🗑 O'chirish", "a:cgx")));
+        }
+        rows.add(irow(bk("a:p:set")));
+        InlineKeyboardMarkup kb = inline(rows);
+        if (msgId > 0) sender.edit(chatId, msgId, text, kb);
+        else sendContent(s, chatId, text, kb);
+    }
+
+    private void cgIdSave(AppUser u, Session s, String text, long chatId) {
+        s.state = Session.State.IDLE;
+        if (text.equals("-")) {
+            sender.send(chatId, "❌ Bekor qilindi.");
+            clickGroupMenu(s, chatId, 0);
+            return;
+        }
+        long gid;
+        try {
+            gid = Long.parseLong(text.trim());
+        } catch (NumberFormatException e) {
+            s.state = Session.State.ADM_CG_ID;
+            sender.send(chatId, "⚠️ Bu raqamga o'xshamaydi. Guruh ID sini qaytadan yuboring "
+                    + "(masalan -1001234567890) yoki «-» bilan bekor qiling:");
+            return;
+        }
+        var chat = sender.getChat(gid);
+        String botStat = sender.botStatusInChat(gid);
+        boolean ok = chat != null && ("administrator".equals(botStat) || "member".equals(botStat)
+                || "creator".equals(botStat));
+        if (!ok) {
+            s.state = Session.State.ADM_CG_ID;
+            sender.send(chatId, "⚠️ Bu ID (<code>" + gid + "</code>) bilan chat topilmadi yoki "
+                    + "bot u yerga hali qo'shilmagan.\n\nAvval botni (@" + esc(props.getBot().getUsername())
+                    + ") shu guruhga qo'shing, so'ng ID ni qaytadan yuboring yoki «-» bilan bekor qiling:");
+            return;
+        }
+        settings.set(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY, String.valueOf(gid));
+        audit.log(u.getId(), "CLICK_GROUP_SET", "settings", null,
+                u.getFullName() + " Click guruhini belgiladi: " + gid);
+        String name = chat.getTitle() != null ? chat.getTitle() : chat.getUserName();
+        sender.send(chatId, "✅ <b>" + esc(name != null ? name : String.valueOf(gid))
+                + "</b> Click qoldiqlari guruhi sifatida saqlandi.\nHar soatning boshida shu yerga "
+                + "hisobot tushadi.");
+        clickGroupMenu(s, chatId, 0);
     }
 
     /* ==================================================================
