@@ -140,7 +140,6 @@ async function pageHome(el){
   if (ME.role === 'KASSIR'){
     h += menuBtn('📊 Bugungi holat', 'today')
        + menuBtn('💰 Balansim', 'mybalance')
-       + menuBtn('💸 Rasxod', 'rasxod')
        + menuBtn("🔁 O'tkazma", 'transfer')
        + menuBtn('📤 Hisobot topshirish', 'submit')
        + menuBtn('🧾 Qarzlarim', 'debts')
@@ -148,7 +147,6 @@ async function pageHome(el){
   } else {
     h += menuBtn('🏪 Kassalar holati', 'kassalar')
        + menuBtn('📥 Kutilayotganlar', 'pending')
-       + menuBtn("💸 Rasxod (o'zim)", 'rasxod')
        + menuBtn("🔁 O'tkazma", 'transfer')
        + menuBtn('🧾 Qarzlar registri', 'debts')
        + menuBtn('📜 Tarix', 'tarix')
@@ -262,64 +260,6 @@ async function pageMyBalance(el){
       <div class="total"><span>➕ Jami</span><span>${F(b.jami)} so'm</span></div></div>`;
   el.innerHTML = h || '<div class="empty">Balans yo\'q</div>';
 }
-
-/* ================= 💸 RASXOD (ketma-ket wizard) ================= */
-async function pageRasxod(el){
-  flow.step = flow.step || 1;
-  const title = ME.role === 'KASSIR' ? '💸 Rasxod so\'rovi' : '💸 Buxgalteriya rasxodi';
-  if (flow.step === 1){
-    el.innerHTML = `<div class="card"><div class="step">1-qadam / 4</div><b>${title}</b>
-      <div class="muted" style="margin:4px 0 8px">Pul turini tanlang:</div>
-      <div class="btns">
-        <button class="plain" onclick="flow.mt='NAQD';flow.step=2;render()">💵 Naqd</button>
-        <button class="plain" onclick="flow.mt='KLIK';flow.step=2;render()">📲 Click</button>
-      </div></div>`;
-  } else if (flow.step === 2){
-    el.innerHTML = `<div class="card"><div class="step">2-qadam / 4 · ${M(flow.mt)}</div>
-      <b>Summani kiriting (so'm):</b>
-      <input class="txt" id="amt" type="number" min="1" placeholder="Masalan: 500000" autofocus>
-      <div class="btns"><button class="primary" onclick="
-        const v=+document.getElementById('amt').value;
-        if(!v||v<=0){alertTg('Musbat summa kiriting');return;}
-        flow.amount=v;flow.step=3;render()">Davom etish ➡️</button></div></div>`;
-  } else if (flow.step === 3){
-    CATS = await api('/categories');
-    el.innerHTML = `<div class="card"><div class="step">3-qadam / 4 · ${M(flow.mt)} · ${F(flow.amount)} so'm</div>
-      <b>Kategoriyani tanlang:</b>
-      <div class="menu" style="margin-top:8px">
-        ${CATS.map((c,i)=>`<button onclick="pickCat(${i})">${esc(c.name)}</button>`).join('')}
-        <button class="wide" onclick="pickCat(-1)">➖ Kategoriyasiz</button>
-      </div></div>`;
-  } else {
-    el.innerHTML = `<div class="card"><div class="step">4-qadam / 4</div>
-      <b>Izoh (shart emas):</b>
-      <input class="txt" id="cmt" placeholder="Izoh yozish shart emas">
-      <div class="card" style="background:var(--bg)">
-        ${M(flow.mt)} · <b>${F(flow.amount)}</b> so'm${flow.catName?` · ${esc(flow.catName)}`:''}
-        ${ME.role==='KASSIR'?"<div class='muted'>Buxgalter tasdiqlagach balansdan yechiladi</div>":''}
-      </div>
-      <div class="btns"><button class="ok" id="go" onclick="doRasxod()">✅ Yuborish</button></div>
-      <div id="msg"></div></div>`;
-  }
-}
-let CATS = [];
-window.pickCat = i => {
-  if (i < 0){ flow.catId = null; flow.catName = ''; }
-  else { flow.catId = CATS[i].id; flow.catName = CATS[i].name; }
-  flow.step = 4; render();
-};
-window.doRasxod = async ()=>{
-  const b = document.getElementById('go'); b.disabled = true;
-  try {
-    const r = await api('/rasxod-create', {method:'POST', body: JSON.stringify({
-      mt: flow.mt, amount: flow.amount, categoryId: flow.catId,
-      comment: document.getElementById('cmt').value.trim()})});
-    document.getElementById('msg').innerHTML =
-      `<div class="okmsg">✅ ${r.pending ? 'So\'rov #'+r.id+' buxgalterga yuborildi — tasdiqni kuting'
-                                        : 'Rasxod #'+r.id+' bajarildi'}</div>`;
-    setTimeout(home, 1600);
-  } catch(e){ b.disabled = false; document.getElementById('msg').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-};
 
 /* ================= 🔁 O'TKAZMA (ketma-ket wizard) ================= */
 async function pageTransfer(el){
@@ -493,13 +433,6 @@ async function pageTarix(el){
 async function pagePending(el){
   const p = await api('/pending');
   let h = '';
-  if (p.rasxod.length) h += `<div class="sect">💸 Rasxod so'rovlari</div>`;
-  for (const r of p.rasxod)
-    h += `<div class="card"><div class="row"><b>#${r.id} · ${esc(r.from)}</b><span class="big">${F(r.amount)}</span></div>
-      <div class="muted">${M(r.mt)} · ${dd(r.date)}${r.kassir?` · ${esc(r.kassir)}`:''}</div>
-      ${r.comment?`<div class="muted">${esc(r.comment)}</div>`:''}
-      <div class="btns"><button class="ok" onclick="decide('rasxod',${r.id},'approve')">✅ Tasdiqlash</button>
-        <button class="no" onclick="askReason('rasxod',${r.id})">❌ Rad</button></div></div>`;
   if (p.transfer.length) h += `<div class="sect">🔁 O'tkazmalar</div>`;
   for (const t of p.transfer)
     h += `<div class="card"><div class="row"><b>#${t.id} · ${esc(t.from)} dan</b><span class="big">${F(t.amount)}</span></div>
@@ -707,7 +640,7 @@ async function reallyDeact(id){
 const PAGES = {
   home: pageHome, kassalar: pageKassalar, profil: pageProfil,
   today: pageToday, mybalance: pageMyBalance,
-  rasxod: pageRasxod, transfer: pageTransfer, submit: pageSubmit,
+  transfer: pageTransfer, submit: pageSubmit,
   debts: pageDebts, tarix: pageTarix, pending: pagePending, excel: pageExcel,
   adduser: pageAddUser, addkassa: pageAddKassa, initbal: pageInitBal, users: pageUsers,
 };

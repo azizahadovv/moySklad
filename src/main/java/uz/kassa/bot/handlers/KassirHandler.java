@@ -28,7 +28,6 @@ public class KassirHandler {
     private final NameService names;
     private final NotificationService notify;
     private final LedgerService ledger;
-    private final RasxodService rasxodService;
     private final TransferService transferService;
     private final SubmissionService submissionService;
     private final CategoryRepo categoryRepo;
@@ -45,8 +44,6 @@ public class KassirHandler {
     public boolean onText(AppUser u, Session s, String text, long chatId) {
         // FSM: matn kutilayotgan holatlar
         switch (s.state) {
-            case RX_AMT -> { rxAmount(u, s, text, chatId); return true; }
-            case RX_CMT -> { rxFinish(u, s, text, chatId); return true; }
             case TR_AMT -> { trAmount(u, s, text, chatId); return true; }
             case TR_CMT -> { trFinish(u, s, text, chatId); return true; }
             default -> { }
@@ -60,11 +57,6 @@ public class KassirHandler {
             case "📊 КАССАМ" -> { knavPanel(u, s, chatId); yield true; }
             case "💰 БУГУНГИ ТУШУМ", "📊 Bugungi holat" -> { today(u, chatId); yield true; }
             case "💰 Balansim" -> { balance(u, chatId); yield true; }
-            case "💸 Rasxod" -> {
-                s.reset(); s.state = Session.State.RX_MT;
-                sender.send(chatId, "💸 <b>Rasxod so'rovi</b>\n\nPul turini tanlang:", mtChoice("k:mt"));
-                yield true;
-            }
             case "🔁 O'tkazma" -> { trStart(u, s, chatId); yield true; }
             case "📤 Hisobot topshirish" -> { sbStart(u, s, chatId); yield true; }
             case "💰 Баланс" -> {
@@ -100,23 +92,6 @@ public class KassirHandler {
         String arg = p.length > 2 ? p[2] : "";
 
         switch (cmd) {
-            case "mt" -> {   // rasxod: pul turi
-                if (s.state != Session.State.RX_MT) return true;
-                s.data.put("mt", MoneyType.valueOf(arg));
-                s.state = Session.State.RX_AMT;
-                sender.edit(chatId, msgId, "💸 Rasxod — " + mtLabel(MoneyType.valueOf(arg))
-                        + "\n\nSummani kiriting (so'm):");
-            }
-            case "cat" -> {  // rasxod: kategoriya
-                if (s.state != Session.State.RX_CAT) return true;
-                long catId = Long.parseLong(arg);
-                String catName = categoryRepo.findById(catId).map(Category::getName).orElse("?");
-                s.data.put("cat", catId);
-                s.data.put("catName", catName);
-                s.state = Session.State.RX_CMT;
-                sender.edit(chatId, msgId, "Kategoriya: <b>" + esc(catName) + "</b>\n\n"
-                        + "Izoh kiriting (shart emas — «-» yuboring):");
-            }
             case "tg" -> {   // o'tkazma: qabul qiluvchi
                 if (s.state != Session.State.TR_TGT) return true;
                 if (arg.equals("B")) {
@@ -213,52 +188,6 @@ public class KassirHandler {
                 + (k.getReserved() > 0 ? " (band: " + fmt(k.getReserved()) + ")" : "") + "\n\n"
                 + "Mavjud (band qilinmagan): Naqd <b>" + fmt(n.available())
                 + "</b> · Click <b>" + fmt(k.available()) + "</b>");
-    }
-
-    /* ============================ 💸 RASXOD ============================ */
-
-    private void rxAmount(AppUser u, Session s, String text, long chatId) {
-        long amt = parseAmount(text);
-        if (amt <= 0) { sender.send(chatId, "⚠️ Summani raqamda kiriting, masalan: 150000"); return; }
-        MoneyType mt = (MoneyType) s.data.get("mt");
-        long avail = ledger.view(OwnerType.KASSA, u.getKassaId(), mt).available();
-        if (amt > avail) {
-            sender.send(chatId, "⚠️ Mavjud qoldiq yetarli emas.\nMavjud: <b>" + fmt(avail)
-                    + "</b> so'm (" + mtLabel(mt) + ")");
-            return;
-        }
-        s.data.put("amt", amt);
-        s.state = Session.State.RX_CAT;
-
-        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        for (Category c : categoryRepo.findByActiveTrueOrderByIdAsc())
-            rows.add(irow(btn(c.getName(), "k:cat:" + c.getId())));
-        rows.add(irow(btn("❌ Bekor", "cx")));
-        sender.send(chatId, "Summa: <b>" + fmt(amt) + "</b> so'm\n\nKategoriyani tanlang:", inline(rows));
-    }
-
-    private void rxFinish(AppUser u, Session s, String text, long chatId) {
-        String comment = text.equals("-") ? "" : text;
-        MoneyType mt = (MoneyType) s.data.get("mt");
-        long amt = s.getLong("amt");
-        Long catId = s.getLong("cat");
-        String catName = s.getStr("catName");
-
-        Operation op = rasxodService.createRequest(u, mt, amt, catId, comment);
-        s.reset();
-
-        InlineKeyboardMarkup kb = inline(List.of(irow(
-                btn("✅ Tasdiqlash", "rx:a:" + op.getId()),
-                btn("❌ Rad etish", "rx:r:" + op.getId()))));
-        notify.toBuxgalteriya("💸 <b>Rasxod so'rovi</b> #" + op.getId() + "\n\n"
-                + "Kassa: <b>" + esc(names.owner(OwnerType.KASSA, u.getKassaId())) + "</b>\n"
-                + "Summa: <b>" + fmt(amt) + "</b> so'm (" + mtLabel(mt) + ")\n"
-                + "Kategoriya: " + esc(catName) + "\n"
-                + (comment.isEmpty() ? "" : "Izoh: " + esc(comment) + "\n")
-                + "Kassir: " + esc(u.getFullName()), kb);
-
-        sender.send(chatId, "✅ So'rov #" + op.getId() + " buxgalterga yuborildi.\n"
-                + "Summa band qilindi — tasdiqlangach balansdan ayriladi.");
     }
 
     /* ============================ 🔁 O'TKAZMA ============================ */
@@ -416,8 +345,7 @@ public class KassirHandler {
         InlineKeyboardMarkup kb = inline(List.of(
                 irow(btn("✅ To'liq qabul", "sb:f:" + sub.getId())),
                 irow(btn("🟡 Qisman qabul", "sb:p:" + sub.getId()),
-                     btn("❌ Rad etish", "sb:r:" + sub.getId())),
-                irow(btn("💸 Rasxod kiritish (kassa nomidan)", "sb:x:" + sub.getId()))));
+                     btn("❌ Rad etish", "sb:r:" + sub.getId()))));
         notify.toBuxgalteriya("📤 <b>Hisobot</b> #" + sub.getId() + " — <b>"
                 + esc(names.owner(OwnerType.KASSA, sub.getKassaId())) + "</b>\n"
                 + "Kassir: " + esc(u.getFullName()) + "\n\n" + detail
@@ -426,8 +354,7 @@ public class KassirHandler {
                 + (rasxN + rasxK > 0
                     ? "\n💸 Kunlar rasxodi: Naqd <b>" + fmt(rasxN) + "</b> · Click <b>"
                       + fmt(rasxK) + "</b> so'm"
-                    : "\n💸 Bu kunlarda rasxod kiritilmagan — kerak bo'lsa "
-                      + "«Rasxod kiritish» tugmasi orqali kassa nomidan kiriting.")
+                    : "")
                 + "\nℹ️ Click summasi qabul qilinganda kassaning o'z hisobida qoladi.", kb);
 
         sender.edit(chatId, msgId, "✅ Hisobot #" + sub.getId() + " yuborildi ("

@@ -42,8 +42,8 @@ public final class Keyboards {
     public static ReplyKeyboardMarkup kassirMenu(java.util.function.Predicate<String> visible) {
         List<KeyboardRow> rows = new ArrayList<>();
         addRowIf(rows, visible, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
-        addRowIf(rows, visible, "💸 Rasxod", "🔁 O'tkazma");
-        addRowIf(rows, visible, "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ");
+        addRowIf(rows, visible, "🔁 O'tkazma", "📤 Hisobot topshirish");
+        addRowIf(rows, visible, "🤝 КОНТРАГЕНТ");
         addRowIf(rows, visible, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
@@ -63,7 +63,7 @@ public final class Keyboards {
 
     /** Barcha asosiy menyu tugmalari — bosilganda tugallanmagan dialog bekor qilinadi. */
     private static final java.util.Set<String> MENU_LABELS = java.util.Set.of(
-            "📊 Bugungi holat", "💰 Balansim", "💸 Rasxod",
+            "📊 Bugungi holat", "💰 Balansim",
             "📤 Hisobot topshirish", "🧾 Qarzlarim", "📜 Tarix",
             "🏪 Kassalar holati", "🧾 Qarzlar registri", "📊 Excel hisobot",
             "👥 Foydalanuvchi qo'shish", "🏪 Kassa qo'shish",
@@ -78,8 +78,8 @@ public final class Keyboards {
     public static ReplyKeyboardMarkup kassirMenu() {
         List<KeyboardRow> rows = new ArrayList<>();
         addVisibleRow(rows, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
-        addVisibleRow(rows, "💸 Rasxod", "🔁 O'tkazma");
-        addVisibleRow(rows, "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ");
+        addVisibleRow(rows, "🔁 O'tkazma", "📤 Hisobot topshirish");
+        addVisibleRow(rows, "🤝 КОНТРАГЕНТ");
         addVisibleRow(rows, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);

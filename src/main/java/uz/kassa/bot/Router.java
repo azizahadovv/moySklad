@@ -43,7 +43,6 @@ public class Router {
     private final LabelService labelSvc;
     private final PermService permSvc;
     private final NotificationService notify;
-    private final RasxodService rasxodService;
     private final TransferService transferService;
     private final SubmissionService submissionService;
     private final KassirHandler kassir;
@@ -246,7 +245,6 @@ public class Router {
                 sender.edit(chatId, msgId, "❌ Bekor qilindi");
                 return;
             }
-            if (data.startsWith("rx:")) { decisionRasxod(user, s, data, chatId, msgId); return; }
             if (data.startsWith("tr:")) { decisionTransfer(user, data, chatId, msgId); return; }
             if (data.startsWith("sb:")) { decisionSubmission(user, s, data, chatId, msgId); return; }
             if (data.startsWith("kg:")) { kontragent.onCallback(user, s, data, chatId, msgId); return; }
@@ -261,32 +259,6 @@ public class Router {
             if (!handled) log.debug("Noma'lum callback: {}", data);
         } catch (BusinessException e) {
             sender.send(chatId, "⚠️ " + esc(e.getMessage()));
-        }
-    }
-
-    /* -------- Rasxod qarori: faqat Buxgalter/SuperAdmin (TZ 3) -------- */
-
-    private void decisionRasxod(AppUser user, Session s, String data, long chatId, int msgId) {
-        if (user.getRole() == Role.KASSIR) {
-            sender.send(chatId, "⚠️ Bu amal faqat buxgalter uchun");
-            return;
-        }
-        String[] p = data.split(":");
-        long opId = Long.parseLong(p[2]);
-
-        if (p[1].equals("a")) {
-            Operation op = rasxodService.approve(opId, user);
-            sender.edit(chatId, msgId, "💸 Rasxod #" + op.getId() + " — <b>"
-                    + fmt(op.getAmount()) + "</b> so'm (" + mtLabel(op.getMoneyType()) + ")\n\n"
-                    + "✅ <b>Tasdiqlandi</b> — " + esc(user.getFullName()));
-            notify.toKassa(op.getFromOwnerId(), "✅ Rasxod so'rovingiz tasdiqlandi: <b>"
-                    + fmt(op.getAmount()) + "</b> so'm (" + mtLabel(op.getMoneyType()) + ")", null);
-        } else if (p[1].equals("r")) {
-            s.state = Session.State.RJ_RASXOD_REASON;
-            s.data.put("opId", opId);
-            s.data.put("srcChat", chatId);
-            s.data.put("srcMsg", msgId);
-            sender.send(chatId, "✍️ Rad etish sababini yozing:");
         }
     }
 
@@ -362,14 +334,6 @@ public class Router {
                         + "</b> · Click <b>" + fmt(sub.getKlik()) + "</b> so'm"
                         + (sub.getKlik() > 0
                             ? "\nℹ️ Click pulingiz o'z hisobingizda qoladi." : ""), null);
-            }
-            case "x" -> {
-                // 💸 Hisobot kunlari bo'yicha kassa nomidan rasxod kiritish
-                Submission sub = subRepo.findById(subId)
-                        .orElseThrow(() -> new BusinessException("Hisobot topilmadi"));
-                if (sub.getStatus() != SubmissionStatus.KUTILMOQDA)
-                    throw new BusinessException("Bu hisobot allaqachon ko'rib chiqilgan");
-                admin.krxStartForSub(user, s, sub, chatId);
             }
             case "p" -> {
                 Submission sub = subRepo.findById(subId)

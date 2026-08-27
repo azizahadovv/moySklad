@@ -279,6 +279,8 @@ public class MoySkladSyncService {
                 if (dispatchPaymentIn(e, ctx)) n++;
             for (MoySkladClient.MsExpense e : client.fetchCashouts(from))
                 if (applyCashout(e, ctx)) n++;
+            for (MoySkladClient.MsExpense e : client.fetchPaymentsOut(from))
+                if (dispatchPaymentOut(e, ctx)) n++;
         } catch (Exception e) {
             // Watermark SURILMAYDI — o'qilmagan hujjatlar keyingi siklda qayta so'raladi
             log.warn("MoySklad sinxron uzildi (watermark saqlanmadi): {}", e.getMessage());
@@ -316,7 +318,8 @@ public class MoySkladSyncService {
             record Ent(String entity, String prefix) {}
             for (Ent ent : List.of(new Ent("cashin", "ci:"),
                                    new Ent("paymentin", "pi:"),
-                                   new Ent("cashout", "co:"))) {
+                                   new Ent("cashout", "co:"),
+                                   new Ent("paymentout", "po:"))) {
                 List<MoySkladClient.MsExpense> docs =
                         client.fetchDocsByMoment(ent.entity(), from, to);
 
@@ -326,6 +329,7 @@ public class MoySkladSyncService {
                     boolean changed = switch (ent.entity()) {
                         case "cashin" -> applyIncome(e, MoneyType.NAQD, "ci:" + e.id(), ctx);
                         case "paymentin" -> dispatchPaymentIn(e, ctx);
+                        case "paymentout" -> dispatchPaymentOut(e, ctx);
                         default -> applyCashout(e, ctx);
                     };
                     if (changed) n++;
@@ -682,6 +686,106 @@ public class MoySkladSyncService {
         return posted;
     }
 
+    /* ==================== KLIK RASXOD (Исходящий платеж) ==================== */
+
+    /**
+     * «Исходящий платеж» — faqat «Клик» statusidagi hujjatlar kassa/otdelning
+     * Click hisobidan RASXOD sifatida yoziladi (cashout NAQD uchungina bo'lgani
+     * kabi, Click chiqimi endi shu yo'l bilan — MoySklad'da kuzatiladi). Boshqa
+     * statuslar (bank o'tkazmasi kontragentlarga) botga tegmaydi.
+     */
+    private boolean dispatchPaymentOut(MoySkladClient.MsExpense e, Ctx ctx) {
+        if (!e.state().equalsIgnoreCase("Клик")) {
+            Optional<Operation> existing = opRepo.findByMoyskladId("po:" + e.id());
+            if (skipNewPreEpoch(e.date(), existing)) return false;
+            return existing.isPresent()
+                    && storno(existing.get(), "status «" + e.state() + "»ga o'zgargan", docInfo(e));
+        }
+        return applyPaymentOutKlik(e, ctx);
+    }
+
+    /**
+     * «Исходящий платеж» («Клик» statusi) — applyCashout'ning Click ko'zgusi:
+     * otdel (group) bog'langan kassaga, aks holda BUXGALTERIYAGA; MoySklad hisobi
+     * (organizationAccount) alohida Click hisobiga bog'langan bo'lsa — o'sha hisobga
+     * (applyIncome'dagi qoida bilan bir xil).
+     */
+    private boolean applyPaymentOutKlik(MoySkladClient.MsExpense e, Ctx ctx) {
+        long sum = somSum(e);
+        String msId = "po:" + e.id();
+        String fx = fxNote(e);
+        String comment = joinNote(e.agent(), e.description());
+        if (!fx.isEmpty()) comment = comment.isEmpty() ? fx : fx + " · " + comment;
+
+        Long kassaId = ctx.groupToKassa().get(e.groupId());
+        OwnerType wantOt = kassaId != null ? OwnerType.KASSA : OwnerType.BUXGALTERIYA;
+        Long wantOid = kassaId != null ? kassaId : LedgerService.BUX_ID;
+        Long clickId = ctx.accountToClick().get(e.accountId());
+        if (clickId != null) { wantOt = OwnerType.CLICK; wantOid = clickId; }
+
+        Optional<Operation> existing = opRepo.findByMoyskladId(msId);
+        if (skipNewPreEpoch(e.date(), existing)) return false;
+
+        if (sum < 0) {   // valyuta hujjati, kurs kiritilmagan — taxmin qilinmaydi
+            warnNoRate(e);
+            return existing.isPresent()
+                    && storno(existing.get(), "valyuta kursi kiritilmagan", docInfo(e));
+        }
+        if (!e.applicable() || sum == 0) {
+            return existing.isPresent()
+                    && storno(existing.get(),
+                        !e.applicable() ? "hujjat o'tkazilishi bekor qilingan"
+                                : "summa nolga tushirilgan",
+                        docInfo(e));
+        }
+
+        if (existing.isPresent()) {
+            Operation op = existing.get();
+            if (!op.getOpDate().equals(e.date())) {
+                if (!storno(op, "hujjat sanasi o'zgargan — qayta yoziladi", docInfo(e))) return false;
+            } else {
+                boolean changed = false;
+                if (op.getAmount() != sum) {
+                    long old = op.getAmount();
+                    if (ledger.updateSyncAmount(op, sum)) {
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("✏️ MoySklad Klik rasxodi summasi o'zgargan — avtomatik tuzatildi:\n"
+                                    + docInfo(e) + "\n<b>" + TextUtil.esc(ownerName(op)) + "</b>: "
+                                    + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum) + " so'm (📲 Klik)", null);
+                        changed = true;
+                    }
+                }
+                if ((op.getFromOwnerType() != wantOt
+                        || !java.util.Objects.equals(op.getFromOwnerId(), wantOid))
+                        && !ctx.dupGroups().contains(e.groupId())) {
+                    String oldName = ownerName(op);
+                    if (ledger.rerouteRasxod(op, wantOt, wantOid)) {
+                        String newName = ownerDisplayName(wantOt, wantOid);
+                        if (loudFix(e.date()))
+                            notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — Klik chiqim ko'chirildi:\n"
+                                    + docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
+                                    + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum) + " so'm (📲 Klik)", null);
+                        changed = true;
+                    }
+                }
+                return changed;
+            }
+        }
+
+        boolean posted = ledger.postRasxodSync(wantOt, wantOid, MoneyType.KLIK,
+                sum, e.date(), msId, matchCat(ctx.catByName(), e.expenseItem()), comment);
+        if (posted && shouldNotify(e)) {
+            String text = "💸 MoySklad Klik rasxodi: <b>" + TextUtil.esc(ownerDisplayName(wantOt, wantOid))
+                    + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (📲 Klik)"
+                    + "\n" + docInfo(e)
+                    + (comment.isEmpty() ? "" : "\n" + TextUtil.esc(comment));
+            if (wantOt == OwnerType.KASSA) notify.toKassa(wantOid, text, null);
+            notify.toBuxgalteriya(text, null);
+            checkNegative(wantOt, wantOid, MoneyType.KLIK, "Klik rasxod");
+        }
+        return posted;
+    }
+
     /* ==================== yordamchi ==================== */
 
     /** Sinxron opni STORNO qilib buxgalteriyaga xabar berish. */
@@ -742,12 +846,14 @@ public class MoySkladSyncService {
     }
 
     private void checkNegative(OwnerType ot, Long oid, String sabab) {
-        long bal = ledger.view(ot, oid, MoneyType.NAQD).getAmount();
+        checkNegative(ot, oid, MoneyType.NAQD, sabab);
+    }
+
+    private void checkNegative(OwnerType ot, Long oid, MoneyType mt, String sabab) {
+        long bal = ledger.view(ot, oid, mt).getAmount();
         if (bal < 0) {
-            String name = ot == OwnerType.BUXGALTERIYA ? "Отдел Основной"
-                    : kassaRepo.findById(oid).map(Kassa::getName).orElse("Kassa #" + oid);
-            notify.toBuxgalteriya("⚠️ " + sabab + " natijasida <b>" + TextUtil.esc(name)
-                    + "</b> NAQD balansi manfiy: " + TextUtil.fmt(bal)
+            notify.toBuxgalteriya("⚠️ " + sabab + " natijasida <b>" + TextUtil.esc(ownerDisplayName(ot, oid))
+                    + "</b> " + mtLabel(mt) + " balansi manfiy: " + TextUtil.fmt(bal)
                     + " so'm. Korrektirovka talab qilinadi.", null);
         }
     }

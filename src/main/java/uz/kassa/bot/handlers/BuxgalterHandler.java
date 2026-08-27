@@ -28,10 +28,8 @@ public class BuxgalterHandler {
     private final NameService names;
     private final NotificationService notify;
     private final LedgerService ledger;
-    private final RasxodService rasxodService;
     private final TransferService transferService;
     private final SubmissionService submissionService;
-    private final CategoryRepo categoryRepo;
     private final KassaRepo kassaRepo;
     private final DebtRepo debtRepo;
     private final DayRepo dayRepo;
@@ -45,11 +43,8 @@ public class BuxgalterHandler {
 
     public boolean onText(AppUser u, Session s, String text, long chatId) {
         switch (s.state) {
-            case BRX_AMT -> { brxAmount(s, text, chatId); return true; }
-            case BRX_CMT -> { brxConfirmPrompt(s, text, chatId); return true; }
             case TR_AMT -> { trAmount(s, text, chatId); return true; }
             case TR_CMT -> { trFinish(u, s, text, chatId); return true; }
-            case RJ_RASXOD_REASON -> { rejectRasxod(u, s, text, chatId); return true; }
             case RJ_SUB_REASON -> { rejectSubmission(u, s, text, chatId); return true; }
             case SBP_NAQD -> { partialNaqd(s, text, chatId); return true; }
             case SBP_KLIK -> { partialKlik(u, s, text, chatId); return true; }
@@ -59,12 +54,6 @@ public class BuxgalterHandler {
         return switch (text) {
             case "🏪 Kassalar holati" -> { overview(chatId); yield true; }
             case "📥 Kutilayotganlar" -> { pendingList(chatId); yield true; }
-            case "💸 Rasxod (o'zim)" -> {
-                s.reset(); s.state = Session.State.BRX_MT;
-                sender.send(chatId, "💸 <b>Buxgalteriya rasxodi</b>\n\nPul turini tanlang:",
-                        mtChoice("b:mt"));
-                yield true;
-            }
             case "🔁 O'tkazma" -> { trStart(s, chatId); yield true; }
             case "🧾 Qarzlar registri" -> { debtsRegistry(chatId); yield true; }
             case "📜 Tarix" -> { historyMenu(chatId); yield true; }
@@ -76,7 +65,6 @@ public class BuxgalterHandler {
     /* ============================ CALLBACK ============================ */
 
     public boolean onCallback(AppUser u, Session s, String data, long chatId, int msgId) {
-        if (data.startsWith("brc:")) { brxDecide(u, s, data.substring(4), chatId, msgId); return true; }
         if (!data.startsWith("b:")) return false;
 
         String[] p = data.split(":", 3);
@@ -84,22 +72,6 @@ public class BuxgalterHandler {
         String arg = p.length > 2 ? p[2] : "";
 
         switch (cmd) {
-            case "mt" -> {
-                if (s.state != Session.State.BRX_MT) return true;
-                s.data.put("mt", MoneyType.valueOf(arg));
-                s.state = Session.State.BRX_AMT;
-                sender.edit(chatId, msgId, "💸 Rasxod — " + mtLabel(MoneyType.valueOf(arg))
-                        + "\n\nSummani kiriting (so'm):");
-            }
-            case "cat" -> {
-                if (s.state != Session.State.BRX_CAT) return true;
-                long catId = Long.parseLong(arg);
-                s.data.put("cat", catId);
-                s.data.put("catName", categoryRepo.findById(catId).map(Category::getName).orElse("?"));
-                s.state = Session.State.BRX_CMT;
-                sender.edit(chatId, msgId, "Kategoriya: <b>" + esc(s.getStr("catName"))
-                        + "</b>\n\nIzoh kiriting (shart emas — «-» yuboring):");
-            }
             case "tg" -> {
                 if (s.state != Session.State.TR_TGT) return true;
                 s.data.put("toId", Long.parseLong(arg));
@@ -186,24 +158,6 @@ public class BuxgalterHandler {
     public void pendingList(long chatId) {
         int shown = 0;
 
-        List<Operation> rasxods = opRepo.findByStatusAndType(OpStatus.KUTILMOQDA, OpType.RASXOD);
-        for (Operation op : rasxods.stream().limit(10).toList()) {
-            String kassir = userRepo.findById(op.getCreatedBy() == null ? -1L : op.getCreatedBy())
-                    .map(AppUser::getFullName).orElse("?");
-            String cat = op.getCategoryId() == null ? "" :
-                    categoryRepo.findById(op.getCategoryId()).map(Category::getName).orElse("");
-            sender.send(chatId, "💸 <b>Rasxod so'rovi</b> #" + op.getId() + "\n"
-                    + "Kassa: <b>" + esc(names.owner(op.getFromOwnerType(), op.getFromOwnerId())) + "</b>\n"
-                    + "Summa: <b>" + fmt(op.getAmount()) + "</b> so'm (" + mtLabel(op.getMoneyType()) + ")\n"
-                    + (cat.isEmpty() ? "" : "Kategoriya: " + esc(cat) + "\n")
-                    + (op.getComment() == null || op.getComment().isEmpty() ? "" : "Izoh: " + esc(op.getComment()) + "\n")
-                    + "Kassir: " + esc(kassir),
-                    inline(List.of(irow(
-                            btn("✅ Tasdiqlash", "rx:a:" + op.getId()),
-                            btn("❌ Rad etish", "rx:r:" + op.getId())))));
-            shown++;
-        }
-
         List<Submission> subs = subRepo.findByStatusOrderByIdAsc(SubmissionStatus.KUTILMOQDA);
         for (Submission sub : subs.stream().limit(10).toList()) {
             StringBuilder detail = new StringBuilder();
@@ -226,8 +180,7 @@ public class BuxgalterHandler {
                     inline(List.of(
                             irow(btn("✅ To'liq qabul", "sb:f:" + sub.getId())),
                             irow(btn("🟡 Qisman qabul", "sb:p:" + sub.getId()),
-                                 btn("❌ Rad etish", "sb:r:" + sub.getId())),
-                            irow(btn("💸 Rasxod kiritish (kassa nomidan)", "sb:x:" + sub.getId())))));
+                                 btn("❌ Rad etish", "sb:r:" + sub.getId())))));
             shown++;
         }
 
@@ -243,68 +196,6 @@ public class BuxgalterHandler {
         }
 
         if (shown == 0) sender.send(chatId, "📥 Kutilayotgan amallar yo'q ✅");
-    }
-
-    /* ============================ 💸 O'Z RASXODI (TZ 7.7) ============================ */
-
-    private void brxAmount(Session s, String text, long chatId) {
-        long amt = parseAmount(text);
-        if (amt <= 0) { sender.send(chatId, "⚠️ Summani raqamda kiriting"); return; }
-        MoneyType mt = (MoneyType) s.data.get("mt");
-        long avail = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, mt).available();
-        if (amt > avail) {
-            sender.send(chatId, "⚠️ Buxgalteriyada mavjud qoldiq yetarli emas: <b>"
-                    + fmt(avail) + "</b> so'm");
-            return;
-        }
-        s.data.put("amt", amt);
-        s.state = Session.State.BRX_CAT;
-        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        for (Category c : categoryRepo.findByActiveTrueOrderByIdAsc())
-            rows.add(irow(btn(c.getName(), "b:cat:" + c.getId())));
-        rows.add(irow(btn("❌ Bekor", "cx")));
-        sender.send(chatId, "Summa: <b>" + fmt(amt) + "</b> so'm\n\nKategoriyani tanlang:", inline(rows));
-    }
-
-    /** Izoh olindi -> tasdiqlash dialogi (TZ 7.7: «Haqiqatan ham ... tasdiqlaysizmi?»). */
-    private void brxConfirmPrompt(Session s, String text, long chatId) {
-        s.data.put("cmt", text.equals("-") ? "" : text);
-        s.state = Session.State.IDLE;   // javob callback orqali keladi
-        MoneyType mt = (MoneyType) s.data.get("mt");
-        sender.send(chatId, "❗️ <b>Diqqat!</b>\n\nHaqiqatan ham <b>" + fmt(s.getLong("amt"))
-                + "</b> so'm (" + mtLabel(mt) + ") rasxodni tasdiqlaysizmi?\n"
-                + "Kategoriya: " + esc(s.getStr("catName"))
-                + (s.getStr("cmt").isEmpty() ? "" : "\nIzoh: " + esc(s.getStr("cmt"))),
-                inline(List.of(irow(btn("✅ Ha, tasdiqlayman", "brc:y"),
-                                    btn("❌ Yo'q", "brc:n")))));
-    }
-
-    private void brxDecide(AppUser u, Session s, String arg, long chatId, int msgId) {
-        if (arg.equals("n")) {
-            s.reset();
-            sender.edit(chatId, msgId, "❌ Rasxod bekor qilindi");
-            return;
-        }
-        if (!s.data.containsKey("amt")) {
-            sender.edit(chatId, msgId, "⚠️ Muddati o'tgan — qaytadan boshlang");
-            return;
-        }
-        MoneyType mt = (MoneyType) s.data.get("mt");
-        long amt = s.getLong("amt");
-        Long catId = s.getLong("cat");
-        String catName = s.getStr("catName");
-        String cmt = s.getStr("cmt");
-        s.reset();
-
-        Operation op = rasxodService.direct(u, mt, amt, catId, cmt);
-        sender.edit(chatId, msgId, "✅ Rasxod #" + op.getId() + " bajarildi: <b>"
-                + fmt(amt) + "</b> so'm (" + mtLabel(mt) + ")\nKategoriya: " + esc(catName));
-
-        // TZ 7.7: SuperAdminga axborot xabari (tasdiq talab qilmaydi)
-        notify.toRole(Role.SUPERADMIN, "ℹ️ Buxgalteriya rasxodi #" + op.getId() + "\n"
-                + esc(u.getFullName()) + ": <b>" + fmt(amt) + "</b> so'm (" + mtLabel(mt) + ")\n"
-                + "Kategoriya: " + esc(catName)
-                + (cmt.isEmpty() ? "" : "\nIzoh: " + esc(cmt)), null);
     }
 
     /* ============================ 🔁 O'TKAZMA (BUX -> KASSA) ============================ */
@@ -404,23 +295,6 @@ public class BuxgalterHandler {
     }
 
     /* ============================ QARORLAR DAVOMI ============================ */
-
-    private void rejectRasxod(AppUser u, Session s, String reason, long chatId) {
-        long opId = s.getLong("opId");
-        long srcChat = s.getLong("srcChat");
-        int srcMsg = (int) s.getLong("srcMsg");
-        s.reset();
-
-        Operation op = rasxodService.reject(opId, u, reason);
-        sender.edit(srcChat, srcMsg, "💸 Rasxod #" + op.getId() + " — <b>"
-                + fmt(op.getAmount()) + "</b> so'm (" + mtLabel(op.getMoneyType()) + ")\n\n"
-                + "❌ <b>Rad etildi</b> — " + esc(u.getFullName())
-                + "\nSabab: " + esc(reason));
-        notify.toKassa(op.getFromOwnerId(), "❌ Rasxod so'rovingiz rad etildi: <b>"
-                + fmt(op.getAmount()) + "</b> so'm (" + mtLabel(op.getMoneyType()) + ")\n"
-                + "Sabab: " + esc(reason) + "\nSumma balansingizga qaytdi.", null);
-        sender.send(chatId, "Rad etildi ✔️");
-    }
 
     private void rejectSubmission(AppUser u, Session s, String reason, long chatId) {
         long subId = s.getLong("subId");

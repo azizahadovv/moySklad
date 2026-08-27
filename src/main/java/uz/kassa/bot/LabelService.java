@@ -21,7 +21,7 @@ public class LabelService {
     public static final List<String> RENAMABLE = List.of(
             // Bosh menyu
             "🏪 KASSA", "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ",
-            "💸 Rasxod", "🔁 O'tkazma", "📤 Hisobot topshirish",
+            "🔁 O'tkazma", "📤 Hisobot topshirish",
             "🤝 КОНТРАГЕНТ", "💰 Баланс",
             // Panel darajasi
             "🏬 Отдел", "⚙️ Настройка", "📈 Статистика", "💰 Бугунги тушум",

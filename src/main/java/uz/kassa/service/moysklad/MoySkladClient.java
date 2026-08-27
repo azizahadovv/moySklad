@@ -202,6 +202,28 @@ public class MoySkladClient {
         return out;
     }
 
+    /** «Исходящий платеж» (paymentout) — Klik/bank chiqimlari; status nomi state'da
+     *  (masalan «Клик» — kassa Click hisobidan chiqim, boshqalari bank o'tkazmasi). */
+    public List<MsExpense> fetchPaymentsOut(LocalDateTime updatedFrom) {
+        List<MsExpense> out = new ArrayList<>();
+        for (JsonNode r : rows("paymentout", "&expand=agent,state", updatedFrom)) {
+            out.add(new MsExpense(
+                    r.path("id").asText(),
+                    r.path("name").asText(""),
+                    date(r),
+                    r.path("sum").asLong(0),
+                    "",
+                    groupOf(r),
+                    "",
+                    r.path("description").asText(""),
+                    agentOf(r),
+                    r.path("state").path("name").asText(""),
+                    currencyOf(r), rateOf(r),
+                    r.path("applicable").asBoolean(true), accountOf(r)));
+        }
+        return out;
+    }
+
     /** MoySklad kontragenti (qarz daftari uchun). */
     public record MsAgent(String id, String name, String phone, String inn) {}
 

@@ -34,7 +34,6 @@ public class WebAppController {
     private final AppUserRepo userRepo;
     private final CategoryRepo categoryRepo;
     private final NameService names;
-    private final RasxodService rasxodService;
     private final TransferService transferService;
     private final SubmissionService submissionService;
     private final NotificationService notify;
@@ -246,15 +245,6 @@ public class WebAppController {
         List<Map<String, Object>> submission = new ArrayList<>();
 
         if (u.getRole() != Role.KASSIR) {
-            for (Operation op : opRepo.findByStatusAndType(OpStatus.KUTILMOQDA, OpType.RASXOD)) {
-                String kassir = op.getCreatedBy() == null ? "" :
-                        userRepo.findById(op.getCreatedBy()).map(AppUser::getFullName).orElse("");
-                rasxod.add(Map.of("id", op.getId(), "amount", op.getAmount(),
-                        "mt", op.getMoneyType().name(),
-                        "from", names.owner(op.getFromOwnerType(), op.getFromOwnerId()),
-                        "comment", op.getComment() == null ? "" : op.getComment(),
-                        "kassir", kassir, "date", op.getOpDate().toString()));
-            }
             for (Submission sub : subRepo.findByStatusOrderByIdAsc(SubmissionStatus.KUTILMOQDA))
                 submission.add(Map.of("id", sub.getId(),
                         "kassa", names.owner(OwnerType.KASSA, sub.getKassaId()),
@@ -284,37 +274,6 @@ public class WebAppController {
         for (Category c : categoryRepo.findByActiveTrueOrderByIdAsc())
             out.add(Map.of("id", c.getId(), "name", c.getName()));
         return out;
-    }
-
-    /* ============================ 💸 RASXOD ============================ */
-
-    public record RasxodReq(String mt, long amount, Long categoryId, String comment) {}
-
-    /** Kassir — so'rov (buxgalter tasdig'i bilan); Buxgalter/Admin — to'g'ridan-to'g'ri. */
-    @PostMapping("/rasxod-create")
-    public Map<String, Object> rasxodCreate(@RequestHeader("X-Telegram-Init-Data") String init,
-                                            @RequestBody RasxodReq r) {
-        AppUser u = user(init);
-        MoneyType mt = MoneyType.valueOf(r.mt());
-        String comment = r.comment() == null ? "" : r.comment().trim();
-        String catName = r.categoryId() == null ? "" :
-                categoryRepo.findById(r.categoryId()).map(Category::getName).orElse("");
-
-        if (u.getRole() == Role.KASSIR) {
-            Operation op = rasxodService.createRequest(u, mt, r.amount(), r.categoryId(), comment);
-            var kb = uz.kassa.bot.Keyboards.inline(List.of(uz.kassa.bot.Keyboards.irow(
-                    uz.kassa.bot.Keyboards.btn("✅ Tasdiqlash", "rx:a:" + op.getId()),
-                    uz.kassa.bot.Keyboards.btn("❌ Rad etish", "rx:r:" + op.getId()))));
-            notify.toBuxgalteriya("💸 <b>Rasxod so'rovi</b> #" + op.getId() + "\n\n"
-                    + "Kassa: <b>" + TextUtil.esc(names.owner(OwnerType.KASSA, u.getKassaId())) + "</b>\n"
-                    + "Summa: <b>" + TextUtil.fmt(r.amount()) + "</b> so'm\n"
-                    + (catName.isEmpty() ? "" : "Kategoriya: " + TextUtil.esc(catName) + "\n")
-                    + (comment.isEmpty() ? "" : "Izoh: " + TextUtil.esc(comment) + "\n")
-                    + "Kassir: " + TextUtil.esc(u.getFullName()), kb);
-            return Map.of("ok", true, "id", op.getId(), "pending", true);
-        }
-        Operation op = rasxodService.direct(u, mt, r.amount(), r.categoryId(), comment);
-        return Map.of("ok", true, "id", op.getId(), "pending", false);
     }
 
     /* ============================ 🔁 O'TKAZMA ============================ */
@@ -521,21 +480,6 @@ public class WebAppController {
                                       @RequestBody DecideReq r) {
         AppUser u = user(init);
         switch (r.kind()) {
-            case "rasxod" -> {
-                if (u.getRole() == Role.KASSIR)
-                    throw new BusinessException("Bu amal faqat buxgalter uchun");
-                if (r.action().equals("approve")) {
-                    Operation op = rasxodService.approve(r.id(), u);
-                    notify.toKassa(op.getFromOwnerId(), "✅ Rasxod so'rovingiz tasdiqlandi: <b>"
-                            + TextUtil.fmt(op.getAmount()) + "</b> so'm", null);
-                } else {
-                    Operation op = rasxodService.reject(r.id(), u,
-                            r.reason() == null || r.reason().isBlank() ? "Sabab ko'rsatilmagan" : r.reason());
-                    notify.toKassa(op.getFromOwnerId(), "❌ Rasxod so'rovingiz rad etildi: <b>"
-                            + TextUtil.fmt(op.getAmount()) + "</b> so'm\nSabab: "
-                            + TextUtil.esc(op.getRejectReason()), null);
-                }
-            }
             case "transfer" -> {
                 Operation check = opRepo.findById(r.id())
                         .orElseThrow(() -> new BusinessException("O'tkazma topilmadi"));
