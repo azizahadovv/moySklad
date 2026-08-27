@@ -33,6 +33,12 @@ public class Jobs {
     private final DayRepo dayRepo;
     private final NotificationService notify;
     private final uz.kassa.bot.NameService names;
+    private final uz.kassa.repo.ClickAccountRepo clickRepo;
+    private final uz.kassa.service.SettingsService settings;
+    private final uz.kassa.bot.Sender sender;
+
+    /** Click qoldiqlari soatlik hisoboti yuboriladigan guruh — /setclickgroup bilan saqlanadi. */
+    public static final String CLICK_GROUP_KEY = "notify.clickGroupChatId";
 
     /** Tez sinxron — realtime'ga yaqin: har 30 soniyada yangi/o'zgargan hujjatlar. */
     @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT15S")
@@ -100,6 +106,56 @@ public class Jobs {
             log.warn("Balans nomuvofiqligi: {} ta qator", issues.size());
         } catch (Exception e) {
             log.error("Balans tekshiruvi xatosi: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 📲 Click qoldiqlari — har soatda tanlangan guruhga (SuperAdmin
+     * /setclickgroup bilan ro'yxatdan o'tkazgan chatga) har bir Click hisobi
+     * bo'yicha joriy balans yuboriladi. Guruh sozlanmagan bo'lsa — jim o'tadi.
+     */
+    @Scheduled(cron = "0 0 * * * *", zone = "Asia/Tashkent")
+    public void clickHourlyReport() {
+        try {
+            String chatIdStr = settings.get(CLICK_GROUP_KEY).orElse("").trim();
+            if (chatIdStr.isBlank()) return;
+            long chatId = Long.parseLong(chatIdStr);
+            List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
+            if (accounts.isEmpty()) return;
+
+            StringBuilder sb = new StringBuilder("📲 <b>Click қолдиқлари</b>\n📅 "
+                    + java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"))
+                            .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
+                    + "\n\n");
+            long total = 0;
+            for (ClickAccount c : accounts) {
+                long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                total += bal;
+                sb.append("• <b>").append(TextUtil.esc(c.getName())).append("</b>: ")
+                  .append(TextUtil.fmt(bal)).append(" so'm\n");
+            }
+            sb.append("\n➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
+            // Guruhda hech qanday menyu/klaviatura ko'rinmasligi kerak — faqat shu hisobot.
+            sender.send(chatId, sb.toString(),
+                    org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove.builder()
+                            .removeKeyboard(true).build());
+        } catch (Exception e) {
+            log.warn("Click soatlik hisobot xatosi: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 📲 Click balans auditi: har bir Click hisobining MoySklad'dagi TO'LIQ tarix
+     * bo'yicha haqiqiy qoldig'i qayta hisoblanadi va bot balansi bilan solishtiriladi —
+     * farq (masalan MoySklad'da qo'lda korrektirovka qilingan bo'lsa) avtomatik
+     * tuzatiladi. Og'ir operatsiya (butun tarix) — kam-kam ishga tushadi.
+     */
+    @Scheduled(fixedDelayString = "PT3H", initialDelayString = "PT5M")
+    public void clickAccountAudit() {
+        try {
+            syncService.auditClickAccounts();
+        } catch (Exception e) {
+            log.warn("Click balans auditi xatosi: {}", e.getMessage());
         }
     }
 

@@ -1888,7 +1888,7 @@ public class AdminHandler {
                 sb.append("• Faqat O'Z kassasi")
                   .append(kassaName == null ? "" : " («" + esc(kassaName) + "»)")
                   .append(": balans, tushum, tarix, Excel\n");
-                sb.append("• Rasxod SO'ROVI (buxgalter tasdig'i bilan), o'tkazma, hisobot topshirish\n");
+                sb.append("• O'tkazma, hisobot topshirish\n");
                 sb.append("• Kontragent qarz daftari: qidiruv, balans, eslatma qo'shish (o'ziniki)\n");
                 if (x.getKassaId() != null)
                     sb.append("• 🤝 Настройка: otdeliga odam qo'shish (erkin); o'chirish/tahrir — "
@@ -1896,14 +1896,14 @@ public class AdminHandler {
             }
             case BUXGALTER -> {
                 sb.append("• Barcha kassalar: holat, statistika, saldo, svod/Excel, tarix\n");
-                sb.append("• Rasxod so'rovlarini tasdiqlash/rad etish, hisobot qabul qilish\n");
-                sb.append("• Kassadan pul qabul qilish (sana tanlash bilan), o'z rasxodi\n");
+                sb.append("• Hisobot qabul qilish\n");
+                sb.append("• Kassadan pul qabul qilish (sana tanlash bilan)\n");
                 sb.append("• Kontragent qarz daftari (o'ziniki)\n");
             }
             case SUPERADMIN -> {
                 sb.append("• Buxgalter qila oladigan HAMMASI\n");
                 sb.append("• Foydalanuvchi/kassa qo'shish-o'chirish, rol o'zgartirish\n");
-                sb.append("• Boshlang'ich qoldiq, tasdiqlangan rasxodni bekor/tahrirlash\n");
+                sb.append("• Boshlang'ich qoldiq\n");
                 sb.append("• Аудит (Excel bilan), tugma nomlari, MoySklad API kaliti\n");
                 sb.append("• Kontragent: HAMMANING eslatmalarini ko'radi\n");
             }
@@ -1912,7 +1912,7 @@ public class AdminHandler {
         sb.append("\n<b>Ko'rmaydi / qila olmaydi:</b>\n");
         switch (x.getRole()) {
             case KASSIR -> sb.append("• Boshqa kassalar, umumiy statistika, svod, "
-                    + "buxgalteriya hisoboti\n• Rasxodni o'zi tasdiqlash, sozlamalar, Аудит");
+                    + "buxgalteriya hisoboti\n• Sozlamalar, Аудит");
             case BUXGALTER -> sb.append("• ⚙️ Настройка (foydalanuvchi/kassa boshqaruvi, "
                     + "Аудит, tugma nomlari, MoySklad kaliti)\n• Boshqalarning qarz eslatmalari");
             case SUPERADMIN -> sb.append("• Cheklov yo'q");
@@ -1926,7 +1926,7 @@ public class AdminHandler {
 
         sb.append("\n\n<b>Avtomatik xabarlar:</b> ");
         switch (x.getRole()) {
-            case KASSIR -> sb.append("o'z kassasining kirim/chiqimi, rasxod javobi, "
+            case KASSIR -> sb.append("o'z kassasining kirim/chiqimi, "
                     + "qarz eslatmalari, 21:00 kunlik eslatma");
             case BUXGALTER, SUPERADMIN -> sb.append("MoySklad kirim/chiqim, STORNO/tuzatishlar, "
                     + "so'rovlar, qarz eslatmalari");
@@ -2318,13 +2318,15 @@ public class AdminHandler {
 
     /* ==================== 🛠 KORREKTIROVKA (har bir otdel uchun) ==================== */
 
-    /** Korrektirovka: otdel (Buxgalteriya yoki istalgan kassa) tanlanadi. Faqat SuperAdmin. */
+    /** Korrektirovka: otdel (Buxgalteriya, kassa yoki alohida Click hisobi) tanlanadi. Faqat SuperAdmin. */
     private void krStart(Session s, long chatId) {
         s.reset(); s.state = Session.State.ADM_KR_OWNER;
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("🏦 Буxгалтерия (Основной)", "a:kro:B")));
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
             rows.add(irow(btn("🏪 " + k.getName(), "a:kro:K" + k.getId())));
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn("📲 " + c.getName(), "a:kro:C" + c.getId())));
         rows.add(irow(btn("❌ Bekor", "cx")));
         sender.send(chatId, "🛠 <b>Корректировка</b>\n\n"
                 + "Balans qo'lda tuzatiladigan otdelni tanlang:", inline(rows));
@@ -2335,12 +2337,19 @@ public class AdminHandler {
         if (arg.equals("B")) {
             s.data.put("krT", OwnerType.BUXGALTERIYA);
             s.data.put("krId", LedgerService.BUX_ID);
+        } else if (arg.startsWith("C")) {
+            s.data.put("krT", OwnerType.CLICK);
+            s.data.put("krId", Long.parseLong(arg.substring(1)));
         } else {
             s.data.put("krT", OwnerType.KASSA);
             s.data.put("krId", Long.parseLong(arg.substring(1)));
         }
         OwnerType ot = (OwnerType) s.data.get("krT");
         long oid = s.getLong("krId");
+
+        // Click hisobida faqat KLIK bo'ladi — pul turi so'ralmaydi, to'g'ridan-to'g'ri sanaga o'tadi
+        if (ot == OwnerType.CLICK) { krProceedToSana(s, MoneyType.KLIK, chatId, msgId); return; }
+
         long n = ledger.view(ot, oid, MoneyType.NAQD).getAmount();
         long k = ledger.view(ot, oid, MoneyType.KLIK).getAmount();
         s.state = Session.State.ADM_KR_MT;
@@ -2356,17 +2365,23 @@ public class AdminHandler {
     /** Pul turi tanlandi — AVVAL sana so'raladi (keyin soat, keyin summa). */
     private void krMt(Session s, String arg, long chatId, int msgId) {
         if (s.state != Session.State.ADM_KR_MT) return;
-        MoneyType mt = MoneyType.valueOf(arg);
+        krProceedToSana(s, MoneyType.valueOf(arg), chatId, msgId);
+    }
+
+    private void krProceedToSana(Session s, MoneyType mt, long chatId, int msgId) {
         s.data.put("krMt", mt);
         long cur = ledger.view((OwnerType) s.data.get("krT"), s.getLong("krId"), mt).getAmount();
         s.state = Session.State.ADM_KR_SANA;
-        sender.edit(chatId, msgId, "🛠 <b>" + esc(names.owner((OwnerType) s.data.get("krT"),
+        String txt = "🛠 <b>" + esc(names.owner((OwnerType) s.data.get("krT"),
                         s.getLong("krId"))) + "</b> — " + mtLabel(mt)
                 + "\nJoriy balans: <b>" + fmt(cur) + "</b> so'm\n\n"
-                + "📅 <b>Qaysi sana bilan korrektirovka qilinsin?</b>", inline(List.of(
+                + "📅 <b>Qaysi sana bilan korrektirovka qilinsin?</b>";
+        InlineKeyboardMarkup kb = inline(List.of(
                 irow(btn("📅 Bugun", "a:krd:0"), btn("Kecha", "a:krd:1")),
                 irow(btn("🗓 Kalendar", "a:cal:o:kr")),
-                irow(btn("❌ Bekor", "cx")))));
+                irow(btn("❌ Bekor", "cx"))));
+        if (msgId > 0) sender.edit(chatId, msgId, txt, kb);
+        else sender.send(chatId, txt, kb);
     }
 
     private void krSanaBtn(Session s, String arg, long chatId, int msgId) {

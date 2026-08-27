@@ -1,9 +1,11 @@
 # Kassa Nazorati — MoySklad bilan integratsiyalashgan Telegram bot
 
 **NewStarBukhara** kompaniyasi uchun kassa–buxgalteriya pul aylanmasini
-avtomatlashtiruvchi tizim: kirim (prixod), rasxod, o'tkazma, qarz, hisobot
+avtomatlashtiruvchi tizim: kirim (prixod), o'tkazma, qarz, hisobot
 topshirish/qabul qilish va kontragentlar bilan ishlash — hammasi bitta
-Telegram bot orqali, ma'lumotlar **MoySklad**dan jonli olinadi.
+Telegram bot orqali, ma'lumotlar **MoySklad**dan jonli olinadi. Bot faqat
+MoySklad'ni kuzatuvchi/qayta hisoblovchi oyna — pul harakati (jumladan rasxod)
+qo'lda emas, faqat MoySklad hujjatlari orqali yuritiladi.
 
 **Stek:** Java 21 · Spring Boot 3.3 · PostgreSQL 16 · Flyway · TelegramBots 6.9 (long polling) · Docker
 
@@ -15,9 +17,12 @@ Telegram bot orqali, ma'lumotlar **MoySklad**dan jonli olinadi.
   shaffof yuritish. Balans hech qachon "qo'lda" o'zgarmaydi — faqat **ledger**
   (operatsiyalar jurnali) orqali; istalgan balansni jurnaldan qayta hisoblab
   tekshirish mumkin.
-- **MoySklad sinxroni**: Приходный/Расходный ордер, Входящий платеж (Клик/Карта),
-  savdo hujjatlari har 30 soniyada o'qiladi. Hujjat o'zgartirilsa/o'chirilsa —
-  bot balansni **avtomatik tuzatadi** (summa delta, otdel ko'chirish, STORNO).
+- **MoySklad sinxroni**: Приходный/Расходный ордер, Входящий/Исходящий платеж
+  (Клик/Карта), savdo hujjatlari har 30 soniyada o'qiladi. Hujjat
+  o'zgartirilsa/o'chirilsa — bot balansni **avtomatik tuzatadi** (summa delta,
+  otdel ko'chirish, STORNO). Click chiqimi ham shu yo'l bilan — Исходящий
+  платеж hujjatiga «Клик» statusi qo'yilsa, kassaning Click hisobidan rasxod
+  sifatida yoziladi.
 - **Kontragent qarz daftari** («Отдел Али»): postavchik qarzlarini muddati bilan
   nazorat qilish, tanlangan kunlarda (masalan 3-1 kun oldin) va muddat kunida
   soat 09:00 da tanlangan xodimlarga eslatma yuborish.
@@ -29,9 +34,9 @@ Telegram bot orqali, ma'lumotlar **MoySklad**dan jonli olinadi.
 
 | Rol | Nima qila oladi |
 |---|---|
-| **KASSIR** | faqat o'z kassasi: balans, tushum, tarix; rasxod so'rovi, o'tkazma, hisobot topshirish; kontragent qarz daftari (o'ziniki); kassasi bo'lsa — otdeliga odam qo'shish |
-| **BUXGALTER** | barcha kassalar holati, statistika, svod/Excel; rasxod tasdiqlash/rad, hisobot qabul, kassadan pul qabul qilish |
-| **SUPERADMIN** | hammasi + Настройка: foydalanuvchi/kassa/rol, boshlang'ich qoldiq, rasxod bekor/tahrir, Аудит (Excel), tugma nomlari va bo'limlarni o'chirish/yoqish, huquqlar (user/otdel kesimida), MoySklad API kaliti |
+| **KASSIR** | faqat o'z kassasi: balans, tushum, tarix; o'tkazma, hisobot topshirish; kontragent qarz daftari (o'ziniki); kassasi bo'lsa — otdeliga odam qo'shish |
+| **BUXGALTER** | barcha kassalar holati, statistika, svod/Excel; hisobot qabul, kassadan pul qabul qilish |
+| **SUPERADMIN** | hammasi + Настройка: foydalanuvchi/kassa/rol, boshlang'ich qoldiq, Аудит (Excel), tugma nomlari va bo'limlarni o'chirish/yoqish, huquqlar (user/otdel kesimida), MoySklad API kaliti |
 
 Bo'lim huquqlari uch darajada: **user** sozlamasi → **otdel (kassa)** sozlamasi →
 umumiy holat (SuperAdmin: ⚙️ Настройка → 👁 Ҳуқуқлар).
@@ -97,6 +102,16 @@ DB_PASSWORD=data
 
 ## 4. Muhim ish qoidalari (arxitektura qarorlari)
 
+- **Rasxod faqat MoySklad orqali.** Botning o'z ichidagi qo'lda rasxod oqimi
+  (kassir so'rovi → buxgalter tasdig'i, buxgalterning o'z rasxodi, "kassa
+  nomidan rasxod kiritish") 2026-08-27 da ataylab OLIB TASHLANDI — bot endi
+  MoySklad'ni kuzatuvchi/qayta hisoblovchi oyna. NAQD rasxod — Расходный ордер
+  (cashout), KLIK rasxod — Исходящий платеж (paymentout) hujjatiga «Клик»
+  statusi qo'yilganda. Har ikkisida ham hujjatning **Отдел** (Владелец) maydoni
+  to'g'ri kassaga tanlanishi shart — aks holda pul "Отдел Основной"
+  (Buxgalteriya)ga tushadi; keyinroq Отдel to'g'rilansa, bot avtomatik
+  qayta yo'naltiradi (rerouteRasxod). "🧾 Расходлар" (bosh panel) — faqat
+  ko'rish/hisobot, yozish emas.
 - **DB — yagona haqiqat manbai.** Google Sheets unga ergashadi; jadval katagi
   faqat operator o'zgartirganda qo'llanadi (snapshot mexanizmi, restartga chidamli).
 - **Ledger epoch** (`app.moysklad.ledger-start-date`, hozir 2026-08-18):
@@ -117,7 +132,7 @@ DB_PASSWORD=data
 src/main/java/uz/kassa/
   bot/        — Router, KassaBot (8-worker), Keyboards, LabelService (nom/bo'lim), PermService (huquqlar)
   bot/handlers/ — AdminHandler (panel/sozlamalar), KassirHandler, BuxgalterHandler, KontragentHandler (qarz daftari)
-  service/    — LedgerService (yadro), RasxodService, TransferService, SubmissionService, ReminderService
+  service/    — LedgerService (yadro), TransferService, SubmissionService, ReminderService
   service/moysklad/ — MoySkladClient, MoySkladSyncService (sync + reconcile + avtokorreksiya)
   gsheets/    — GoogleSheetsClient, SheetsSyncService (snapshot, DB-ustuvor)
   webapp/     — Mini App REST + ExcelReportService
@@ -133,6 +148,6 @@ docs/apps-script.gs — Google Sheets tomonidagi web-app kodi
 | MoySklad kalitini almashtirish | ⚙️ Настройка → 🔑 MoySklad API |
 | Bo'limni o'chirish/nomlash | ⚙️ Настройка → 🏷 Тугма номлари ва бўлимлар |
 | Huquq berish/olish (user/otdel) | ⚙️ Настройка → 👁 Ҳуқуқлар |
-| Tasdiqlangan rasxodni bekor/tahrir | ⚙️ Настройка → 🧾 Расходлар |
+| Rasxodlarni otdel/sana kesimida ko'rish | 🧾 Расходлар (bosh panel) |
 | Kim nima qilganini ko'rish (Excel) | ⚙️ Настройка → 📋 Аудит |
 | Chatni tozalash | /clear (auditga yoziladi) |

@@ -689,27 +689,21 @@ public class MoySkladSyncService {
     /* ==================== KLIK RASXOD (Исходящий платеж) ==================== */
 
     /**
-     * «Исходящий платеж» — faqat «Клик» statusidagi hujjatlar kassa/otdelning
-     * Click hisobidan RASXOD sifatida yoziladi (cashout NAQD uchungina bo'lgani
-     * kabi, Click chiqimi endi shu yo'l bilan — MoySklad'da kuzatiladi). Boshqa
-     * statuslar (bank o'tkazmasi kontragentlarga) botga tegmaydi.
+     * «Исходящий платеж» — bu hujjat turi BUTUN GURUH (14 ta tashkilot) umumiy
+     * moliyaviy oqimi uchun ishlatiladi (bank o'tkazmalari, tashkilotlararo
+     * hisob-kitob va h.k.) — kassir Click hisoblariga DEXLI aloqasi yo'q hujjatlar
+     * ham shu yerdan o'tadi. Shuning uchun faqat MoySklad hisobi (organizationAccount)
+     * bizning ro'yxatdagi Click hisobiga (click_accounts) ANIQ bog'langan hujjatlar
+     * qabul qilinadi — aks holda hujjat butunlay e'tiborsiz qoldiriladi (otdel/
+     * Buxgalteriyaga TUSHIRILMAYDI, applyCashout'dan farqli — u yerda hujjat bizning
+     * o'z savdo nuqtalarimizga tegishli, bu yerda esa yo'q).
      */
     private boolean dispatchPaymentOut(MoySkladClient.MsExpense e, Ctx ctx) {
-        if (!e.state().equalsIgnoreCase("Клик")) {
-            Optional<Operation> existing = opRepo.findByMoyskladId("po:" + e.id());
-            if (skipNewPreEpoch(e.date(), existing)) return false;
-            return existing.isPresent()
-                    && storno(existing.get(), "status «" + e.state() + "»ga o'zgargan", docInfo(e));
-        }
+        if (!ctx.accountToClick().containsKey(e.accountId())) return false;
         return applyPaymentOutKlik(e, ctx);
     }
 
-    /**
-     * «Исходящий платеж» («Клик» statusi) — applyCashout'ning Click ko'zgusi:
-     * otdel (group) bog'langan kassaga, aks holda BUXGALTERIYAGA; MoySklad hisobi
-     * (organizationAccount) alohida Click hisobiga bog'langan bo'lsa — o'sha hisobga
-     * (applyIncome'dagi qoida bilan bir xil).
-     */
+    /** «Исходящий платеж» — faqat ro'yxatdagi Click hisobiga (organizationAccount) yozilgan chiqim. */
     private boolean applyPaymentOutKlik(MoySkladClient.MsExpense e, Ctx ctx) {
         long sum = somSum(e);
         String msId = "po:" + e.id();
@@ -784,6 +778,64 @@ public class MoySkladSyncService {
             checkNegative(wantOt, wantOid, MoneyType.KLIK, "Klik rasxod");
         }
         return posted;
+    }
+
+    /* ==================== CLICK BALANS AUDITI (to'liq tarix) ==================== */
+
+    /**
+     * Har bir Click hisobining MoySklad'dagi HAQIQIY qoldig'ini hisob yaratilgandan
+     * buyon BARCHA Входящий/Исходящий платёж hujjatlarini yig'ib qayta hisoblaydi va
+     * botning saqlangan balansi bilan solishtiradi. Farq topilsa — avtomatik
+     * KORREKTIROVKA qo'llanadi (ledger.postAdjustment) va buxgalteriyaga xabar
+     * beriladi. Og'ir operatsiya (to'liq tarix) — kamdan-kam (Jobs: 3 soatda 1)
+     * yoki SuperAdmin /auditclick bilan qo'lda ishga tushiriladi.
+     */
+    public synchronized void auditClickAccounts() {
+        String token = client.currentToken();
+        if (token == null || token.isBlank()) return;
+
+        List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
+        Map<String, Long> accountToClick = new HashMap<>();
+        for (ClickAccount c : accounts)
+            if (c.getMoyskladAccountId() != null && !c.getMoyskladAccountId().isBlank())
+                accountToClick.put(c.getMoyskladAccountId(), c.getId());
+        if (accountToClick.isEmpty()) return;
+
+        Map<Long, Long> trueBalance = new HashMap<>();
+        for (Long id : accountToClick.values()) trueBalance.put(id, 0L);
+
+        try {
+            for (MoySkladClient.MsExpense e : client.fetchAllPaymentsIn()) {
+                Long clickId = accountToClick.get(e.accountId());
+                if (clickId == null || !e.applicable() || !e.state().equalsIgnoreCase("Клик")) continue;
+                long sum = somSum(e);
+                if (sum > 0) trueBalance.merge(clickId, sum, Long::sum);
+            }
+            for (MoySkladClient.MsExpense e : client.fetchAllPaymentsOut()) {
+                Long clickId = accountToClick.get(e.accountId());
+                if (clickId == null || !e.applicable()) continue;
+                long sum = somSum(e);
+                if (sum > 0) trueBalance.merge(clickId, -sum, Long::sum);
+            }
+        } catch (Exception ex) {
+            log.warn("Click balans auditi uzildi: {}", ex.getMessage());
+            return;
+        }
+
+        for (ClickAccount c : accounts) {
+            Long real = trueBalance.get(c.getId());
+            if (real == null) continue;
+            long bot = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+            long diff = real - bot;
+            if (diff == 0) continue;
+            ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.CLICK, c.getId(), MoneyType.KLIK,
+                    diff, "MoySklad bilan avto-tenglashtirish (audit)", null, ledger.today());
+            notify.toBuxgalteriya("🔄 <b>Click avto-tuzatish</b>: <b>" + TextUtil.esc(c.getName())
+                    + "</b> — MoySklad'dagi haqiqiy qoldiq bilan farq topildi, avtomatik tuzatildi:\n"
+                    + TextUtil.fmt(bot) + " → <b>" + TextUtil.fmt(real) + "</b> so'm ("
+                    + (diff > 0 ? "+" : "") + TextUtil.fmt(diff) + ")", null);
+            log.info("Click audit tuzatish: {} {} -> {} (farq {})", c.getName(), bot, real, diff);
+        }
     }
 
     /* ==================== yordamchi ==================== */

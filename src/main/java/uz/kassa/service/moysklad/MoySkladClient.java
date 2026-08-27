@@ -224,6 +224,40 @@ public class MoySkladClient {
         return out;
     }
 
+    /**
+     * Входящий/Исходящий платеж — TO'LIQ TARIX (sana filtrisiz, hisob yaratilgandan
+     * hoziргача). Faqat Click hisoblari balansini MoySklad bilan TO'LIQ solishtirish
+     * (audit) uchun ishlatiladi — oddiy 30 soniyalik sinxronda ishlatilmaydi (og'ir).
+     */
+    public List<MsExpense> fetchAllPaymentsIn() {
+        return expensesFromRows(rowsAll("paymentin", "&expand=agent,state"));
+    }
+
+    /** @see #fetchAllPaymentsIn() — xuddi shu, «Исходящий платеж» uchun. */
+    public List<MsExpense> fetchAllPaymentsOut() {
+        return expensesFromRows(rowsAll("paymentout", "&expand=agent,state"));
+    }
+
+    private List<MsExpense> expensesFromRows(List<JsonNode> rows) {
+        List<MsExpense> out = new ArrayList<>();
+        for (JsonNode r : rows) {
+            out.add(new MsExpense(
+                    r.path("id").asText(),
+                    r.path("name").asText(""),
+                    date(r),
+                    r.path("sum").asLong(0),
+                    "",
+                    groupOf(r),
+                    "",
+                    r.path("description").asText(""),
+                    agentOf(r),
+                    r.path("state").path("name").asText(""),
+                    currencyOf(r), rateOf(r),
+                    r.path("applicable").asBoolean(true), accountOf(r)));
+        }
+        return out;
+    }
+
     /** MoySklad kontragenti (qarz daftari uchun). */
     public record MsAgent(String id, String name, String phone, String inn) {}
 
@@ -349,6 +383,27 @@ public class MoySkladClient {
             JsonNode rws = root.path("rows");
             for (JsonNode r : rws) out.add(r);
             if (rws.size() < 100) break;
+        }
+        return out;
+    }
+
+    /**
+     * Sana/updated filtrisiz TO'LIQ ro'yxat (hisob yaratilgandan buyon) — faqat
+     * kamdan-kam ishlaydigan Click balans auditida ishlatiladi. Sahifalar orasida
+     * kichik pauza — MoySklad rate-limit (~45 so'rov/3 soniya)ga tegmaslik uchun.
+     */
+    private List<JsonNode> rowsAll(String entity, String extraQuery) {
+        List<JsonNode> out = new ArrayList<>();
+        for (int page = 0; page < 400; page++) {
+            String url = props.getMoysklad().getBaseUrl()
+                    + "/entity/" + entity
+                    + "?limit=100&offset=" + (page * 100) + extraQuery;
+            JsonNode root = getJson(url);
+            if (root == null) break;
+            JsonNode rws = root.path("rows");
+            for (JsonNode r : rws) out.add(r);
+            if (rws.size() < 100) break;
+            try { Thread.sleep(150); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
         }
         return out;
     }

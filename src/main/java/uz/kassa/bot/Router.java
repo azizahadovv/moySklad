@@ -50,6 +50,9 @@ public class Router {
     private final AdminHandler admin;
     private final uz.kassa.bot.handlers.KontragentHandler kontragent;
     private final AuditService audit;
+    private final uz.kassa.service.SettingsService settings;
+    private final uz.kassa.scheduler.Jobs jobs;
+    private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
 
     public void route(Update u) {
         if (u.hasCallbackQuery()) onCallback(u.getCallbackQuery());
@@ -118,6 +121,11 @@ public class Router {
         // shunda barcha navigatsiya mosligi buzilmaydi.
         String text = labelSvc.canonical(m.getText().trim());
 
+        // Guruh/superguruh chatlarida bot faqat Click hisobot buyruqlariga javob beradi —
+        // shaxsiy menyu/bo'limlar guruhda umuman ishlamaydi (masalan kassirlar guruhi).
+        if ((m.getChat().isGroupChat() || m.getChat().isSuperGroupChat())
+                && !text.equals("/setclickgroup") && !text.equals("/testclickgroup")) return;
+
         Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
         if (uo.isEmpty() || !uo.get().isActive()) {
             rememberGuest(m);
@@ -157,6 +165,51 @@ public class Router {
                     + "Ushbu bot <b>NewStarBukhara</b> kompaniyasi uchun kassa va "
                     + "kontragentlar hisobini yuritish maqsadida yaratilgan.\n\n"
                     + "Davom etish uchun /start tugmasini bosing.");
+            return;
+        }
+
+        if (text.equals("/setclickgroup")) {
+            if (user.getRole() != Role.SUPERADMIN) {
+                sender.send(chatId, "⚠️ Bu buyruq faqat SuperAdmin uchun");
+                return;
+            }
+            settings.set(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY, String.valueOf(chatId));
+            audit.log(user.getId(), "CLICK_GROUP_SET", "chat", chatId,
+                    user.getFullName() + " Click qoldiqlari guruhini belgiladi");
+            sender.send(chatId, "✅ Shu chat Click qoldiqlari hisobotini (har soat boshida) "
+                    + "qabul qiladigan guruh sifatida saqlandi.\nChat ID: <code>" + chatId + "</code>"
+                    + "\n\nBu guruhda endi boshqa hech qanday menyu/bo'lim ishlamaydi.",
+                    org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove.builder()
+                            .removeKeyboard(true).build());
+            return;
+        }
+
+        if (text.equals("/testclickgroup")) {
+            if (user.getRole() != Role.SUPERADMIN) {
+                sender.send(chatId, "⚠️ Bu buyruq faqat SuperAdmin uchun");
+                return;
+            }
+            jobs.clickHourlyReport();
+            sender.send(chatId, "✅ Test yuborildi (sozlangan guruhga).");
+            return;
+        }
+
+        if (text.equals("/auditclick")) {
+            if (user.getRole() != Role.SUPERADMIN) {
+                sender.send(chatId, "⚠️ Bu buyruq faqat SuperAdmin uchun");
+                return;
+            }
+            sender.send(chatId, "⏳ Click hisoblari MoySklad bilan to'liq solishtirilmoqda "
+                    + "(butun tarix — bir necha o'n soniya davom etishi mumkin)...");
+            new Thread(() -> {
+                try {
+                    syncService.auditClickAccounts();
+                    sender.send(chatId, "✅ Click auditi tugadi. Farq topilgan hisoblar haqida "
+                            + "alohida xabar keladi (agar bo'lsa).");
+                } catch (Exception ex) {
+                    sender.send(chatId, "⚠️ Audit xatosi: " + esc(ex.getMessage()));
+                }
+            }, "click-audit-cmd").start();
             return;
         }
 
@@ -233,6 +286,11 @@ public class Router {
         long chatId = cb.getMessage().getChatId();
         int msgId = cb.getMessage().getMessageId();
         String data = cb.getData();
+
+        // Guruh/superguruh chatlarida inline tugmalar ham ishlamaydi (menyu Kassalar/Kontragent guruhga
+        // umuman chiqmaydi, lekin himoya sifatida bu yerda ham to'siladi). Telegram guruh/superguruh
+        // chat ID'lari doim manfiy, shaxsiy chatlar doim musbat.
+        if (chatId < 0) return;
 
         Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
         if (uo.isEmpty() || !uo.get().isActive()) return;
