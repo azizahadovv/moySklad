@@ -481,6 +481,24 @@ public class MoySkladClient {
         return r.path("rate").path("value").asDouble(0);
     }
 
+    /**
+     * 💰 Pul hisoboti (/report/money/byaccount): har bir tashkilot hisobi
+     * (organizationAccount UUID) bo'yicha MoySklad ko'rsatayotgan JORIY qoldiq,
+     * so'mda. Naqd (hisobga bog'lanmagan) qator "CASH" kaliti bilan qaytadi.
+     * Ruxsat yo'q/xato — bo'sh map.
+     */
+    public java.util.Map<String, Long> fetchAccountBalances() {
+        java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
+        JsonNode root = getJson(props.getMoysklad().getBaseUrl() + "/report/money/byaccount");
+        if (root == null) return out;
+        for (JsonNode r : root.path("rows")) {
+            String id = lastSegment(r.path("account").path("meta").path("href").asText(""));
+            long bal = Math.round(r.path("balance").asDouble(0) / 100.0);
+            out.merge(id.isEmpty() ? "CASH" : id, bal, Long::sum);
+        }
+        return out;
+    }
+
     /** Valyutalar: UUID -> ISO kod (UZS, USD...). Xatoda bo'sh map. */
     public java.util.Map<String, String> fetchCurrencies() {
         java.util.Map<String, String> out = new java.util.LinkedHashMap<>();

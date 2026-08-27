@@ -34,8 +34,26 @@ public class LedgerService {
     private final AuditService audit;
     private final AppProps props;
     private final uz.kassa.repo.DayRepo dayRepo;
+    private final uz.kassa.repo.SubmissionRepo subRepo;
 
     public LocalDate today() { return LocalDate.now(props.zoneId()); }
+
+    /**
+     * TO'LIQ TOZALASH (📥 Қайта юклаш): BARCHA operatsiyalar, kun yozuvlari va
+     * hisobotlar o'chiriladi, balanslar (rezerv bilan birga) 0 ga tushiriladi.
+     * Foydalanuvchi/kassa/Click hisoblari/qarz daftariga TEGILMAYDI.
+     * Faqat MoySklad'dan qayta yuklashdan oldin chaqiriladi.
+     */
+    @Transactional
+    public void wipeAllFinancialData() {
+        opRepo.deleteAllInBatch();
+        subRepo.deleteAll();          // submission_days bolalari bilan birga
+        dayRepo.deleteAllInBatch();
+        for (Balance b : balanceRepo.findAll()) {
+            b.setAmount(0);
+            b.setReserved(0);
+        }
+    }
 
     /* ============================ BALANS ============================ */
 

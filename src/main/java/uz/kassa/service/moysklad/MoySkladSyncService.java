@@ -73,9 +73,12 @@ public class MoySkladSyncService {
      */
     private int quietFixes = 0;
 
+    /** 📥 Qayta yuklash davomida hujjatma-hujjat xabarlar butunlay o'chiriladi. */
+    private volatile boolean quietReload = false;
+
     /** Tuzatish xabarini yuborish kerakmi: bugungi hujjat — ha; eski — sanaladi. */
     private boolean loudFix(LocalDate docDate) {
-        if (docDate.equals(ledger.today())) return true;
+        if (!quietReload && docDate.equals(ledger.today())) return true;
         quietFixes++;
         return false;
     }
@@ -176,8 +179,12 @@ public class MoySkladSyncService {
      * (summa/otdel/sana/status/bekor qilish) sanasidan qat'i nazar DOIM qo'llanadi —
      * farq (delta) bilan ishlangani uchun kalibratsiyani buzmaydi.
      */
+    /** Ledger boshlanish sanasi sozlamasi — bot ichidan o'zgartirilsa shu ustuvor, .env zaxira. */
+    public static final String LEDGER_START_KEY = "moysklad.ledgerStart";
+
     private LocalDate epoch() {
-        String s = props.getMoysklad().getLedgerStartDate();
+        String s = settings.get(LEDGER_START_KEY).orElse("").trim();
+        if (s.isBlank()) s = props.getMoysklad().getLedgerStartDate();
         if (s == null || s.isBlank()) return LocalDate.MIN;
         try {
             return LocalDate.parse(s);
@@ -186,6 +193,9 @@ public class MoySkladSyncService {
             return LocalDate.MIN;
         }
     }
+
+    /** Amaldagi ledger boshlanish sanasi (admin panel ko'rsatishi uchun). MIN — cheklov yo'q. */
+    public LocalDate effectiveEpoch() { return epoch(); }
 
     /** Kalibratsiyadan oldingi, ledger'da yo'q hujjat — yangidan yozilmaydi. */
     private boolean skipNewPreEpoch(LocalDate docDate, Optional<Operation> existing) {
@@ -258,6 +268,7 @@ public class MoySkladSyncService {
 
         LocalDateTime now = LocalDateTime.now(props.zoneId());
         LocalDateTime from = settings.get(LAST_SYNC_KEY)
+                .filter(v -> !v.isBlank())
                 .map(v -> LocalDateTime.parse(v, FMT))
                 .orElse(now.minusDays(2))
                 .minusMinutes(props.getMoysklad().getSyncOverlapMinutes());
@@ -304,12 +315,75 @@ public class MoySkladSyncService {
      * updated-filtri ularni ko'rmaydi) shu yerdan tiklanadi.
      */
     public synchronized void reconcile() {
-        String token = client.currentToken();
-        if (token == null || token.isBlank()) return;
         LocalDate to = LocalDate.now(props.zoneId());
         LocalDate from = to.minusDays(props.getMoysklad().getReconcileDays());
         LocalDate ep = epoch();
         if (ep.isAfter(from)) from = ep;   // kalibratsiyadan oldingi davrga kirilmaydi
+        reconcileRange(from, to);
+    }
+
+    /**
+     * 📥 TO'LIQ QAYTA YUKLASH: barcha moliyaviy ma'lumotlar (operatsiyalar, kunlar,
+     * hisobotlar, balanslar) O'CHIRILADI va MoySklad'dan ledger boshlanish sanasidan
+     * bugungacha bo'lgan hujjatlar qaytadan tortiladi. Ledger sanasi belgilanmagan
+     * bo'lsa ishlamaydi (butun tarixni tortib yubormaslik uchun).
+     * @return qayta yuklangan hujjatlar soni; -1 — ledger sanasi belgilanmagan,
+     *         -2 — MoySklad tokeni yo'q (hech narsa O'CHIRILMAYDI ham).
+     */
+    public synchronized int fullReload() {
+        LocalDate ep = epoch();
+        if (ep.equals(LocalDate.MIN)) return -1;
+        String token = client.currentToken();
+        if (token == null || token.isBlank()) return -2;
+        quietReload = true;   // hujjatma-hujjat xabarlar yuborilmaydi — faqat yakuniy xulosa
+        try {
+            ledger.wipeAllFinancialData();
+            log.warn("TO'LIQ TOZALASH: barcha operatsiya/kun/hisobot o'chirildi, balanslar 0");
+            LocalDate to = LocalDate.now(props.zoneId());
+            int n = reconcileRange(ep, to);
+            calibrateClickToMoySklad();
+            // Watermark hozirga suriladi — inkremental sinxron shu yerdan davom etadi
+            settings.set(LAST_SYNC_KEY, LocalDateTime.now(props.zoneId()).format(FMT));
+            return n;
+        } finally {
+            quietReload = false;
+        }
+    }
+
+    /**
+     * Click hisoblarini MoySklad'ning JORIY qoldiqlariga (/report/money/byaccount)
+     * tenglashtirish. Hujjatlar faqat ledger sanasidan beri sanalgani uchun undan
+     * OLDINGI davr qoldig'i shu korrektirovka bilan kiradi — natijada bot balansi
+     * MoySklad ko'rsatayotgan summaga aynan teng bo'ladi. Korrektirovka moysklad_id'siz
+     * yoziladi, shuning uchun 3 soatlik avto-audit unga tegmaydi.
+     */
+    private void calibrateClickToMoySklad() {
+        try {
+            Map<String, Long> ms = client.fetchAccountBalances();
+            if (ms.isEmpty()) {
+                log.warn("MoySklad pul hisoboti bo'sh/ruxsat yo'q — Click tenglashtirish o'tkazildi");
+                return;
+            }
+            for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+                String accId = c.getMoyskladAccountId();
+                if (accId == null || accId.isBlank() || !ms.containsKey(accId)) continue;
+                long target = ms.get(accId);
+                long cur = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                long diff = target - cur;
+                if (diff == 0) continue;
+                ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.CLICK, c.getId(),
+                        MoneyType.KLIK, diff,
+                        "Qayta yuklash: MoySklad joriy qoldig'iga tenglashtirish", null, ledger.today());
+                log.info("Click tenglashtirildi: {} {} -> {}", c.getName(), cur, target);
+            }
+        } catch (Exception ex) {
+            log.warn("Click qoldiqlarini tenglashtirish xatosi: {}", ex.getMessage());
+        }
+    }
+
+    private synchronized int reconcileRange(LocalDate from, LocalDate to) {
+        String token = client.currentToken();
+        if (token == null || token.isBlank()) return 0;
 
         quietFixes = 0;
         int n = 0;
@@ -349,10 +423,11 @@ public class MoySkladSyncService {
         } catch (Exception e) {
             log.warn("MoySklad reconcile uzildi: {}", e.getMessage());
             flushQuietFixes("tekshiruv");
-            return;
+            return n;
         }
         flushQuietFixes("tekshiruv");
         if (n > 0) log.info("MoySklad reconcile: {} ta yozuv/tuzatish", n);
+        return n;
     }
 
     /* ==================== PAYMENTIN (status bo'yicha pul turi) ==================== */
@@ -804,16 +879,21 @@ public class MoySkladSyncService {
         Map<Long, Long> trueBalance = new HashMap<>();
         for (Long id : accountToClick.values()) trueBalance.put(id, 0L);
 
+        // Ledger boshlanish sanasidan OLDINGI hujjatlar SANALMAYDI — u davr
+        // kalibratsiya (qo'lda kiritilgan qoldiq) ichida, hujjatma-hujjat emas.
+        LocalDate ep = epoch();
         try {
             for (MoySkladClient.MsExpense e : client.fetchAllPaymentsIn()) {
                 Long clickId = accountToClick.get(e.accountId());
                 if (clickId == null || !e.applicable() || !e.state().equalsIgnoreCase("Клик")) continue;
+                if (e.date().isBefore(ep)) continue;
                 long sum = somSum(e);
                 if (sum > 0) trueBalance.merge(clickId, sum, Long::sum);
             }
             for (MoySkladClient.MsExpense e : client.fetchAllPaymentsOut()) {
                 Long clickId = accountToClick.get(e.accountId());
                 if (clickId == null || !e.applicable()) continue;
+                if (e.date().isBefore(ep)) continue;
                 long sum = somSum(e);
                 if (sum > 0) trueBalance.merge(clickId, -sum, Long::sum);
             }
@@ -825,16 +905,19 @@ public class MoySkladSyncService {
         for (ClickAccount c : accounts) {
             Long real = trueBalance.get(c.getId());
             if (real == null) continue;
-            long bot = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
-            long diff = real - bot;
+            // Faqat MoySklad'dan sinxronlangan qism solishtiriladi — qo'lda kiritilgan
+            // korrektirovka/boshlang'ich qoldiqlarga audit TEGMAYDI.
+            long botMs = opRepo.syncNet(OwnerType.CLICK, c.getId(), MoneyType.KLIK);
+            long diff = real - botMs;
             if (diff == 0) continue;
+            long bot = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
             ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.CLICK, c.getId(), MoneyType.KLIK,
-                    diff, "MoySklad bilan avto-tenglashtirish (audit)", null, ledger.today());
+                    diff, "MoySklad bilan avto-tenglashtirish (audit, sinxron qismi)", null, ledger.today());
             notify.toBuxgalteriya("🔄 <b>Click avto-tuzatish</b>: <b>" + TextUtil.esc(c.getName())
-                    + "</b> — MoySklad'dagi haqiqiy qoldiq bilan farq topildi, avtomatik tuzatildi:\n"
-                    + TextUtil.fmt(bot) + " → <b>" + TextUtil.fmt(real) + "</b> so'm ("
+                    + "</b> — MoySklad hujjatlari bilan farq topildi, avtomatik tuzatildi:\n"
+                    + TextUtil.fmt(bot) + " → <b>" + TextUtil.fmt(bot + diff) + "</b> so'm ("
                     + (diff > 0 ? "+" : "") + TextUtil.fmt(diff) + ")", null);
-            log.info("Click audit tuzatish: {} {} -> {} (farq {})", c.getName(), bot, real, diff);
+            log.info("Click audit tuzatish: {} {} -> {} (farq {})", c.getName(), bot, bot + diff, diff);
         }
     }
 
@@ -894,7 +977,7 @@ public class MoySkladSyncService {
      * yuzlab eski hujjat spam bo'lib ketmasligi uchun (ular baribir bazaga yoziladi).
      */
     private boolean shouldNotify(MoySkladClient.MsExpense e) {
-        return e.date().equals(ledger.today());
+        return !quietReload && e.date().equals(ledger.today());
     }
 
     private void checkNegative(OwnerType ot, Long oid, String sabab) {
@@ -902,6 +985,7 @@ public class MoySkladSyncService {
     }
 
     private void checkNegative(OwnerType ot, Long oid, MoneyType mt, String sabab) {
+        if (quietReload) return;
         long bal = ledger.view(ot, oid, mt).getAmount();
         if (bal < 0) {
             notify.toBuxgalteriya("⚠️ " + sabab + " natijasida <b>" + TextUtil.esc(ownerDisplayName(ot, oid))

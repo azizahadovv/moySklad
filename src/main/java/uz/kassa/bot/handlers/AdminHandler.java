@@ -79,6 +79,7 @@ public class AdminHandler {
             case ADM_LB_NAME -> { labelName(s, text, chatId); return true; }
             case ADM_MS_TOKEN -> { msTokenSave(u, s, text, chatId); return true; }
             case ADM_CG_ID -> { cgIdSave(u, s, text, chatId); return true; }
+            case ADM_LS_DATE -> { lsSave(u, s, text, chatId); return true; }
             default -> { }
         }
 
@@ -169,24 +170,71 @@ public class AdminHandler {
             case "cg" -> clickGroupMenu(s, chatId, msgId);
             case "cge" -> {
                 s.state = Session.State.ADM_CG_ID;
-                sender.edit(chatId, msgId, "📲 <b>Click гуруҳи</b>\n\n"
-                        + "1) Botni (@" + esc(props.getBot().getUsername()) + ") kerakli guruh/kanalga "
-                        + "ADMIN qilib qo'shing.\n"
-                        + "2) Shu guruhning ID sini yuboring (odatda manfiy son, mas. -1001234567890).\n\n"
-                        + "<i>Guruh ID sini bilmasangiz — botni guruhga qo'shib, guruhda istalgan "
+                sender.edit(chatId, msgId, "📣 <b>Гуруҳлар/Каналлар — yangi chat qo'shish</b>\n\n"
+                        + "1) Botni (@" + esc(props.getBot().getUsername()) + ") kerakli guruhga "
+                        + "(a'zo yetarli) yoki kanalga (ADMIN shart) qo'shing.\n"
+                        + "2) Shu chatning ID sini yuboring (odatda manfiy son, mas. -1001234567890).\n\n"
+                        + "Yoki oddiyroq yo'l: o'sha guruhning o'zida /setclickgroup buyrug'ini "
+                        + "yozing — chat avtomatik ro'yxatga qo'shiladi.\n\n"
+                        + "<i>Chat ID sini bilmasangiz — botni guruhga qo'shib, guruhda istalgan "
                         + "xabar yozing, keyin @userinfobot yoki shunga o'xshash vosita bilan ID'ni "
                         + "toping.</i>\n\nBekor qilish uchun «-» yuboring.");
             }
             case "cgt" -> {
                 sender.edit(chatId, msgId, "⏳ Test yuborilmoqda...");
-                jobs.clickHourlyReport();
+                jobs.clickReportNow();
                 clickGroupMenu(s, chatId, msgId);
             }
             case "cgx" -> {
-                settings.set(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY, "");
-                audit.log(u.getId(), "CLICK_GROUP_OCHIRILDI", "settings", null,
-                        u.getFullName() + " Click guruhini o'chirdi");
+                // Eski xabarlardagi argumentsiz tugma bosilsa — shunchaki menyu yangilanadi
+                if (!arg.isBlank()) {
+                    long gid = Long.parseLong(arg);
+                    jobs.removeClickChat(gid);
+                    audit.log(u.getId(), "CLICK_GROUP_OCHIRILDI", "settings", null,
+                            u.getFullName() + " guruh/kanalni hisobot ro'yxatidan o'chirdi: " + gid);
+                }
                 clickGroupMenu(s, chatId, msgId);
+            }
+            case "cgs" -> clickScheduleMenu(s, chatId, msgId);
+            case "cgi" -> {
+                settings.set(uz.kassa.scheduler.Jobs.CLICK_EVERY_KEY, arg);
+                audit.log(u.getId(), "CLICK_JADVAL", "settings", null,
+                        u.getFullName() + " hisobot intervalini o'zgartirdi: har " + arg + " soatda");
+                clickScheduleMenu(s, chatId, msgId);
+            }
+            case "cgw" -> {
+                String[] w = arg.split(":");
+                settings.set(uz.kassa.scheduler.Jobs.CLICK_FROM_KEY, w[0]);
+                settings.set(uz.kassa.scheduler.Jobs.CLICK_TO_KEY, w[1]);
+                audit.log(u.getId(), "CLICK_JADVAL", "settings", null,
+                        u.getFullName() + " hisobot oynasini o'zgartirdi: " + w[0] + ":00–" + w[1] + ":00");
+                clickScheduleMenu(s, chatId, msgId);
+            }
+            case "lsm" -> ledgerMenu(s, chatId, msgId);
+            case "lse" -> {
+                s.state = Session.State.ADM_LS_DATE;
+                sender.edit(chatId, msgId, "📅 <b>Ledger boshlanish sanasi</b>\n\n"
+                        + "Yangi sanani yuboring (masalan <code>2026-08-26</code> yoki "
+                        + "<code>26.08.2026</code>).\n\n"
+                        + "⚠️ <b>DIQQAT:</b> bu sanadan OLDINGI, bazada yo'q MoySklad hujjatlari "
+                        + "sinxronga olinmaydi. Sanani ORQAGA surish eski hujjatlarni qayta "
+                        + "«kashf qilib» balanslarni ikki marta hisoblashi mumkin — faqat nima "
+                        + "qilayotganingizni aniq bilsangiz o'zgartiring.\n\n"
+                        + "Bekor qilish uchun «-» yuboring.");
+            }
+            case "lsx" -> {
+                settings.set(uz.kassa.service.moysklad.MoySkladSyncService.LEDGER_START_KEY, "");
+                audit.log(u.getId(), "LEDGER_SANA", "settings", null,
+                        u.getFullName() + " ledger sanasini .env qiymatiga qaytardi");
+                ledgerMenu(s, chatId, msgId);
+            }
+            case "diag" -> diagMenu(s, chatId, msgId);
+            case "rld" -> reloadConfirm(s, chatId, msgId);
+            case "rldc" -> reloadCommit(u, chatId, msgId);
+            case "fixo" -> {
+                s.reset();
+                s.state = Session.State.ADM_KR_OWNER;
+                krOwner(s, arg, chatId, msgId);
             }
             case "gu" -> auPick(s, arg, chatId, msgId);
             case "me" -> auEmp(s, arg, chatId, msgId);
@@ -230,7 +278,8 @@ public class AdminHandler {
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
                     "🛠 Корректировка", "📋 Аудит",
                     "🏷 Тугма номлари", "🔑 MoySklad API", "👁 Ҳуқуқлар",
-                    "📲 Click гуруҳи", "♻️ Нол бошлаш");
+                    "📣 Гуруҳлар/Каналлар", "📅 Ledger санаси",
+                    "🩺 Диагностика", "📥 Қайта юклаш", "♻️ Нол бошлаш");
     private static final List<String> STAT_MENU =
             List.of("🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
                     "👥 Фойдаланувчилар умумий",
@@ -408,7 +457,10 @@ public class AdminHandler {
                     case "📋 Аудит" -> auditMenu(s, chatId, 0);
                     case "🏷 Тугма номлари" -> labelList(s, chatId, 0);
                     case "🔑 MoySklad API" -> msToken(s, chatId, 0);
-                    case "📲 Click гуруҳи" -> clickGroupMenu(s, chatId, 0);
+                    case "📣 Гуруҳлар/Каналлар" -> clickGroupMenu(s, chatId, 0);
+                    case "📅 Ledger санаси" -> ledgerMenu(s, chatId, 0);
+                    case "🩺 Диагностика" -> diagMenu(s, chatId, 0);
+                    case "📥 Қайта юклаш" -> reloadConfirm(s, chatId, 0);
                     case "👁 Ҳуқуқлар" -> {
                         if (!isCreator(u)) {
                             sendContent(s, chatId, "⚠️ Ҳуқуқлар bo'limini faqat asosiy "
@@ -1038,7 +1090,7 @@ public class AdminHandler {
                 irow(btn("👥 Фойдаланувчилар", "a:p:su")),
                 irow(btn("📋 Аудит", "a:audm")),
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
-                irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📲 Click гуруҳи", "a:cg")),
+                irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📣 Гуруҳлар/Каналлар", "a:cg")),
                 irow(bk("a:p:main"))));
     }
 
@@ -1778,40 +1830,46 @@ public class AdminHandler {
     }
 
     /* ==================================================================
-     * 📲 CLICK ГУРУҲИ — har soatda Click qoldiqlari yuboriladigan
-     * guruh/kanal. ID kiritilganda bot shu chatda ADMIN/A'ZO ekanligi
-     * darhol tekshiriladi — noto'g'ri ID yoki bot qo'shilmagan chat
+     * 📣 ГУРУҲЛАР/КАНАЛЛАР — har soatda Click qoldiqlari yuboriladigan
+     * guruh/kanallar RO'YXATI. ID kiritilganda bot shu chatda ADMIN/A'ZO
+     * ekanligi darhol tekshiriladi — noto'g'ri ID yoki bot qo'shilmagan chat
      * sababli keyinchalik jim ishlamay qolmasligi uchun.
      * ================================================================== */
 
     private void clickGroupMenu(Session s, long chatId, int msgId) {
-        String idStr = settings.get(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY).orElse("").trim();
-        String status;
-        if (idStr.isBlank()) {
-            status = "🔴 <b>Belgilanmagan</b>";
-        } else {
-            long gid = 0;
-            try { gid = Long.parseLong(idStr); } catch (NumberFormatException ignored) { }
-            var chat = gid != 0 ? sender.getChat(gid) : null;
-            String botStat = gid != 0 ? sender.botStatusInChat(gid) : null;
-            boolean canPost = "administrator".equals(botStat) || "member".equals(botStat)
-                    || "creator".equals(botStat);
-            String name = chat != null ? (chat.getTitle() != null ? chat.getTitle() : chat.getUserName()) : null;
-            status = canPost
-                    ? "🟢 <b>" + esc(name != null ? name : ("ID " + idStr)) + "</b> (ID: <code>" + idStr + "</code>)"
-                    : "🟠 ID: <code>" + idStr + "</code> — bot bu chatda topilmadi yoki chiqarib "
-                            + "yuborilgan, qayta tekshiring/qo'shing.";
-        }
-        String text = "📲 <b>Click гуруҳи</b>\n\n"
-                + "Har soatning boshida (00 daqiqada) shu guruh/kanalga barcha Click "
-                + "hisoblarining MoySklad bilan tenglashtirilgan qoldig'i yuboriladi.\n\n"
-                + "Holat: " + status;
+        List<Long> ids = jobs.clickChatIds();
+        StringBuilder status = new StringBuilder();
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        rows.add(irow(btn("✏️ ID kiritish/o'zgartirish", "a:cge")));
-        if (!idStr.isBlank()) {
-            rows.add(irow(btn("🧪 Hozir test yuborish", "a:cgt")));
-            rows.add(irow(btn("🗑 O'chirish", "a:cgx")));
+        if (ids.isEmpty()) {
+            status.append("🔴 <b>Hech qanday guruh/kanal ulanmagan</b>");
+        } else {
+            for (long gid : ids) {
+                var chat = sender.getChat(gid);
+                String botStat = sender.botStatusInChat(gid);
+                boolean canPost = "administrator".equals(botStat) || "member".equals(botStat)
+                        || "creator".equals(botStat);
+                String name = chat != null
+                        ? (chat.getTitle() != null ? chat.getTitle() : chat.getUserName()) : null;
+                String shown = name != null ? name : ("ID " + gid);
+                boolean channel = chat != null && chat.isChannelChat();
+                status.append(canPost ? "🟢 " : "🟠 ").append(channel ? "📢 " : "👥 ")
+                      .append("<b>").append(esc(shown)).append("</b> (<code>").append(gid).append("</code>)");
+                if (!canPost) status.append(" — bot bu chatda topilmadi yoki chiqarib yuborilgan");
+                status.append("\n");
+                rows.add(irow(btn("🗑 " + shown, "a:cgx:" + gid)));
+            }
         }
+        String text = "📣 <b>Гуруҳлар / Каналлар</b>\n\n"
+                + "Quyidagi barcha chatlarga Click hisoblarining MoySklad bilan "
+                + "tenglashtirilgan qoldig'i yuboriladi.\n"
+                + "Bu chatlarda bot hech qanday menyu ko'rsatmaydi va faqat SuperAdmin "
+                + "buyruqlariga javob beradi.\n\n"
+                + "⏰ Jadval: <b>har " + jobs.clickEvery() + " soatda</b>, "
+                + String.format("<b>%02d:00–%02d:00</b> oralig'ida\n\n", jobs.clickFrom(), jobs.clickTo())
+                + status;
+        rows.add(irow(btn("➕ Guruh/Kanal qo'shish", "a:cge")));
+        rows.add(irow(btn("⏰ Yuborish vaqtlari", "a:cgs")));
+        if (!ids.isEmpty()) rows.add(irow(btn("🧪 Hozir test yuborish", "a:cgt")));
         rows.add(irow(bk("a:p:set")));
         InlineKeyboardMarkup kb = inline(rows);
         if (msgId > 0) sender.edit(chatId, msgId, text, kb);
@@ -1845,14 +1903,285 @@ public class AdminHandler {
                     + ") shu guruhga qo'shing, so'ng ID ni qaytadan yuboring yoki «-» bilan bekor qiling:");
             return;
         }
-        settings.set(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY, String.valueOf(gid));
+        jobs.addClickChat(gid);
         audit.log(u.getId(), "CLICK_GROUP_SET", "settings", null,
-                u.getFullName() + " Click guruhini belgiladi: " + gid);
+                u.getFullName() + " hisobot ro'yxatiga guruh/kanal qo'shdi: " + gid);
         String name = chat.getTitle() != null ? chat.getTitle() : chat.getUserName();
         sender.send(chatId, "✅ <b>" + esc(name != null ? name : String.valueOf(gid))
-                + "</b> Click qoldiqlari guruhi sifatida saqlandi.\nHar soatning boshida shu yerga "
-                + "hisobot tushadi.");
+                + "</b> hisobot yuboriladigan chatlar ro'yxatiga qo'shildi.\nJadval bo'yicha "
+                + "shu yerga Click qoldiqlari tushadi.");
         clickGroupMenu(s, chatId, 0);
+    }
+
+    /** ⏰ Hisobot yuborish jadvali: interval (necha soatda bir) va soat oynasi. */
+    private void clickScheduleMenu(Session s, long chatId, int msgId) {
+        int every = jobs.clickEvery(), from = jobs.clickFrom(), to = jobs.clickTo();
+        String text = "⏰ <b>Yuborish vaqtlari</b>\n\n"
+                + "Joriy jadval: <b>har " + every + " soatda</b>, "
+                + String.format("<b>%02d:00–%02d:00</b> oralig'ida.\n\n", from, to)
+                + "Hisobot har soatning boshida (00 daqiqada) tekshiriladi: soat tanlangan "
+                + "oraliqda bo'lsa va intervalga to'g'ri kelsa — yuboriladi.\n\n"
+                + "<b>Interval</b> (necha soatda bir):";
+        java.util.function.BiFunction<Integer, String, InlineKeyboardButton> ib = (h, cb) ->
+                btn((h == every ? "✅ " : "") + h + " soat", cb);
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(ib.apply(1, "a:cgi:1"), ib.apply(2, "a:cgi:2"), ib.apply(3, "a:cgi:3")));
+        rows.add(irow(ib.apply(4, "a:cgi:4"), ib.apply(6, "a:cgi:6"), ib.apply(12, "a:cgi:12")));
+        rows.add(irow(ib.apply(24, "a:cgi:24")));
+        java.util.function.BiFunction<int[], String, InlineKeyboardButton> wb = (w, cb) -> {
+            boolean cur = w[0] == from && w[1] == to;
+            return btn((cur ? "✅ " : "") + String.format("%02d:00–%02d:00", w[0], w[1]), cb);
+        };
+        rows.add(irow(wb.apply(new int[]{0, 23}, "a:cgw:0:23"),
+                      wb.apply(new int[]{8, 20}, "a:cgw:8:20")));
+        rows.add(irow(wb.apply(new int[]{9, 18}, "a:cgw:9:18"),
+                      wb.apply(new int[]{9, 22}, "a:cgw:9:22")));
+        rows.add(irow(btn("⬅️ Orqaga", "a:cg")));
+        InlineKeyboardMarkup kb = inline(rows);
+        if (msgId > 0) sender.edit(chatId, msgId, text, kb);
+        else sendContent(s, chatId, text, kb);
+    }
+
+    /* ==================================================================
+     * 📅 LEDGER САНАСИ — MoySklad sinxron shu sanadan OLDINGI, bazada yo'q
+     * hujjatlarni qayta o'qimaydi (qo'lda kalibratsiya buzilmasligi uchun).
+     * Bot ichidan o'zgartirilsa settings ustuvor, .env (MOYSKLAD_LEDGER_START)
+     * zaxira bo'lib qoladi.
+     * ================================================================== */
+
+    private void ledgerMenu(Session s, long chatId, int msgId) {
+        String override = settings.get(
+                uz.kassa.service.moysklad.MoySkladSyncService.LEDGER_START_KEY).orElse("").trim();
+        String env = props.getMoysklad().getLedgerStartDate();
+        java.time.LocalDate eff = syncService.effectiveEpoch();
+        String effStr = eff.equals(java.time.LocalDate.MIN)
+                ? "❌ Belgilanmagan (cheklov yo'q)" : eff.format(DF);
+        String source = !override.isBlank() ? "bot sozlamasi"
+                : (env != null && !env.isBlank() ? ".env (MOYSKLAD_LEDGER_START)" : "—");
+        String text = "📅 <b>Ledger boshlanish sanasi</b>\n\n"
+                + "Amaldagi sana: <b>" + effStr + "</b> (manba: " + source + ")\n\n"
+                + "Bu sanadan OLDINGI, bazada YO'Q MoySklad hujjatlari sinxron/reconcile "
+                + "orqali qayta o'qilmaydi — boshlang'ich qoldiqlar shu sanaga kalibrlangan, "
+                + "eski hujjatlar ikki marta hisoblanmasligi uchun. Bazada YOZUVI BOR "
+                + "hujjatning o'zgarishi esa sanasidan qat'i nazar doim qo'llanadi.\n\n"
+                + "⚠️ Odatda bu sana boshlang'ich qoldiq QAYTA kiritilgandagina o'zgartiriladi.";
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("✏️ Sanani o'zgartirish", "a:lse")));
+        if (!override.isBlank() && env != null && !env.isBlank())
+            rows.add(irow(btn("♻️ .env qiymatiga qaytarish (" + env + ")", "a:lsx")));
+        rows.add(irow(bk("a:p:set")));
+        InlineKeyboardMarkup kb = inline(rows);
+        if (msgId > 0) sender.edit(chatId, msgId, text, kb);
+        else sendContent(s, chatId, text, kb);
+    }
+
+    private void lsSave(AppUser u, Session s, String text, long chatId) {
+        s.state = Session.State.IDLE;
+        if (text.equals("-")) {
+            sender.send(chatId, "❌ Bekor qilindi.");
+            ledgerMenu(s, chatId, 0);
+            return;
+        }
+        java.time.LocalDate d;
+        try {
+            String t = text.trim();
+            d = t.contains(".") ? java.time.LocalDate.parse(t, DF) : java.time.LocalDate.parse(t);
+        } catch (Exception e) {
+            s.state = Session.State.ADM_LS_DATE;
+            sender.send(chatId, "⚠️ Sana formati noto'g'ri. <code>2026-08-26</code> yoki "
+                    + "<code>26.08.2026</code> ko'rinishida yuboring, yoki «-» bilan bekor qiling:");
+            return;
+        }
+        if (d.isAfter(ledger.today())) {
+            s.state = Session.State.ADM_LS_DATE;
+            sender.send(chatId, "⚠️ Kelajak sanasi bo'lmaydi — sinxron butunlay to'xtab qolardi. "
+                    + "Boshqa sana yuboring yoki «-» bilan bekor qiling:");
+            return;
+        }
+        settings.set(uz.kassa.service.moysklad.MoySkladSyncService.LEDGER_START_KEY, d.toString());
+        audit.log(u.getId(), "LEDGER_SANA", "settings", null,
+                u.getFullName() + " ledger boshlanish sanasini o'zgartirdi: " + d);
+        sender.send(chatId, "✅ Ledger boshlanish sanasi <b>" + d.format(DF) + "</b> qilib "
+                + "saqlandi. Keyingi sinxron sikllaridan boshlab shu sanadan oldingi yangi "
+                + "hujjatlar o'qilmaydi.");
+        ledgerMenu(s, chatId, 0);
+    }
+
+    /* ==================================================================
+     * 🩺 ДИАГНОСТИКА — minus balanslar va minus kunlarni topib, sababi bilan
+     * ko'rsatadi; har bir muammoga bir bosishda Корректировка oqimiga o'tiladi.
+     * Kassa/sklad minusda bo'lishining tipik sabablari:
+     *  - rasxod hujjatlari kirimdan oldin/ko'p kelgan (MoySklad'da kirim boshqa
+     *    otdelga yozilgan yoki umuman kiritilmagan);
+     *  - boshlang'ich qoldiq kiritilmagan yoki noto'g'ri sana bilan kiritilgan;
+     *  - korrektirovka summasi/sanasi xato;
+     *  - kun ichida qoplash (qabul) haqiqiy tushumdan ortiq qilingan.
+     * ================================================================== */
+
+    private void diagMenu(Session s, long chatId, int msgId) {
+        StringBuilder sb = new StringBuilder("🩺 <b>Диагностика — minus tekshiruvi</b>\n");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        int issues = 0;
+
+        // 1) Balanslar: Основной, har kassa (naqd/klik), Click hisoblari
+        StringBuilder bal = new StringBuilder();
+        long bn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).getAmount();
+        long bkl = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK).getAmount();
+        if (bn < 0) bal.append("🔻 🏦 Основной — 💵 Naqd: <b>").append(fmt(bn)).append("</b> so'm\n");
+        if (bkl < 0) bal.append("🔻 🏦 Основной — 📲 Click: <b>").append(fmt(bkl)).append("</b> so'm\n");
+        if (bn < 0 || bkl < 0) rows.add(irow(btn("🛠 Основной tuzatish", "a:fixo:B")));
+
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            long n = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
+            long kl = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
+            if (n < 0) bal.append("🔻 🏪 ").append(esc(k.getName()))
+                    .append(" — 💵 Naqd: <b>").append(fmt(n)).append("</b> so'm\n");
+            if (kl < 0) bal.append("🔻 🏪 ").append(esc(k.getName()))
+                    .append(" — 📲 Click: <b>").append(fmt(kl)).append("</b> so'm\n");
+            if (n < 0 || kl < 0)
+                rows.add(irow(btn("🛠 " + k.getName() + " tuzatish", "a:fixo:K" + k.getId())));
+        }
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+            long v = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+            if (v < 0) {
+                bal.append("🔻 📲 ").append(esc(c.getName()))
+                        .append(": <b>").append(fmt(v)).append("</b> so'm\n");
+                rows.add(irow(btn("🛠 " + c.getName() + " tuzatish", "a:fixo:C" + c.getId())));
+            }
+        }
+        if (bal.length() > 0) {
+            issues++;
+            sb.append("\n<b>Minus balanslar:</b>\n").append(bal);
+        }
+
+        // 2) Topshirilmagan (OCHIQ/YOPILGAN) kunlarda minus qoldiq
+        StringBuilder days = new StringBuilder();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            for (DayRecord d : dayRepo.findByKassaIdAndStatusInOrderByDateAsc(
+                    k.getId(), List.of(DayStatus.OCHIQ, DayStatus.YOPILGAN))) {
+                if (d.remainNaqd() < 0)
+                    days.append("🔻 🏪 ").append(esc(k.getName())).append(" • ")
+                        .append(d.getDate().format(DF)).append(" — 💵 <b>")
+                        .append(fmt(d.remainNaqd())).append("</b> so'm\n");
+                if (d.remainKlik() < 0)
+                    days.append("🔻 🏪 ").append(esc(k.getName())).append(" • ")
+                        .append(d.getDate().format(DF)).append(" — 📲 <b>")
+                        .append(fmt(d.remainKlik())).append("</b> so'm\n");
+            }
+        }
+        if (days.length() > 0) {
+            issues++;
+            sb.append("\n<b>Minus kunlar</b> (Кассалар холати'dagi minuslar shundan):\n")
+              .append(days);
+        }
+
+        if (issues == 0) {
+            sb.append("\n✅ Minus balans ham, minus kun ham topilmadi — hammasi joyida.");
+        } else {
+            sb.append("\n<b>Minus qayerdan chiqadi?</b>\n")
+              .append("• MoySklad'da rasxod bor, lekin o'sha kunning kirimi boshqa otdelga "
+                      + "yozilgan yoki umuman kiritilmagan;\n")
+              .append("• boshlang'ich qoldiq kiritilmagan / sanasi noto'g'ri;\n")
+              .append("• korrektirovka summasi yoki sanasi xato ketgan;\n")
+              .append("• kunlik qoplash (pul qabul qilish) haqiqiy tushumdan ortiq qilingan.\n\n")
+              .append("Avval MoySklad'dagi hujjatlarni tekshiring; haqiqatan xato bo'lsa — "
+                      + "pastdagi 🛠 tugma orqali Корректировка bilan tuzating "
+                      + "(<code>=summa</code> yozsangiz balans aynan shu qiymatga tenglashadi).");
+        }
+
+        rows.add(irow(btn("🔄 Qayta tekshirish", "a:diag")));
+        rows.add(irow(bk("a:p:set")));
+        InlineKeyboardMarkup kb = inline(rows);
+        if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), kb);
+        else sendContent(s, chatId, sb.toString(), kb);
+    }
+
+    /* ==================================================================
+     * 📥 ҚАЙТА ЮКЛАШ — BARCHA moliyaviy ma'lumotlar (operatsiyalar, kunlar,
+     * hisobotlar, balanslar) O'CHIRILIB, MoySklad'dan ledger boshlanish
+     * sanasidan bugungacha qaytadan tortiladi. Foydalanuvchi/kassa/Click
+     * hisoblari/qarz daftariga tegilmaydi. Boshlang'ich qoldiqlar ham
+     * o'chadi — keyin qo'lda qayta kiritish kerak.
+     * ================================================================== */
+
+    private void reloadConfirm(Session s, long chatId, int msgId) {
+        java.time.LocalDate ep = syncService.effectiveEpoch();
+        if (ep.equals(java.time.LocalDate.MIN)) {
+            String warn = "⚠️ Avval <b>📅 Ledger санаси</b>ni belgilang — usiz qayta yuklash "
+                    + "MoySklad'ning BUTUN tarixini tortib yuborardi.";
+            if (msgId > 0) sender.edit(chatId, msgId, warn);
+            else sendContent(s, chatId, warn, null);
+            return;
+        }
+        long ops = opRepo.count();
+        String text = "📥 <b>Қайта юклаш</b>\n\n"
+                + "Bu amal:\n"
+                + "• barcha operatsiyalarni (" + ops + " ta), kun yozuvlarini va "
+                + "hisobotlarni <b>O'CHIRADI</b>;\n"
+                + "• barcha balanslarni <b>0</b> ga tushiradi (boshlang'ich qoldiqlar va "
+                + "korrektirovkalar ham o'chadi!);\n"
+                + "• MoySklad'dan <b>" + ep.format(DF) + "</b> dan bugungacha hujjatlarni "
+                + "qaytadan tortadi.\n\n"
+                + "Foydalanuvchilar, kassalar, Click hisoblari, qarz daftari va sozlamalarga "
+                + "tegilmaydi.\n\n⚠️ Bu amalni ORQAGA QAYTARIB BO'LMAYDI. Davom etasizmi?";
+        InlineKeyboardMarkup kb = inline(List.of(
+                irow(btn("✅ Ha, o'chirib qayta yukla", "a:rldc")),
+                irow(btn("❌ Bekor", "cx"))));
+        if (msgId > 0) sender.edit(chatId, msgId, text, kb);
+        else sendContent(s, chatId, text, kb);
+    }
+
+    private void reloadCommit(AppUser u, long chatId, int msgId) {
+        audit.log(u.getId(), "QAYTA_YUKLASH", "settings", null,
+                u.getFullName() + " to'liq tozalash + MoySklad'dan qayta yuklashni boshladi");
+        sender.edit(chatId, msgId, "⏳ Tozalanmoqda va MoySklad'dan qayta yuklanmoqda...\n"
+                + "Bu bir necha daqiqa olishi mumkin — tugagach xabar keladi.");
+        new Thread(() -> {
+            try {
+                int n = syncService.fullReload();
+                if (n == -1) {
+                    sender.send(chatId, "⚠️ Ledger sanasi belgilanmagan — hech narsa o'chirilmadi.");
+                } else if (n == -2) {
+                    sender.send(chatId, "⚠️ MoySklad tokeni ishlamayapti — hech narsa o'chirilmadi. "
+                            + "Avval 🔑 MoySklad API bo'limini tekshiring.");
+                } else {
+                    sender.send(chatId, "✅ <b>Қайта юклаш tugadi.</b>\n\n"
+                            + "MoySklad'dan <b>" + n + "</b> ta hujjat yuklandi ("
+                            + syncService.effectiveEpoch().format(DF) + " dan bugungacha). "
+                            + "Click hisoblari MoySklad'ning joriy qoldiqlariga tenglashtirildi.\n\n"
+                            + balanceSummary()
+                            + "\n❗️ Kassa/buxgalteriya NAQD qoldiqlari MoySklad'dan olinmaydi — "
+                            + "haqiqiy naqd pulni <b>🛠 Корректировка</b> yoki "
+                            + "<b>💼 Бошланғич қолдиқ</b> orqali kiriting.");
+                }
+            } catch (Exception ex) {
+                sender.send(chatId, "❌ Qayta yuklashda xato: " + esc(String.valueOf(ex.getMessage())));
+            }
+        }, "full-reload").start();
+    }
+
+    /** Barcha egalar bo'yicha joriy balanslar — bir xabarlik qisqa xulosa. */
+    private String balanceSummary() {
+        StringBuilder sb = new StringBuilder("💰 <b>Joriy balanslar:</b>\n");
+        long bn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).getAmount();
+        long bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK).getAmount();
+        sb.append("🏦 Основной: 💵 ").append(fmt(bn));
+        if (bk != 0) sb.append(" · 📲 ").append(fmt(bk));
+        sb.append(" so'm\n");
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            long n = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
+            long kl = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
+            if (n == 0 && kl == 0) continue;
+            sb.append("🏪 ").append(esc(k.getName())).append(": 💵 ").append(fmt(n));
+            if (kl != 0) sb.append(" · 📲 ").append(fmt(kl));
+            sb.append(" so'm\n");
+        }
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+            long v = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+            if (v != 0) sb.append("📲 ").append(esc(c.getName())).append(": ")
+                    .append(fmt(v)).append(" so'm\n");
+        }
+        return sb.toString();
     }
 
     /* ==================================================================

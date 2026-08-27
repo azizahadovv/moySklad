@@ -121,10 +121,23 @@ public class Router {
         // shunda barcha navigatsiya mosligi buzilmaydi.
         String text = labelSvc.canonical(m.getText().trim());
 
-        // Guruh/superguruh chatlarida bot faqat Click hisobot buyruqlariga javob beradi —
-        // shaxsiy menyu/bo'limlar guruhda umuman ishlamaydi (masalan kassirlar guruhi).
-        if ((m.getChat().isGroupChat() || m.getChat().isSuperGroupChat())
-                && !text.equals("/setclickgroup") && !text.equals("/testclickgroup")) return;
+        // Guruhda buyruq odatda "/cmd@botnomi" ko'rinishida keladi — @qismi olib tashlanadi.
+        if (text.startsWith("/")) {
+            int at = text.indexOf('@');
+            if (at > 0 && text.substring(at + 1).equalsIgnoreCase(props.getBot().getUsername()))
+                text = text.substring(0, at);
+        }
+
+        // Guruh/superguruh chatlarida bot FAQAT SuperAdmin'ning guruh sozlash buyruqlariga
+        // javob beradi. Qolgan hamma narsa — menyu, bo'limlar, oddiy foydalanuvchi (kassir)
+        // yuborgan buyruqlar — JIM e'tiborsiz qoldiriladi: guruhga bot hech narsa yozmaydi.
+        if (m.getChat().isGroupChat() || m.getChat().isSuperGroupChat()) {
+            if (!text.equals("/setclickgroup") && !text.equals("/testclickgroup")) return;
+            boolean superadmin = userRepo.findByTelegramId(tgId)
+                    .filter(AppUser::isActive)
+                    .map(x -> x.getRole() == Role.SUPERADMIN).orElse(false);
+            if (!superadmin) return;
+        }
 
         Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
         if (uo.isEmpty() || !uo.get().isActive()) {
@@ -173,12 +186,13 @@ public class Router {
                 sender.send(chatId, "⚠️ Bu buyruq faqat SuperAdmin uchun");
                 return;
             }
-            settings.set(uz.kassa.scheduler.Jobs.CLICK_GROUP_KEY, String.valueOf(chatId));
+            jobs.addClickChat(chatId);
             audit.log(user.getId(), "CLICK_GROUP_SET", "chat", chatId,
-                    user.getFullName() + " Click qoldiqlari guruhini belgiladi");
+                    user.getFullName() + " Click qoldiqlari guruhlariga chat qo'shdi");
             sender.send(chatId, "✅ Shu chat Click qoldiqlari hisobotini (har soat boshida) "
-                    + "qabul qiladigan guruh sifatida saqlandi.\nChat ID: <code>" + chatId + "</code>"
-                    + "\n\nBu guruhda endi boshqa hech qanday menyu/bo'lim ishlamaydi.",
+                    + "qabul qiladigan guruhlar ro'yxatiga qo'shildi.\nChat ID: <code>" + chatId + "</code>"
+                    + "\n\nBu guruhda hech qanday menyu/bo'lim ishlamaydi. Ro'yxatni admin paneldagi "
+                    + "⚙️ Настройка → 📣 Гуруҳлар/Каналлар bo'limida boshqarish mumkin.",
                     org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove.builder()
                             .removeKeyboard(true).build());
             return;
@@ -189,8 +203,8 @@ public class Router {
                 sender.send(chatId, "⚠️ Bu buyruq faqat SuperAdmin uchun");
                 return;
             }
-            jobs.clickHourlyReport();
-            sender.send(chatId, "✅ Test yuborildi (sozlangan guruhga).");
+            jobs.clickReportNow();
+            sender.send(chatId, "✅ Test yuborildi (sozlangan barcha guruh/kanallarga).");
             return;
         }
 

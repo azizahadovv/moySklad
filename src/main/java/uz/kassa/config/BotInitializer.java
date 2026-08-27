@@ -27,8 +27,44 @@ public class BotInitializer {
         try {
             new TelegramBotsApi(DefaultBotSession.class).registerBot(bot);
             log.info("Telegram bot ishga tushdi: @{}", props.getBot().getUsername());
+            setupCommandScopes();
         } catch (Exception e) {
             log.error("Botni ishga tushirishda xato", e);
+        }
+    }
+
+    /**
+     * Buyruqlar menyusi FAQAT shaxsiy chatlarda ko'rinadi. Guruh/kanalda «/» bosilganda
+     * /start, /clear kabi buyruqlar ro'yxati umuman chiqmaydi (default scope'dagi eski
+     * BotFather buyruqlari ham o'chiriladi — guruh scope'lari bo'shligicha qoladi).
+     */
+    private void setupCommandScopes() {
+        try {
+            var cmds = java.util.List.of(
+                    new org.telegram.telegrambots.meta.api.objects.commands.BotCommand(
+                            "start", "Botni ishga tushirish"),
+                    new org.telegram.telegrambots.meta.api.objects.commands.BotCommand(
+                            "clear", "Chatni tozalash"));
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands.builder()
+                    .commands(cmds)
+                    .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
+                            .BotCommandScopeAllPrivateChats.builder().build())
+                    .build());
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands.builder()
+                    .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
+                            .BotCommandScopeDefault.builder().build())
+                    .build());
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands.builder()
+                    .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
+                            .BotCommandScopeAllGroupChats.builder().build())
+                    .build());
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands.builder()
+                    .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
+                            .BotCommandScopeAllChatAdministrators.builder().build())
+                    .build());
+            log.info("Buyruqlar scope'i sozlandi: faqat shaxsiy chatlar, guruhlarda ko'rinmaydi");
+        } catch (Exception e) {
+            log.warn("Buyruqlar scope'ini sozlashda xato: {}", e.getMessage());
         }
     }
 }

@@ -55,6 +55,23 @@ public interface OperationRepo extends JpaRepository<Operation, Long> {
                                     @Param("mt") MoneyType mt,
                                     @Param("after") java.time.LocalDate after);
 
+    /**
+     * Egaga tegishli MoySklad'dan sinxronlangan (moysklad_id bor) TASDIQLANGAN
+     * operatsiyalarning ishorali yig'indisi (kirim +, chiqim -). Click auditi shu
+     * bilan solishtiradi — qo'lda kiritilgan korrektirovka/boshlang'ich qoldiqlar
+     * hisobga OLINMAYDI, ya'ni audit ularni buzmaydi.
+     */
+    @Query("""
+        select coalesce(sum(case when o.toOwnerType = :ot and o.toOwnerId = :oid then o.amount else 0 end), 0)
+             - coalesce(sum(case when o.fromOwnerType = :ot and o.fromOwnerId = :oid then o.amount else 0 end), 0)
+        from Operation o
+        where o.moyskladId is not null and o.moneyType = :mt
+          and o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and ((o.fromOwnerType = :ot and o.fromOwnerId = :oid)
+            or (o.toOwnerType = :ot and o.toOwnerId = :oid))
+        """)
+    long syncNet(@Param("ot") OwnerType ot, @Param("oid") Long oid, @Param("mt") MoneyType mt);
+
     /** Egaga yuborilgan, qabul kutayotgan o'tkazmalar. */
     @Query("""
         select o from Operation o

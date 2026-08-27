@@ -37,8 +37,66 @@ public class Jobs {
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.bot.Sender sender;
 
-    /** Click qoldiqlari soatlik hisoboti yuboriladigan guruh — /setclickgroup bilan saqlanadi. */
+    /**
+     * Click qoldiqlari soatlik hisoboti yuboriladigan guruh/kanallar — vergul bilan
+     * ajratilgan chat ID ro'yxati (eski bitta-ID format ham o'qiladi).
+     * /setclickgroup buyrug'i yoki admin panel (📣 Гуруҳлар/Каналлар) orqali boshqariladi.
+     */
     public static final String CLICK_GROUP_KEY = "notify.clickGroupChatId";
+
+    /** Ro'yxatdagi barcha chat ID'lar (bo'sh yoki yaroqsiz yozuvlar tashlab yuboriladi). */
+    public java.util.List<Long> clickChatIds() {
+        String raw = settings.get(CLICK_GROUP_KEY).orElse("");
+        java.util.List<Long> out = new java.util.ArrayList<>();
+        for (String p : raw.split(",")) {
+            String t = p.trim();
+            if (t.isEmpty()) continue;
+            try {
+                long v = Long.parseLong(t);
+                if (!out.contains(v)) out.add(v);
+            } catch (NumberFormatException ignored) { }
+        }
+        return out;
+    }
+
+    public void addClickChat(long chatId) {
+        var ids = clickChatIds();
+        if (!ids.contains(chatId)) ids.add(chatId);
+        saveClickChats(ids);
+    }
+
+    public void removeClickChat(long chatId) {
+        var ids = clickChatIds();
+        ids.remove(Long.valueOf(chatId));
+        saveClickChats(ids);
+    }
+
+    private void saveClickChats(java.util.List<Long> ids) {
+        settings.set(CLICK_GROUP_KEY, ids.stream().map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(",")));
+    }
+
+    /* ------- Hisobot jadvali: necha soatda bir va qaysi soatlar oralig'ida ------- */
+
+    /** Necha soatda bir yuborilsin (1/2/3/4/6/12/24). */
+    public static final String CLICK_EVERY_KEY = "notify.clickEveryHours";
+    /** Yuborish oynasi: boshlanish soati (0-23). */
+    public static final String CLICK_FROM_KEY = "notify.clickFromHour";
+    /** Yuborish oynasi: tugash soati (0-23, shu soat ham kiradi). */
+    public static final String CLICK_TO_KEY = "notify.clickToHour";
+
+    public int clickEvery() { return intSetting(CLICK_EVERY_KEY, 1, 1, 24); }
+    public int clickFrom() { return intSetting(CLICK_FROM_KEY, 0, 0, 23); }
+    public int clickTo() { return intSetting(CLICK_TO_KEY, 23, 0, 23); }
+
+    private int intSetting(String key, int def, int min, int max) {
+        try {
+            int v = Integer.parseInt(settings.get(key).orElse("").trim());
+            return Math.max(min, Math.min(max, v));
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
 
     /** Tez sinxron — realtime'ga yaqin: har 30 soniyada yangi/o'zgargan hujjatlar. */
     @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT15S")
@@ -110,16 +168,25 @@ public class Jobs {
     }
 
     /**
-     * 📲 Click qoldiqlari — har soatda tanlangan guruhga (SuperAdmin
-     * /setclickgroup bilan ro'yxatdan o'tkazgan chatga) har bir Click hisobi
-     * bo'yicha joriy balans yuboriladi. Guruh sozlanmagan bo'lsa — jim o'tadi.
+     * 📲 Click qoldiqlari — jadval bo'yicha ro'yxatdagi barcha guruh/kanallarga
+     * yuboriladi. Cron har soat :00 da uyg'onadi, lekin haqiqiy yuborish admin
+     * sozlagan interval (clickEvery) va soat oynasi (clickFrom..clickTo) ga qarab
+     * o'tkaziladi yoki tashlab yuboriladi. Ro'yxat bo'sh bo'lsa — jim o'tadi.
      */
     @Scheduled(cron = "0 0 * * * *", zone = "Asia/Tashkent")
     public void clickHourlyReport() {
+        int h = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent")).getHour();
+        int from = clickFrom(), to = clickTo();
+        if (h < from || h > to) return;
+        if ((h - from) % clickEvery() != 0) return;
+        clickReportNow();
+    }
+
+    /** Jadvalga qaramasdan darhol yuborish — 🧪 test tugmasi/buyrug'i uchun. */
+    public void clickReportNow() {
         try {
-            String chatIdStr = settings.get(CLICK_GROUP_KEY).orElse("").trim();
-            if (chatIdStr.isBlank()) return;
-            long chatId = Long.parseLong(chatIdStr);
+            java.util.List<Long> chatIds = clickChatIds();
+            if (chatIds.isEmpty()) return;
             List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
             if (accounts.isEmpty()) return;
 
@@ -136,9 +203,18 @@ public class Jobs {
             }
             sb.append("\n➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
             // Guruhda hech qanday menyu/klaviatura ko'rinmasligi kerak — faqat shu hisobot.
-            sender.send(chatId, sb.toString(),
-                    org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove.builder()
-                            .removeKeyboard(true).build());
+            // Bitta chatga yuborishda xato bo'lsa (bot chiqarilgan va h.k.) qolganlariga baribir ketadi.
+            for (long chatId : chatIds) {
+                var chat = sender.getChat(chatId);
+                if (chat != null && chat.isChannelChat()) {
+                    // Kanalda reply-klaviatura bo'lmaydi — Telegram markupli xabarni rad etadi.
+                    sender.send(chatId, sb.toString());
+                } else {
+                    sender.send(chatId, sb.toString(),
+                            org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove.builder()
+                                    .removeKeyboard(true).build());
+                }
+            }
         } catch (Exception e) {
             log.warn("Click soatlik hisobot xatosi: {}", e.getMessage());
         }
