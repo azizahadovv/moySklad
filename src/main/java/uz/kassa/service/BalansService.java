@@ -100,7 +100,9 @@ public class BalansService {
             sb.append("\n🏦 <b>Отдел основной</b>: <b>").append(fmt(bk.getAmount()))
               .append("</b> so'm\n");
 
-        long sumBal = 0;
+        List<ClickAccount> clicks = clickRepo.findByActiveTrueOrderByIdAsc();
+        java.util.Set<Long> shownClicks = new java.util.HashSet<>();
+        long sumBal = 0, sumClick = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
             if (k.isCashless()) continue;
             long bal = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
@@ -119,13 +121,21 @@ public class BalansService {
                 sb.append("⏳ Hisoboti topshirilmagan: <b>").append(fmt(dk)).append("</b> so'm\n");
             }
             sb.append("💼 Klik hisobi (jami yig'ilgan): <b>").append(fmt(bal)).append("</b> so'm\n");
+            // Shu otdelga bog'langan alohida Click hisoblari shu yerda ko'rinadi
+            for (ClickAccount c : clicks) {
+                if (!k.getId().equals(c.getKassaId())) continue;
+                long cb = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                sumClick += cb;
+                shownClicks.add(c.getId());
+                sb.append("📲 ").append(esc(c.getName())).append(": <b>").append(fmt(cb)).append("</b> so'm\n");
+            }
         }
 
-        long sumClick = 0;
-        List<ClickAccount> clicks = clickRepo.findByActiveTrueOrderByIdAsc();
-        if (!clicks.isEmpty()) {
-            sb.append("\n📲 <b>Alohida klik hisoblari</b>\n");
-            for (ClickAccount c : clicks) {
+        List<ClickAccount> rest = clicks.stream()
+                .filter(c -> !shownClicks.contains(c.getId())).toList();
+        if (!rest.isEmpty()) {
+            sb.append("\n📲 <b>Boshqa klik hisoblari</b> (otdelga bog'lanmagan)\n");
+            for (ClickAccount c : rest) {
                 long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
                 sumClick += bal;
                 sb.append("• ").append(esc(c.getName())).append(": <b>").append(fmt(bal)).append("</b> so'm\n");
@@ -155,7 +165,9 @@ public class BalansService {
               .append("</b> · 🔴 Bugungi rasxod: <b>").append(fmt(osn[1]))
               .append("</b> so'm\n");
 
-        long sumNaqd = 0, sumKlikBal = 0;
+        List<ClickAccount> clicks = clickRepo.findByActiveTrueOrderByIdAsc();
+        java.util.Set<Long> shownClicks = new java.util.HashSet<>();
+        long sumNaqd = 0, sumKlikBal = 0, sumClick = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
             if (k.isCashless()) continue;
             long dn = openDays(k.getId()).stream().mapToLong(DayRecord::remainNaqd).sum();
@@ -165,11 +177,18 @@ public class BalansService {
             sb.append("🏪 <b>").append(esc(k.getName())).append("</b>: 💵 <b>").append(fmt(dn))
               .append("</b> · 📲 <b>").append(fmt(bal))
               .append("</b> = <b>").append(fmt(dn + bal)).append("</b> so'm\n");
+            for (ClickAccount c : clicks) {
+                if (!k.getId().equals(c.getKassaId())) continue;
+                long cb = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                sumClick += cb;
+                shownClicks.add(c.getId());
+                sb.append("   📲 ").append(esc(c.getName())).append(": <b>")
+                  .append(fmt(cb)).append("</b> so'm\n");
+            }
         }
 
-        long sumClick = 0;
-        List<ClickAccount> clicks = clickRepo.findByActiveTrueOrderByIdAsc();
         for (ClickAccount c : clicks) {
+            if (shownClicks.contains(c.getId())) continue;
             long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
             sumClick += bal;
             sb.append("📲 <b>").append(esc(c.getName())).append("</b>: <b>").append(fmt(bal)).append("</b> so'm\n");

@@ -28,6 +28,11 @@ public class Kassa {
     @Builder.Default
     private boolean cashless = false;
 
+    /** true — nom qo'lda qo'yilgan, MoySklad nom-yangilashi unga tegmaydi. */
+    @Builder.Default
+    @Column(name = "name_locked", nullable = false)
+    private boolean nameLocked = false;
+
     @Builder.Default
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();

@@ -18,6 +18,15 @@ public class ClickAccount {
     @Column(name = "moysklad_account_id")
     private String moyskladAccountId;
 
+    /** Qaysi otdel (kassa)ga tegishli — balans/hisobotlarda shu kesimda guruhlanadi. */
+    @Column(name = "kassa_id")
+    private Long kassaId;
+
+    /** true — nom qo'lda qo'yilgan, MoySklad nom-yangilashi unga tegmaydi. */
+    @Builder.Default
+    @Column(name = "name_locked", nullable = false)
+    private boolean nameLocked = false;
+
     @Builder.Default
     private boolean active = true;
 

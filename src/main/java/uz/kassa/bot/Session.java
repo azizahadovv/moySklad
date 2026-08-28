@@ -26,7 +26,11 @@ public class Session {
         ADM_LB_NAME,
         // MoySklad API kalitini kiritish
         ADM_MS_TOKEN,
+        // Kassa/Click hisobi nomini qo'lda o'zgartirish
+        ADM_NM_NAME,
         ADM_CG_ID,
+        // Click hisobot ostiga qo'shiladigan matn (@mention va h.k.)
+        ADM_CG_FOOTER,
         // Ledger boshlanish sanasini kiritish
         ADM_LS_DATE,
         // 🤝 Kontragent (qarz daftari) oqimlari

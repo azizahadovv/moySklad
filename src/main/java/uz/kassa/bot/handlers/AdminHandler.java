@@ -78,7 +78,9 @@ public class AdminHandler {
             case ADM_CK_SANA -> { ckSana(u, s, text, chatId); return true; }
             case ADM_LB_NAME -> { labelName(s, text, chatId); return true; }
             case ADM_MS_TOKEN -> { msTokenSave(u, s, text, chatId); return true; }
+            case ADM_NM_NAME -> { nmNameSave(u, s, text, chatId); return true; }
             case ADM_CG_ID -> { cgIdSave(u, s, text, chatId); return true; }
+            case ADM_CG_FOOTER -> { cgFooterSave(u, s, text, chatId); return true; }
             case ADM_LS_DATE -> { lsSave(u, s, text, chatId); return true; }
             default -> { }
         }
@@ -132,11 +134,13 @@ public class AdminHandler {
                 && !java.util.Set.of("p", "qbu", "qbd", "cal", "bl", "rxm").contains(cmd))
             return false;
 
-        // Ҳуқуқлар — faqat asosiy (yaratuvchi) SuperAdmin o'zgartira oladi
-        if (java.util.Set.of("prm", "prc", "prs", "prt", "prko", "prk", "prq").contains(cmd)
-                && !isCreator(u)) {
-            sender.send(chatId, "⚠️ Ҳуқуқлар bo'limini faqat asosiy (yaratuvchi) "
-                    + "SuperAdmin boshqaradi.");
+        // Ҳуқуқлар — barcha SuperAdmin'larga ochiq; lekin SUPERADMIN'ga tegadigan
+        // amallar (rol berish/olish, faolsizlantirish) faqat asosiy (yaratuvchi)
+        // SuperAdmin uchun — target-tekshiruvlar tegishli metodlarda.
+        if (java.util.Set.of("prm", "prc", "prs", "prt", "prko", "prk", "prq",
+                        "prr", "prz", "prx", "prxy").contains(cmd)
+                && u.getRole() != Role.SUPERADMIN) {
+            sender.send(chatId, "⚠️ Ҳуқуқлар bo'limi faqat SuperAdmin uchun.");
             return true;
         }
 
@@ -154,13 +158,27 @@ public class AdminHandler {
             case "lbr" -> labelRenameStart(s, Integer.parseInt(arg), chatId, msgId);
             case "lbh" -> labelHideToggle(s, Integer.parseInt(arg), chatId, msgId);
             case "msk" -> msToken(s, chatId, msgId);
+            case "msr" -> msNamesMenu(chatId, msgId);
+            case "msrp" -> msNamesPreview(chatId, msgId);
+            case "msry" -> msNamesApply(u, chatId, msgId);
+            case "msn" -> msNameList(chatId, msgId);
+            case "msni" -> msNameItem(arg, chatId, msgId);
+            case "msne" -> msNameEditStart(s, arg, chatId, msgId);
+            case "msnu" -> msNameUnlock(u, arg, chatId, msgId);
             case "prm" -> permMenu(s, chatId, msgId);
-            case "prc" -> permCard(Long.parseLong(arg), chatId, msgId);
+            case "prc" -> permCard(u, Long.parseLong(arg), chatId, msgId);
             case "prs" -> permGrid("user", Long.parseLong(arg), chatId, msgId);
             case "prt" -> permToggle(u, "user", arg, chatId, msgId);
             case "prko" -> permKassaList(chatId, msgId);
             case "prk" -> permGrid("kassa", Long.parseLong(arg), chatId, msgId);
             case "prq" -> permToggle(u, "kassa", arg, chatId, msgId);
+            case "prr" -> permRolePick(u, Long.parseLong(arg), chatId, msgId);
+            case "prz" -> permRoleApply(u, arg, chatId, msgId);
+            case "prx" -> permDeactConfirm(u, Long.parseLong(arg), chatId, msgId);
+            case "prxy" -> {
+                deactivate(u, Long.parseLong(arg), chatId, msgId);
+                permMenu(s, chatId, 0);
+            }
             case "mske" -> {
                 s.state = Session.State.ADM_MS_TOKEN;
                 sender.edit(chatId, msgId, "🔑 <b>Yangi MoySklad API kalitini yuboring</b>\n\n"
@@ -196,6 +214,25 @@ public class AdminHandler {
                 clickGroupMenu(s, chatId, msgId);
             }
             case "cgs" -> clickScheduleMenu(s, chatId, msgId);
+            case "cgf" -> {
+                s.state = Session.State.ADM_CG_FOOTER;
+                String cur = jobs.clickFooter();
+                sender.edit(chatId, msgId, "✍️ <b>Hisobot ostiga qo'shiladigan matn</b>\n\n"
+                        + (cur.isEmpty() ? "Hozir: <i>yo'q</i>" : "Hozir: <code>" + esc(cur) + "</code>")
+                        + "\n\nYangi matnni yozib yuboring — u har bir Click hisoboti "
+                        + "OSTIDA chiqadi. Ichida:\n"
+                        + "• <code>{hamma}</code> — guruhning BARCHA ma'lum a'zolarini belgilaydi "
+                        + "(bot guruhda yozgan/qo'shilgan har kimni eslab boradi — ro'yxat vaqt "
+                        + "o'tishi bilan to'ladi)\n"
+                        + "• <code>{adminlar}</code> — guruh/kanal adminlarini bot O'ZI topib belgilaydi\n"
+                        + "• <code>{xodimlar}</code> — botda ro'yxatdagi va shu guruhga a'zo xodimlarni "
+                        + "avtomatik belgilaydi\n"
+                        + "• <code>@username</code> — aniq bir odamga eslatma (mention)\n"
+                        + "• <code>{id=123456789;Ism}</code> — username'siz odamni Telegram ID "
+                        + "orqali belgilash (ID'ni @userinfobot beradi)\n\n"
+                        + "Masalan: <code>Hisobotni tekshiring: {adminlar}</code>\n\n"
+                        + "Olib tashlash uchun «-» yuboring.");
+            }
             case "cgi" -> {
                 settings.set(uz.kassa.scheduler.Jobs.CLICK_EVERY_KEY, arg);
                 audit.log(u.getId(), "CLICK_JADVAL", "settings", null,
@@ -277,7 +314,7 @@ public class AdminHandler {
     private static final List<String> SOZLASH_MENU =
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
                     "🛠 Корректировка", "📋 Аудит",
-                    "🏷 Тугма номлари", "🔑 MoySklad API", "👁 Ҳуқуқлар",
+                    "🏷 Тугма номлари", "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "👁 Ҳуқуқлар",
                     "📣 Гуруҳлар/Каналлар", "📅 Ledger санаси",
                     "🩺 Диагностика", "📥 Қайта юклаш", "♻️ Нол бошлаш");
     private static final List<String> STAT_MENU =
@@ -286,6 +323,9 @@ public class AdminHandler {
                     "🏦 Бухгалтерия", "💼 Салдо", "📲 Кликлар", "📊 Свод");
     private static final List<String> SOZUSER_MENU =
             List.of("➕ Фойдаланувчи қўшиш", "🔄 Рол ўзгартириш", "🚫 Фойдаланувчини ўчириш");
+
+    private static final List<String> SOZKASSA_MENU =
+            List.of("➕ Касса қўшиш", "🗂 Отдел боғлаш", "🚫 Касса ўчириш");
 
     /** Panel nomi va bo'limlari — rol kesimida. */
     private String panelTitle(AppUser u) {
@@ -449,7 +489,7 @@ public class AdminHandler {
             case "sozlash" -> {
                 switch (text) {
                     case "🏪 Касса" -> navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
-                            List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
+                            SOZKASSA_MENU);
                     case "👥 Фойдаланувчилар" -> navTo(u, s, "sozuser", chatId,
                             "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
                     case "💼 Бошланғич қолдиқ" -> { ibStart(s, chatId); s.data.put("nav", "sozlash"); }
@@ -457,18 +497,14 @@ public class AdminHandler {
                     case "📋 Аудит" -> auditMenu(s, chatId, 0);
                     case "🏷 Тугма номлари" -> labelList(s, chatId, 0);
                     case "🔑 MoySklad API" -> msToken(s, chatId, 0);
+                    case "🔄 Номлар (MoySklad)" -> msNamesMenu(chatId, 0);
                     case "📣 Гуруҳлар/Каналлар" -> clickGroupMenu(s, chatId, 0);
                     case "📅 Ledger санаси" -> ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> diagMenu(s, chatId, 0);
                     case "📥 Қайта юклаш" -> reloadConfirm(s, chatId, 0);
-                    case "👁 Ҳуқуқлар" -> {
-                        if (!isCreator(u)) {
-                            sendContent(s, chatId, "⚠️ Ҳуқуқлар bo'limini faqat asosiy "
-                                    + "(yaratuvchi) SuperAdmin boshqaradi.", null);
-                            return true;
-                        }
-                        permMenu(s, chatId, 0);
-                    }
+                    // Ҳуқуқлар — barcha SuperAdmin'larga ochiq; SUPERADMIN'larga tegadigan
+                    // amallar ichkarida faqat yaratuvchiga ko'rsatiladi/ruxsat etiladi.
+                    case "👁 Ҳуқуқлар" -> permMenu(s, chatId, 0);
                     case "♻️ Нол бошлаш" -> rzStart(s, chatId);
                     default -> { return false; }
                 }
@@ -479,6 +515,7 @@ public class AdminHandler {
                         s.state = Session.State.ADM_AK_NAME;
                         sender.send(chatId, "🏪 <b>Yangi kassa</b>\n\nKassa nomini kiriting:");
                     }
+                    case "🗂 Отдел боғлаш" -> kassaOtdelList(chatId, 0);
                     case "🚫 Касса ўчириш" -> navTo(u, s, "kassadel", chatId,
                             "🚫 <b>Касса ўчириш</b>\n\nQaysi kassani o'chirasiz?", kassaLabels());
                     default -> { return false; }
@@ -497,10 +534,10 @@ public class AdminHandler {
                     long id = idOf(nav);
                     kassaRepo.findById(id).ifPresent(k -> { k.setActive(false); kassaRepo.save(k); });
                     navTo(u, s, "sozkassa", chatId, "🚫 Kassa faolsizlantirildi",
-                            List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
+                            SOZKASSA_MENU);
                 } else if (text.startsWith("❌")) {
                     navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
-                            List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
+                            SOZKASSA_MENU);
                 } else return false;
             }
             case "sozuser" -> {
@@ -522,7 +559,7 @@ public class AdminHandler {
                                 + "Yangi rolni tanlang:", roleLabels());
             }
             case "rolpick" -> {
-                if (!applyRole(idOf(nav), text, chatId)) return false;
+                if (!applyRole(u, idOf(nav), text, chatId)) return false;
                 navTo(u, s, "sozuser", chatId, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
             }
             case "stat" -> {
@@ -602,10 +639,7 @@ public class AdminHandler {
         return out;
     }
 
-    private boolean applyRole(long userId, String text, long chatId) {
-        AppUser x = userRepo.findById(userId).orElse(null);
-        if (x == null) return false;
-
+    private boolean applyRole(AppUser actor, long userId, String text, long chatId) {
         Role newRole; Long kassaId = null;
         if (text.startsWith("👤 Kassir — ")) {
             Kassa k = kassaByLabel(text.substring("👤 Kassir — ".length()));
@@ -614,7 +648,20 @@ public class AdminHandler {
         } else if (text.equals("🧮 Buxgalter")) newRole = Role.BUXGALTER;
         else if (text.equals("👑 SuperAdmin")) newRole = Role.SUPERADMIN;
         else return false;
+        return applyRoleDirect(actor, userId, newRole, kassaId, chatId);
+    }
 
+    private boolean applyRoleDirect(AppUser actor, long userId, Role newRole, Long kassaId,
+                                    long chatId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) return false;
+
+        // Admin (SuperAdmin) maqomini berish/olish — faqat asosiy (yaratuvchi) SuperAdmin
+        if ((x.getRole() == Role.SUPERADMIN || newRole == Role.SUPERADMIN) && !isCreator(actor)) {
+            sender.send(chatId, "⚠️ SuperAdmin maqomini berish yoki olishni faqat asosiy "
+                    + "(yaratuvchi) SuperAdmin qila oladi.");
+            return true;
+        }
         // Oxirgi SuperAdmin'ni pasaytirib bo'lmaydi — tizim egasiz qolmasin
         if (x.getRole() == Role.SUPERADMIN && newRole != Role.SUPERADMIN
                 && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1) {
@@ -623,9 +670,13 @@ public class AdminHandler {
             return true;
         }
 
+        Role oldRole = x.getRole();
         x.setRole(newRole);
         x.setKassaId(kassaId);
         userRepo.save(x);
+        audit.log(actor.getId(), "ROL_OZGARTIRILDI", "user", x.getId(),
+                actor.getFullName() + ": " + x.getFullName() + " " + oldRole + " → " + newRole
+                        + (kassaId == null ? "" : " (" + names.owner(OwnerType.KASSA, kassaId) + ")"));
         sender.send(chatId, "✅ <b>" + esc(x.getFullName()) + "</b> roli o'zgartirildi: <b>"
                 + newRole + (kassaId == null ? "" : " · " + esc(names.owner(OwnerType.KASSA, kassaId)))
                 + "</b>");
@@ -729,7 +780,7 @@ public class AdminHandler {
             case "roluser", "rolpick" -> navTo(u, s, "sozuser", chatId,
                     "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
             case "kassadel", "kassadelc" -> navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
-                    List.of("➕ Касса қўшиш", "🚫 Касса ўчириш"));
+                    SOZKASSA_MENU);
             case "saldo", "svod" -> navTo(u, s, "stat", chatId, "📈 <b>Статистика</b>", statLabels(u));
             case "svoddavr", "svodotd" -> navTo(u, s, "svod", chatId,
                     "📊 <b>Свод</b>\n\nExcel turini tanlang:",
@@ -779,6 +830,12 @@ public class AdminHandler {
             case "skd"  -> kassaDeleteList(chatId, msgId);
             case "skx"  -> kassaDeleteConfirm(Long.parseLong(a[1]), chatId, msgId);
             case "sky"  -> kassaDeactivate(Long.parseLong(a[1]), chatId, msgId);
+            case "sko"  -> kassaOtdelList(chatId, msgId);
+            case "skg"  -> kassaOtdelMenu(Long.parseLong(a[1]), chatId, msgId);
+            case "skgs" -> kassaOtdelSet(u, Long.parseLong(a[1]), a[2], false, chatId, msgId);
+            case "skgm" -> kassaOtdelSet(u, Long.parseLong(a[1]), a[2], true, chatId, msgId);
+            case "skgx" -> kassaOtdelClearConfirm(Long.parseLong(a[1]), chatId, msgId);
+            case "skgy" -> kassaOtdelClear(u, Long.parseLong(a[1]), chatId, msgId);
             case "sunew" -> { s.reset(); auStart(s, chatId); }
             case "sknew" -> {
                 s.reset(); s.state = Session.State.ADM_AK_NAME;
@@ -1090,6 +1147,7 @@ public class AdminHandler {
                 irow(btn("👥 Фойдаланувчилар", "a:p:su")),
                 irow(btn("📋 Аудит", "a:audm")),
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
+                irow(btn("🔄 Номлар (MoySklad)", "a:msr")),
                 irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📣 Гуруҳлар/Каналлар", "a:cg")),
                 irow(bk("a:p:main"))));
     }
@@ -1097,8 +1155,375 @@ public class AdminHandler {
     private void setKassa(long chatId, int msgId) {
         show(chatId, msgId, "🏪 <b>Касса</b>", List.of(
                 irow(btn("➕ Касса қўшиш", "a:p:sknew")),
+                irow(btn("🗂 Отдел боғлаш", "a:p:sko")),
                 irow(btn("🚫 Касса ўчириш", "a:p:skd")),
                 irow(bk("a:p:set"))));
+    }
+
+    /* ---------- 🗂 KASSA–OTDEL BOG'LANISHI ---------- */
+
+    /** Otdel band bo'lgan boshqa FAOL kassalar (o'zidan tashqari). */
+    private List<Kassa> otdelHolders(String groupId, long exceptKassaId) {
+        List<Kassa> out = new ArrayList<>();
+        for (Kassa o : kassaRepo.findByActiveTrueOrderByIdAsc())
+            if (o.getId() != exceptKassaId && groupId.equals(o.getMoyskladGroupId())) out.add(o);
+        return out;
+    }
+
+    private void kassaOtdelList(long chatId, int msgId) {
+        Map<String, String> groups = msClient.fetchGroups();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            String g = k.getMoyskladGroupId();
+            String cur = (g == null || g.isBlank()) ? "—" : groups.getOrDefault(g, "?");
+            rows.add(irow(btn("🏪 " + k.getName() + " · " + cur, "a:p:skg:" + k.getId())));
+        }
+        rows.add(irow(bk("a:p:sk")));
+        String text = "🗂 <b>Отдел боғлаш</b>\n\n"
+                + "Har bir kassa yonida hozirgi MoySklad otdeli ko'rsatilgan "
+                + "(— bo'lsa bog'lanmagan).\nKassani tanlang:";
+        if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
+        else sender.send(chatId, text, inline(rows));
+    }
+
+    private void kassaOtdelMenu(long kassaId, long chatId, int msgId) {
+        Kassa k = kassaRepo.findById(kassaId).orElse(null);
+        if (k == null) { kassaOtdelList(chatId, msgId); return; }
+        Map<String, String> groups = msClient.fetchGroups();
+        if (groups.isEmpty()) {
+            show(chatId, msgId, "⚠️ MoySklad otdellari olinmadi — API kaliti va ulanishni "
+                    + "tekshiring (⚙️ Настройка → 🔑 MoySklad API).",
+                    List.of(irow(bk("a:p:sko"))));
+            return;
+        }
+        String cur = k.getMoyskladGroupId() == null ? "" : k.getMoyskladGroupId();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (Map.Entry<String, String> g : groups.entrySet()) {
+            String mark = g.getKey().equals(cur) ? "✅ "
+                    : otdelHolders(g.getKey(), kassaId).isEmpty() ? "🗂 " : "🔒 ";
+            rows.add(irow(btn(mark + g.getValue(), "a:p:skgs:" + kassaId + ":" + g.getKey())));
+        }
+        if (!cur.isBlank())
+            rows.add(irow(btn("➖ Otdelni olib tashlash", "a:p:skgx:" + kassaId)));
+        rows.add(irow(bk("a:p:sko")));
+        show(chatId, msgId, "🗂 <b>" + esc(k.getName()) + "</b>\n\n"
+                + "Hozirgi otdel: <b>" + (cur.isBlank() ? "—"
+                        : esc(groups.getOrDefault(cur, cur))) + "</b>\n\n"
+                + "✅ — hozirgisi · 🔒 — boshqa kassada band (bosilsa ko'chirish so'raladi)\n"
+                + "Yangi otdelni tanlang:", rows);
+    }
+
+    private void kassaOtdelSet(AppUser u, long kassaId, String groupId, boolean move,
+                               long chatId, int msgId) {
+        Kassa k = kassaRepo.findById(kassaId).orElse(null);
+        if (k == null) { kassaOtdelList(chatId, msgId); return; }
+        Map<String, String> groups = msClient.fetchGroups();
+        String gName = groups.getOrDefault(groupId, groupId);
+        List<Kassa> holders = otdelHolders(groupId, kassaId);
+
+        // Har qanday biriktirish oldidan DOIM tasdiq so'raladi (bexosdan bosishdan himoya)
+        if (!move) {
+            String warn;
+            if (holders.isEmpty()) {
+                warn = "🗂 <b>" + esc(gName) + "</b> otdeli <b>" + esc(k.getName())
+                        + "</b> kassasiga biriktirilsinmi?\n\nMoySklad'ning shu otdeldagi "
+                        + "kirim/chiqim hujjatlari endi shu kassaga yoziladi.";
+            } else {
+                String who = holders.stream().map(Kassa::getName)
+                        .reduce((x, y) -> x + ", " + y).orElse("?");
+                warn = "⚠️ <b>" + esc(gName) + "</b> otdeli allaqachon <b>" + esc(who)
+                        + "</b> kassasiga biriktirilgan.\n\nBitta otdel faqat bitta kassada "
+                        + "bo'la oladi. <b>" + esc(k.getName()) + "</b> kassasiga ko'chirilsinmi? "
+                        + "(avvalgi kassadan olib tashlanadi)";
+            }
+            show(chatId, msgId, warn, List.of(
+                    irow(btn(holders.isEmpty() ? "✅ Ha, biriktirilsin" : "✅ Ha, ko'chirilsin",
+                            "a:p:skgm:" + kassaId + ":" + groupId)),
+                    irow(btn("❌ Yo'q", "a:p:skg:" + kassaId))));
+            return;
+        }
+        for (Kassa o : holders) {
+            o.setMoyskladGroupId(null);
+            kassaRepo.save(o);
+            audit.log(u.getId(), "OTDEL_OLIB_TASHLANDI", "kassa", o.getId(),
+                    u.getFullName() + " «" + gName + "» otdelini «" + o.getName()
+                            + "» kassasidan oldi (ko'chirish)");
+        }
+        k.setMoyskladGroupId(groupId);
+        kassaRepo.save(k);
+        audit.log(u.getId(), "OTDEL_BIRIKTIRILDI", "kassa", k.getId(),
+                u.getFullName() + " «" + gName + "» otdelini «" + k.getName() + "» kassasiga biriktirdi");
+        show(chatId, msgId, "✅ <b>" + esc(gName) + "</b> otdeli <b>" + esc(k.getName())
+                + "</b> kassasiga biriktirildi."
+                + (holders.isEmpty() ? "" : "\n(Avvalgi kassadan olib tashlandi.)")
+                + "\n\nMoySklad hujjatlari endi shu kassaga yoziladi.",
+                List.of(irow(bk("a:p:sko"))));
+    }
+
+    /** Olib tashlash oldidan tasdiq. */
+    private void kassaOtdelClearConfirm(long kassaId, long chatId, int msgId) {
+        Kassa k = kassaRepo.findById(kassaId).orElse(null);
+        if (k == null) { kassaOtdelList(chatId, msgId); return; }
+        String cur = k.getMoyskladGroupId();
+        String gName = cur == null ? "—" : msClient.fetchGroups().getOrDefault(cur, cur);
+        show(chatId, msgId, "⚠️ <b>" + esc(k.getName()) + "</b> kassasidan <b>" + esc(gName)
+                + "</b> otdeli olib tashlansinmi?\n\nKeyin bu kassaga MoySklad'dan avtomatik "
+                + "hech narsa tushmaydi — otdel hujjatlari Buxgalteriyaga yoziladi.", List.of(
+                irow(btn("✅ Ha, olib tashlansin", "a:p:skgy:" + kassaId)),
+                irow(btn("❌ Yo'q", "a:p:skg:" + kassaId))));
+    }
+
+    private void kassaOtdelClear(AppUser u, long kassaId, long chatId, int msgId) {
+        Kassa k = kassaRepo.findById(kassaId).orElse(null);
+        if (k == null) { kassaOtdelList(chatId, msgId); return; }
+        String old = k.getMoyskladGroupId();
+        k.setMoyskladGroupId(null);
+        kassaRepo.save(k);
+        audit.log(u.getId(), "OTDEL_OLIB_TASHLANDI", "kassa", k.getId(),
+                u.getFullName() + " «" + k.getName() + "» kassasidan otdelni oldi (edi: " + old + ")");
+        show(chatId, msgId, "➖ <b>" + esc(k.getName()) + "</b> kassasidan otdel olib tashlandi.\n\n"
+                + "⚠️ Endi bu kassaga MoySklad'dan avtomatik hech narsa tushmaydi — "
+                + "otdel hujjatlari Buxgalteriyaga yoziladi.",
+                List.of(irow(bk("a:p:sko"))));
+    }
+
+    /* ---------- 🔄 NOMLARNI MOYSKLAD'DAN YANGILASH ---------- */
+
+    /** MoySklad'dagi joriy nomlar bilan farqlar: [tur, eski, yangi].
+     *  Qo'lda qo'yilgan (name_locked) nomlarga TEGILMAYDI. */
+    private List<String[]> msNameDiffs(Map<String, String> groups, Map<String, String> accounts) {
+        List<String[]> out = new ArrayList<>();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isNameLocked()) continue;
+            String g = k.getMoyskladGroupId();
+            if (g == null || g.isBlank()) continue;
+            String nn = groups.get(g);
+            if (nn != null && !nn.isBlank() && !nn.trim().equals(k.getName()))
+                out.add(new String[]{"🏪", k.getName(), nn.trim()});
+        }
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+            if (c.isNameLocked()) continue;
+            String a = c.getMoyskladAccountId();
+            if (a == null || a.isBlank()) continue;
+            String nn = accounts.get(a);
+            if (nn != null && !nn.isBlank() && !nn.trim().equals(c.getName()))
+                out.add(new String[]{"📲", c.getName(), nn.trim()});
+        }
+        return out;
+    }
+
+    /** 🔄 Номлар bo'limi bosh menyusi. */
+    private void msNamesMenu(long chatId, int msgId) {
+        String text = "🔄 <b>Номлар (MoySklad)</b>\n\n"
+                + "• <b>MoySklad'dan yangilash</b> — kassa nomlari otdel nomidan, klik "
+                + "hisoblari MoySklad hisob nomidan tortiladi (avval farqlar ko'rsatiladi).\n"
+                + "• <b>Qo'lda o'zgartirish</b> — istalgan kassa/klik hisobiga o'z nomingizni "
+                + "qo'yasiz; bog'lanishlar saqlanadi, MoySklad yangilashi bu nomga TEGMAYDI (🔒).";
+        List<List<InlineKeyboardButton>> rows = List.of(
+                irow(btn("🔄 MoySklad'dan yangilash", "a:msrp")),
+                irow(btn("✏️ Qo'lda nom o'zgartirish", "a:msn")),
+                irow(bk("a:p:set")));
+        if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
+        else sender.send(chatId, text, inline(rows));
+    }
+
+    /** Qo'lda nom o'zgartirish — obyekt tanlash ro'yxati. */
+    private void msNameList(long chatId, int msgId) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn("🏪 " + k.getName() + (k.isNameLocked() ? " 🔒" : ""),
+                    "a:msni:k" + k.getId())));
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn("📲 " + c.getName() + (c.isNameLocked() ? " 🔒" : ""),
+                    "a:msni:c" + c.getId())));
+        rows.add(irow(bk("a:msr")));
+        show(chatId, msgId, "✏️ <b>Qo'lda nom o'zgartirish</b>\n\n"
+                + "🔒 — nomi qo'lda qo'yilgan (MoySklad yangilashi tegmaydi)\n"
+                + "Nomini o'zgartirmoqchi bo'lgan kassa yoki klik hisobini tanlang:", rows);
+    }
+
+    /** Tanlangan obyekt kartasi: hozirgi nom, bog'lanish, amallar. */
+    private void msNameItem(String arg, long chatId, int msgId) {
+        boolean isKassa = arg.startsWith("k");
+        long id = Long.parseLong(arg.substring(1));
+        String name, extra;
+        boolean locked;
+        if (isKassa) {
+            Kassa k = kassaRepo.findById(id).orElse(null);
+            if (k == null) { msNameList(chatId, msgId); return; }
+            name = k.getName(); locked = k.isNameLocked();
+            String g = k.getMoyskladGroupId();
+            extra = "Otdel: " + (g == null || g.isBlank() ? "—"
+                    : esc(msClient.fetchGroups().getOrDefault(g, g)));
+        } else {
+            ClickAccount c = clickRepo.findById(id).orElse(null);
+            if (c == null) { msNameList(chatId, msgId); return; }
+            name = c.getName(); locked = c.isNameLocked();
+            extra = "Otdel: " + (c.getKassaId() == null ? "—"
+                    : esc(names.owner(OwnerType.KASSA, c.getKassaId())));
+        }
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("✏️ Yangi nom kiritish", "a:msne:" + arg)));
+        if (locked) rows.add(irow(btn("🔓 MoySklad nomiga qaytarish", "a:msnu:" + arg)));
+        rows.add(irow(bk("a:msn")));
+        show(chatId, msgId, (isKassa ? "🏪 " : "📲 ") + "<b>" + esc(name) + "</b>"
+                + (locked ? " 🔒" : "") + "\n" + extra + "\n\n"
+                + (locked ? "Nomi qo'lda qo'yilgan — MoySklad yangilashi unga tegmaydi."
+                          : "Nomi MoySklad yangilashida almashishi mumkin. Qo'lda nom "
+                            + "qo'ysangiz 🔒 bo'lib himoyalanadi.")
+                + "\nBog'lanishlar (otdel/hisob) nom o'zgarganda SAQLANADI.", rows);
+    }
+
+    /** Yangi nom kiritishni boshlash. */
+    private void msNameEditStart(Session s, String arg, long chatId, int msgId) {
+        s.reset();
+        s.state = Session.State.ADM_NM_NAME;
+        s.data.put("nmTarget", arg);
+        sender.edit(chatId, msgId, "✏️ <b>Yangi nomni yozib yuboring</b> (2–40 belgi)\n\n"
+                + "Masalan: <code>Карта Тимур</code>\n"
+                + "Bekor qilish uchun «-» yuboring.");
+    }
+
+    /** Kiritilgan yangi nomni saqlash (name_locked=true bilan). */
+    private void nmNameSave(AppUser u, Session s, String text, long chatId) {
+        String arg = s.getStr("nmTarget");
+        if (text.trim().equals("-") || arg == null) {
+            s.reset();
+            sender.send(chatId, "❌ Bekor qilindi");
+            return;
+        }
+        String nn = text.trim();
+        if (nn.length() < 2 || nn.length() > 40) {
+            sender.send(chatId, "⚠️ Nom 2–40 belgi bo'lsin. Qaytadan yozing yoki «-» yuboring.");
+            return;
+        }
+        boolean isKassa = arg.startsWith("k");
+        long id = Long.parseLong(arg.substring(1));
+        String old;
+        if (isKassa) {
+            Kassa k = kassaRepo.findById(id).orElse(null);
+            if (k == null) { s.reset(); return; }
+            old = k.getName();
+            k.setName(nn); k.setNameLocked(true);
+            kassaRepo.save(k);
+        } else {
+            ClickAccount c = clickRepo.findById(id).orElse(null);
+            if (c == null) { s.reset(); return; }
+            old = c.getName();
+            c.setName(nn); c.setNameLocked(true);
+            clickRepo.save(c);
+        }
+        s.reset();
+        audit.log(u.getId(), "NOM_QOLDA", isKassa ? "kassa" : "click", id,
+                u.getFullName() + " nomni o'zgartirdi: «" + old + "» → «" + nn + "»");
+        sender.send(chatId, "✅ Nom o'zgartirildi: <b>" + esc(old) + "</b> → <b>" + esc(nn)
+                + "</b> 🔒\n\nBog'lanishlar saqlandi. MoySklad nom-yangilashi bu nomga "
+                + "tegmaydi. Qaytarish: 🔄 Номлар → ✏️ Qo'lda → 🔓.", null);
+    }
+
+    /** Qulfni ochish: MoySklad nomi qaytariladi (topilsa), himoya o'chadi. */
+    private void msNameUnlock(AppUser u, String arg, long chatId, int msgId) {
+        boolean isKassa = arg.startsWith("k");
+        long id = Long.parseLong(arg.substring(1));
+        String msg;
+        if (isKassa) {
+            Kassa k = kassaRepo.findById(id).orElse(null);
+            if (k == null) { msNameList(chatId, msgId); return; }
+            k.setNameLocked(false);
+            String g = k.getMoyskladGroupId();
+            String nn = g == null ? null : msClient.fetchGroups().get(g);
+            String old = k.getName();
+            if (nn != null && !nn.isBlank()) k.setName(nn.trim());
+            kassaRepo.save(k);
+            msg = nn == null || nn.isBlank()
+                    ? "🔓 Himoya olindi (MoySklad'da mos nom topilmadi, nom o'zgarmadi)."
+                    : "🔓 MoySklad nomi qaytarildi: <b>" + esc(old) + "</b> → <b>" + esc(nn.trim()) + "</b>";
+        } else {
+            ClickAccount c = clickRepo.findById(id).orElse(null);
+            if (c == null) { msNameList(chatId, msgId); return; }
+            c.setNameLocked(false);
+            String a = c.getMoyskladAccountId();
+            String nn = a == null ? null : msClient.fetchAccounts().get(a);
+            String old = c.getName();
+            if (nn != null && !nn.isBlank()) c.setName(nn.trim());
+            clickRepo.save(c);
+            msg = nn == null || nn.isBlank()
+                    ? "🔓 Himoya olindi (MoySklad'da mos nom topilmadi, nom o'zgarmadi)."
+                    : "🔓 MoySklad nomi qaytarildi: <b>" + esc(old) + "</b> → <b>" + esc(nn.trim()) + "</b>";
+        }
+        audit.log(u.getId(), "NOM_QULF_OCHILDI", isKassa ? "kassa" : "click", id,
+                u.getFullName() + " nom himoyasini oldi");
+        show(chatId, msgId, msg, List.of(irow(bk("a:msn"))));
+    }
+
+    private void msNamesPreview(long chatId, int msgId) {
+        Map<String, String> groups = msClient.fetchGroups();
+        Map<String, String> accounts = msClient.fetchAccounts();
+        String text;
+        List<List<InlineKeyboardButton>> rows;
+        if (groups.isEmpty() && accounts.isEmpty()) {
+            text = "⚠️ MoySklad'dan ma'lumot olinmadi — API kaliti va ulanishni tekshiring "
+                    + "(⚙️ Настройка → 🔑 MoySklad API).";
+            rows = List.of(irow(bk("a:msr")));
+        } else {
+            List<String[]> diffs = msNameDiffs(groups, accounts);
+            if (diffs.isEmpty()) {
+                text = "✅ Hamma nomlar MoySklad bilan allaqachon mos "
+                        + "(🔒 qo'lda qo'yilganlarga tegilmaydi):\n"
+                        + "🏪 kassalar — otdel nomlari bilan, 📲 klik hisoblari — "
+                        + "MoySklad hisob nomlari bilan.";
+                rows = List.of(irow(bk("a:msr")));
+            } else {
+                StringBuilder sb = new StringBuilder("🔄 <b>Номларни MoySklad'дан янгилаш</b>\n\n"
+                        + "Quyidagi nomlar MoySklad'dagidan farq qilyapti:\n\n");
+                for (String[] d : diffs)
+                    sb.append(d[0]).append(" ").append(esc(d[1]))
+                      .append(" → <b>").append(esc(d[2])).append("</b>\n");
+                sb.append("\nQo'llansinmi? (🏪 kassa nomi — MoySklad otdel nomidan, "
+                        + "📲 klik hisobi nomi — MoySklad hisob nomidan olinadi)");
+                text = sb.toString();
+                rows = List.of(irow(btn("✅ Ha, yangilansin", "a:msry")),
+                        irow(btn("❌ Yo'q", "a:msr")));
+            }
+        }
+        if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
+        else sender.send(chatId, text, inline(rows));
+    }
+
+    private void msNamesApply(AppUser u, long chatId, int msgId) {
+        Map<String, String> groups = msClient.fetchGroups();
+        Map<String, String> accounts = msClient.fetchAccounts();
+        StringBuilder rep = new StringBuilder();
+        int n = 0;
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isNameLocked()) continue;
+            String g = k.getMoyskladGroupId();
+            if (g == null || g.isBlank()) continue;
+            String nn = groups.get(g);
+            if (nn == null || nn.isBlank() || nn.trim().equals(k.getName())) continue;
+            rep.append("🏪 ").append(esc(k.getName())).append(" → <b>").append(esc(nn.trim())).append("</b>\n");
+            k.setName(nn.trim());
+            kassaRepo.save(k);
+            n++;
+        }
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+            if (c.isNameLocked()) continue;
+            String a = c.getMoyskladAccountId();
+            if (a == null || a.isBlank()) continue;
+            String nn = accounts.get(a);
+            if (nn == null || nn.isBlank() || nn.trim().equals(c.getName())) continue;
+            rep.append("📲 ").append(esc(c.getName())).append(" → <b>").append(esc(nn.trim())).append("</b>\n");
+            c.setName(nn.trim());
+            clickRepo.save(c);
+            n++;
+        }
+        if (n > 0)
+            audit.log(u.getId(), "NOMLAR_YANGILANDI", "settings", null,
+                    u.getFullName() + " nomlarni MoySklad'dan yangiladi (" + n + " ta)");
+        show(chatId, msgId, n == 0
+                ? "✅ O'zgarish yo'q — nomlar allaqachon mos."
+                : "✅ <b>" + n + " ta nom yangilandi:</b>\n\n" + rep,
+                List.of(irow(bk("a:msr"))));
     }
 
     private void kassaDeleteList(long chatId, int msgId) {
@@ -1865,15 +2290,42 @@ public class AdminHandler {
                 + "Bu chatlarda bot hech qanday menyu ko'rsatmaydi va faqat SuperAdmin "
                 + "buyruqlariga javob beradi.\n\n"
                 + "⏰ Jadval: <b>har " + jobs.clickEvery() + " soatda</b>, "
-                + String.format("<b>%02d:00–%02d:00</b> oralig'ida\n\n", jobs.clickFrom(), jobs.clickTo())
-                + status;
+                + String.format("<b>%02d:00–%02d:00</b> oralig'ida\n", jobs.clickFrom(), jobs.clickTo())
+                + (jobs.clickFooter().isEmpty() ? ""
+                    : "✍️ Ost matn: <code>" + esc(jobs.clickFooter()) + "</code>\n")
+                + "\n" + status;
         rows.add(irow(btn("➕ Guruh/Kanal qo'shish", "a:cge")));
-        rows.add(irow(btn("⏰ Yuborish vaqtlari", "a:cgs")));
+        rows.add(irow(btn("⏰ Yuborish vaqtlari", "a:cgs"), btn("✍️ Ост матн", "a:cgf")));
         if (!ids.isEmpty()) rows.add(irow(btn("🧪 Hozir test yuborish", "a:cgt")));
         rows.add(irow(bk("a:p:set")));
         InlineKeyboardMarkup kb = inline(rows);
         if (msgId > 0) sender.edit(chatId, msgId, text, kb);
         else sendContent(s, chatId, text, kb);
+    }
+
+    /** Click hisoboti ostiga qo'shiladigan matnni saqlash («-» — olib tashlash). */
+    private void cgFooterSave(AppUser u, Session s, String text, long chatId) {
+        s.state = Session.State.IDLE;
+        String v = text.trim();
+        if (v.equals("-")) {
+            settings.set(uz.kassa.scheduler.Jobs.CLICK_FOOTER_KEY, "");
+            audit.log(u.getId(), "CLICK_OST_MATN", "settings", null,
+                    u.getFullName() + " hisobot ost matnini olib tashladi");
+            sender.send(chatId, "🗑 Ost matn olib tashlandi.");
+        } else {
+            if (v.length() > 300) {
+                s.state = Session.State.ADM_CG_FOOTER;
+                sender.send(chatId, "⚠️ Juda uzun (300 belgigacha). Qisqartirib qayta yuboring "
+                        + "yoki «-» bilan bekor qiling.");
+                return;
+            }
+            settings.set(uz.kassa.scheduler.Jobs.CLICK_FOOTER_KEY, v);
+            audit.log(u.getId(), "CLICK_OST_MATN", "settings", null,
+                    u.getFullName() + " hisobot ost matnini o'zgartirdi: " + v);
+            sender.send(chatId, "✅ Saqlandi. Endi har Click hisoboti ostida chiqadi:\n\n"
+                    + esc(v) + "\n\n🧪 Tekshirish: 📣 Гуруҳлар/Каналлар → «Hozir test yuborish».");
+        }
+        clickGroupMenu(s, chatId, 0);
     }
 
     private void cgIdSave(AppUser u, Session s, String text, long chatId) {
@@ -2213,14 +2665,81 @@ public class AdminHandler {
         return switch (r) { case KASSIR -> "👤"; case BUXGALTER -> "🧮"; case SUPERADMIN -> "👑"; };
     }
 
-    private void permCard(long userId, long chatId, int msgId) {
+    /** Aktor shu userni boshqara oladimi: SUPERADMIN'ga faqat yaratuvchi tegadi. */
+    private boolean canManage(AppUser actor, AppUser target) {
+        return target.getRole() != Role.SUPERADMIN || isCreator(actor);
+    }
+
+    private void permCard(AppUser actor, long userId, long chatId, int msgId) {
         AppUser x = userRepo.findById(userId).orElse(null);
         if (x == null) return;
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         if (x.getRole() != Role.SUPERADMIN)
             rows.add(irow(btn("⚙️ Бўлимларини бошқариш", "a:prs:" + userId)));
+        if (canManage(actor, x)) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn("🔄 Rol o'zgartirish", "a:prr:" + userId));
+            if (!x.getId().equals(actor.getId()))
+                r.add(btn("🚫 Faolsizlantirish", "a:prx:" + userId));
+            rows.add(r);
+        }
         rows.add(irow(bk("a:prm")));
-        sender.edit(chatId, msgId, permText(x), inline(rows));
+        String note = canManage(actor, x) ? ""
+                : "\n\n<i>🔒 SuperAdmin maqomini faqat asosiy (yaratuvchi) SuperAdmin boshqaradi.</i>";
+        sender.edit(chatId, msgId, permText(x) + note, inline(rows));
+    }
+
+    /** Ҳуқуқлар kartasidan rol tanlash. SuperAdmin qilish faqat yaratuvchiga ko'rinadi. */
+    private void permRolePick(AppUser actor, long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) return;
+        if (!canManage(actor, x)) { permCard(actor, userId, chatId, msgId); return; }
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn("👤 Kassir — " + k.getName(), "a:prz:" + userId + ".K" + k.getId())));
+        List<InlineKeyboardButton> r = new ArrayList<>();
+        r.add(btn("🧮 Buxgalter", "a:prz:" + userId + ".B"));
+        if (isCreator(actor)) r.add(btn("👑 SuperAdmin", "a:prz:" + userId + ".S"));
+        rows.add(r);
+        rows.add(irow(bk("a:prc:" + userId)));
+        sender.edit(chatId, msgId, "🔄 <b>" + esc(x.getFullName()) + "</b> (hozir: "
+                + roleEmoji(x.getRole()) + " " + x.getRole()
+                + (x.getKassaId() == null ? "" : " · " + esc(names.owner(OwnerType.KASSA, x.getKassaId())))
+                + ")\n\nYangi rolni tanlang:", inline(rows));
+    }
+
+    /** arg: "<uid>.K<kassaId>" | "<uid>.B" | "<uid>.S" */
+    private void permRoleApply(AppUser actor, String arg, long chatId, int msgId) {
+        int dot = arg.indexOf('.');
+        if (dot <= 0) return;
+        long userId = Long.parseLong(arg.substring(0, dot));
+        String code = arg.substring(dot + 1);
+        Role role;
+        Long kassaId = null;
+        if (code.startsWith("K")) { role = Role.KASSIR; kassaId = Long.parseLong(code.substring(1)); }
+        else if (code.equals("B")) role = Role.BUXGALTER;
+        else if (code.equals("S")) role = Role.SUPERADMIN;
+        else return;
+        applyRoleDirect(actor, userId, role, kassaId, chatId);
+        permCard(actor, userId, chatId, msgId);
+    }
+
+    /** Ҳуқуқлар kartasidan faolsizlantirish — tasdiq bilan. */
+    private void permDeactConfirm(AppUser actor, long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) return;
+        if (!canManage(actor, x)) { permCard(actor, userId, chatId, msgId); return; }
+        if (x.getId().equals(actor.getId())) {
+            sender.edit(chatId, msgId, "⚠️ O'zingizni faolsizlantira olmaysiz.",
+                    inline(List.of(irow(bk("a:prc:" + userId)))));
+            return;
+        }
+        sender.edit(chatId, msgId, "⚠️ <b>" + esc(x.getFullName()) + "</b> ("
+                + x.getRole() + ") faolsizlantirilsinmi?\n\nU botdan foydalana olmay qoladi. "
+                + "Keyin kerak bo'lsa Sheets «Foydalanuvchilar» varag'ida Faol=TRUE qilib "
+                + "qaytarish mumkin.", inline(List.of(
+                irow(btn("✅ Ha, faolsizlantirilsin", "a:prxy:" + userId)),
+                irow(btn("❌ Yo'q", "a:prc:" + userId)))));
     }
 
     /* ---------- huquq berish/olish: user yoki kassa kesimida ---------- */
@@ -3095,8 +3614,16 @@ public class AdminHandler {
     private void deactivate(AppUser me, long userId, long chatId, int msgId) {
         AppUser x = userRepo.findById(userId).orElse(null);
         if (x == null || x.getId().equals(me.getId())) return;
+        // SuperAdmin'ni faqat asosiy (yaratuvchi) SuperAdmin o'chira oladi
+        if (x.getRole() == Role.SUPERADMIN && !isCreator(me)) {
+            sender.edit(chatId, msgId, "⚠️ SuperAdmin'ni faqat asosiy (yaratuvchi) "
+                    + "SuperAdmin faolsizlantira oladi.");
+            return;
+        }
         x.setActive(false);
         userRepo.save(x);
+        audit.log(me.getId(), "USER_FAOLSIZLANTIRILDI", "user", x.getId(),
+                me.getFullName() + " faolsizlantirdi: " + x.getFullName() + " (" + x.getRole() + ")");
         sender.edit(chatId, msgId, "🚫 <b>" + esc(x.getFullName())
                 + "</b> faolsizlantirildi. U endi botdan foydalana olmaydi.");
     }

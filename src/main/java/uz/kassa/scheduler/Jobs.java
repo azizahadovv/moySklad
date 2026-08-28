@@ -36,6 +36,8 @@ public class Jobs {
     private final uz.kassa.repo.ClickAccountRepo clickRepo;
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.bot.Sender sender;
+    private final uz.kassa.repo.AppUserRepo userRepo;
+    private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
 
     /**
      * Click qoldiqlari soatlik hisoboti yuboriladigan guruh/kanallar — vergul bilan
@@ -88,6 +90,66 @@ public class Jobs {
     public int clickEvery() { return intSetting(CLICK_EVERY_KEY, 1, 1, 24); }
     public int clickFrom() { return intSetting(CLICK_FROM_KEY, 0, 0, 23); }
     public int clickTo() { return intSetting(CLICK_TO_KEY, 23, 0, 23); }
+
+    /** Hisobot ostiga qo'shiladigan ixtiyoriy matn (masalan @username eslatmalar). */
+    public static final String CLICK_FOOTER_KEY = "notify.clickFooter";
+
+    public String clickFooter() { return settings.get(CLICK_FOOTER_KEY).orElse("").trim(); }
+
+    /**
+     * Footer HTML ko'rinishda, CHATGA XOS: @username Telegram'ning o'zida eslatma
+     * (mention) bo'lib ketadi; {id=123456;Ism} — username'siz odamni ID orqali
+     * belgilash; {adminlar} — shu guruh/kanal adminlari avtomatik; {xodimlar} —
+     * botda ro'yxatdagi (faol, Telegram ulangan) va shu chatga A'ZO xodimlar
+     * avtomatik. Mention faqat chat a'zolariga bildirishnoma beradi.
+     */
+    private String clickFooterHtml(long chatId) {
+        String f = clickFooter();
+        if (f.isEmpty()) return "";
+        String out = TextUtil.esc(f);
+        if (out.contains("{adminlar}")) {
+            StringBuilder m = new StringBuilder();
+            for (var u : sender.chatAdmins(chatId)) {
+                if (u.getUserName() != null && !u.getUserName().isBlank())
+                    m.append("@").append(u.getUserName()).append(" ");
+                else m.append("<a href=\"tg://user?id=").append(u.getId()).append("\">")
+                      .append(TextUtil.esc(u.getFirstName())).append("</a> ");
+            }
+            out = out.replace("{adminlar}", m.toString().trim());
+        }
+        if (out.contains("{hamma}")) {
+            // Registrdagi (guruhda yozgan/qo'shilgan) hamma odam; entity limitidan
+            // oshmaslik uchun 30 tadan keyin qisqartiriladi
+            StringBuilder m = new StringBuilder();
+            var members = groupMemberRepo.findByChatIdOrderByIdAsc(chatId);
+            int shown = 0;
+            for (var gm : members) {
+                if (shown >= 30) break;
+                if (gm.getUsername() != null && !gm.getUsername().isBlank())
+                    m.append("@").append(gm.getUsername()).append(" ");
+                else m.append("<a href=\"tg://user?id=").append(gm.getUserId()).append("\">")
+                      .append(TextUtil.esc(gm.getFirstName() == null ? "user" : gm.getFirstName()))
+                      .append("</a> ");
+                shown++;
+            }
+            if (members.size() > shown) m.append("+").append(members.size() - shown).append(" boshqa");
+            out = out.replace("{hamma}", m.toString().trim());
+        }
+        if (out.contains("{xodimlar}")) {
+            StringBuilder m = new StringBuilder();
+            for (var x : userRepo.findAll()) {
+                if (!x.isActive() || x.getTelegramId() == null) continue;
+                String st = sender.memberStatus(chatId, x.getTelegramId());
+                if (!"member".equals(st) && !"administrator".equals(st) && !"creator".equals(st))
+                    continue;
+                m.append("<a href=\"tg://user?id=").append(x.getTelegramId()).append("\">")
+                 .append(TextUtil.esc(x.getFullName())).append("</a> ");
+            }
+            out = out.replace("{xodimlar}", m.toString().trim());
+        }
+        out = out.replaceAll("\\{id=(\\d+);([^}]+)\\}", "<a href=\"tg://user?id=$1\">$2</a>");
+        return "\n\n" + out;
+    }
 
     private int intSetting(String key, int def, int min, int max) {
         try {
@@ -194,23 +256,47 @@ public class Jobs {
                     + java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"))
                             .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
                     + "\n\n");
+            // Otdel (kassa) kesimida guruhlab chiqariladi; bog'lanmaganlar — «Бошқа»
             long total = 0;
-            for (ClickAccount c : accounts) {
-                long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
-                total += bal;
-                sb.append("• <b>").append(TextUtil.esc(c.getName())).append("</b>: ")
-                  .append(TextUtil.fmt(bal)).append(" so'm\n");
+            java.util.Set<Long> shown = new java.util.HashSet<>();
+            for (uz.kassa.domain.Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+                List<ClickAccount> mine = accounts.stream()
+                        .filter(c -> k.getId().equals(c.getKassaId())).toList();
+                if (mine.isEmpty()) continue;
+                sb.append("🏪 <b>").append(TextUtil.esc(k.getName())).append("</b>\n");
+                for (ClickAccount c : mine) {
+                    long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                    total += bal;
+                    shown.add(c.getId());
+                    sb.append("• ").append(TextUtil.esc(c.getName())).append(": <b>")
+                      .append(TextUtil.fmt(bal)).append("</b> so'm\n");
+                }
+                sb.append("\n");
             }
-            sb.append("\n➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
+            List<ClickAccount> rest = accounts.stream()
+                    .filter(c -> !shown.contains(c.getId())).toList();
+            if (!rest.isEmpty()) {
+                sb.append("📌 <b>Бошқа</b>\n");
+                for (ClickAccount c : rest) {
+                    long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+                    total += bal;
+                    sb.append("• ").append(TextUtil.esc(c.getName())).append(": <b>")
+                      .append(TextUtil.fmt(bal)).append("</b> so'm\n");
+                }
+                sb.append("\n");
+            }
+            sb.append("➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
             // Guruhda hech qanday menyu/klaviatura ko'rinmasligi kerak — faqat shu hisobot.
             // Bitta chatga yuborishda xato bo'lsa (bot chiqarilgan va h.k.) qolganlariga baribir ketadi.
             for (long chatId : chatIds) {
+                // Ost matn chatga xos: {adminlar}/{xodimlar} shu chat bo'yicha hisoblanadi
+                String text = sb.toString() + clickFooterHtml(chatId);
                 var chat = sender.getChat(chatId);
                 if (chat != null && chat.isChannelChat()) {
                     // Kanalda reply-klaviatura bo'lmaydi — Telegram markupli xabarni rad etadi.
-                    sender.send(chatId, sb.toString());
+                    sender.send(chatId, text);
                 } else {
-                    sender.send(chatId, sb.toString(),
+                    sender.send(chatId, text,
                             org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove.builder()
                                     .removeKeyboard(true).build());
                 }

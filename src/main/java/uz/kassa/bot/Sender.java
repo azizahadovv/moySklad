@@ -168,6 +168,33 @@ public class Sender {
         }
     }
 
+    /** Guruh/kanal adminlari (botlar chiqarib tashlangan). Xatoda bo'sh ro'yxat. */
+    public java.util.List<org.telegram.telegrambots.meta.api.objects.User> chatAdmins(long chatId) {
+        try {
+            var list = bot().execute(org.telegram.telegrambots.meta.api.methods.groupadministration
+                    .GetChatAdministrators.builder().chatId(String.valueOf(chatId)).build());
+            java.util.List<org.telegram.telegrambots.meta.api.objects.User> out = new java.util.ArrayList<>();
+            for (var cm : list)
+                if (!Boolean.TRUE.equals(cm.getUser().getIsBot())) out.add(cm.getUser());
+            return out;
+        } catch (TelegramApiException e) {
+            log.debug("getChatAdministrators ({}): {}", chatId, e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /** Foydalanuvchining shu chatdagi holati ("member"/"administrator"/"creator"...). null — aniqlanmadi. */
+    public String memberStatus(long chatId, long userId) {
+        try {
+            var cm = bot().execute(org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember
+                    .builder().chatId(String.valueOf(chatId)).userId(userId).build());
+            return cm.getStatus();
+        } catch (TelegramApiException e) {
+            log.debug("getChatMember ({}, {}): {}", chatId, userId, e.getMessage());
+            return null;
+        }
+    }
+
     /** Botning shu chatdagi holati: "administrator", "member", "left", "kicked"... null — aniqlanmadi. */
     public String botStatusInChat(long chatId) {
         try {

@@ -318,6 +318,33 @@ public class MoySkladClient {
         return out;
     }
 
+    /**
+     * Tashkilot hisoblari (organizationAccount): UUID -> ko'rinadigan nom.
+     * MoySklad'da hisob nomi accountNumber maydonida saqlanadi
+     * (masalan «NSB click Samoyiddin»). Xatoda bo'sh map.
+     */
+    public java.util.LinkedHashMap<String, String> fetchAccounts() {
+        java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();
+        try {
+            JsonNode orgs = getJson(props.getMoysklad().getBaseUrl() + "/entity/organization?limit=100");
+            if (orgs == null) return out;
+            for (JsonNode o : orgs.path("rows")) {
+                String href = o.path("meta").path("href").asText("");
+                if (href.isBlank()) continue;
+                JsonNode accs = getJson(href + "/accounts?limit=100");
+                if (accs == null) continue;
+                for (JsonNode a : accs.path("rows")) {
+                    String id = a.path("id").asText("");
+                    String name = a.path("accountNumber").asText("");
+                    if (!id.isBlank()) out.put(id, name.isBlank() ? id : name);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Tashkilot hisoblari o'qilmadi: {}", e.getMessage());
+        }
+        return out;
+    }
+
     /** Otdellar (Владелец-отдел) ro'yxati: UUID -> nomi. Xatoda bo'sh map. */
     public java.util.LinkedHashMap<String, String> fetchGroups() {
         java.util.LinkedHashMap<String, String> out = new java.util.LinkedHashMap<>();

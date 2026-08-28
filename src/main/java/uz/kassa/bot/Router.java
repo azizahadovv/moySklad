@@ -53,11 +53,49 @@ public class Router {
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
     private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
+    private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
 
     public void route(Update u) {
+        if (u.hasMessage()) trackGroupMembers(u.getMessage());
         if (u.hasCallbackQuery()) onCallback(u.getCallbackQuery());
         else if (u.hasMessage() && u.getMessage().hasContact()) onContact(u.getMessage());
         else if (u.hasMessage() && u.getMessage().hasText()) onMessage(u.getMessage());
+    }
+
+    /**
+     * Guruh a'zolari registri ({hamma} shabloni uchun): Bot API to'liq a'zolar
+     * ro'yxatini bermaydi, shuning uchun guruhda YOZGAN yoki QO'SHILGAN har bir
+     * odam eslab qolinadi, chiqib ketgani o'chiriladi. Hech qanday javob yozilmaydi.
+     */
+    private void trackGroupMembers(Message m) {
+        try {
+            if (!m.getChat().isGroupChat() && !m.getChat().isSuperGroupChat()) return;
+            long chatId = m.getChatId();
+            if (m.getFrom() != null) rememberMember(chatId, m.getFrom());
+            if (m.getNewChatMembers() != null)
+                for (var nu : m.getNewChatMembers()) rememberMember(chatId, nu);
+            if (m.getLeftChatMember() != null)
+                groupMemberRepo.findByChatIdAndUserId(chatId, m.getLeftChatMember().getId())
+                        .ifPresent(groupMemberRepo::delete);
+        } catch (Exception e) {
+            log.debug("Guruh a'zo kuzatish: {}", e.getMessage());
+        }
+    }
+
+    private void rememberMember(long chatId, org.telegram.telegrambots.meta.api.objects.User u) {
+        if (Boolean.TRUE.equals(u.getIsBot())) return;
+        var existing = groupMemberRepo.findByChatIdAndUserId(chatId, u.getId()).orElse(null);
+        String un = u.getUserName(), fn = u.getFirstName();
+        if (existing == null) {
+            groupMemberRepo.save(GroupMember.builder()
+                    .chatId(chatId).userId(u.getId()).username(un).firstName(fn).build());
+        } else if (!java.util.Objects.equals(existing.getUsername(), un)
+                || !java.util.Objects.equals(existing.getFirstName(), fn)) {
+            existing.setUsername(un);
+            existing.setFirstName(fn);
+            existing.setLastSeen(java.time.Instant.now());
+            groupMemberRepo.save(existing);
+        }
     }
 
     /** «📱 Telefon raqamni yuborish» tugmasi orqali kelgan kontakt. */
