@@ -651,11 +651,25 @@ public class AdminHandler {
         return applyRoleDirect(actor, userId, newRole, kassaId, chatId);
     }
 
+    /** Bu user .env dagi asosiy (yaratuvchi) SuperAdmin ID egasimi. */
+    private boolean isCreatorId(AppUser x) {
+        Long t = props.getSuperadmin().getTelegramId();
+        return t != null && t > 0 && t.equals(x.getTelegramId());
+    }
+
     private boolean applyRoleDirect(AppUser actor, long userId, Role newRole, Long kassaId,
                                     long chatId) {
         AppUser x = userRepo.findById(userId).orElse(null);
         if (x == null) return false;
 
+        // Asosiy (yaratuvchi) SuperAdmin rolini pasaytirib bo'lmaydi — hatto o'zi ham:
+        // aks holda SuperAdmin berish huquqi egasiz qolib, tizim qulflanadi
+        if (isCreatorId(x) && newRole != Role.SUPERADMIN) {
+            sender.send(chatId, "⚠️ Asosiy (yaratuvchi) SuperAdmin rolini pasaytirib "
+                    + "bo'lmaydi — tizim boshqaruvsiz qolmasligi uchun. Bu himoya "
+                    + "hammaga, jumladan o'zingizga ham amal qiladi.");
+            return true;
+        }
         // Admin (SuperAdmin) maqomini berish/olish — faqat asosiy (yaratuvchi) SuperAdmin
         if ((x.getRole() == Role.SUPERADMIN || newRole == Role.SUPERADMIN) && !isCreator(actor)) {
             sender.send(chatId, "⚠️ SuperAdmin maqomini berish yoki olishni faqat asosiy "
@@ -3614,6 +3628,12 @@ public class AdminHandler {
     private void deactivate(AppUser me, long userId, long chatId, int msgId) {
         AppUser x = userRepo.findById(userId).orElse(null);
         if (x == null || x.getId().equals(me.getId())) return;
+        // Asosiy (yaratuvchi) SuperAdmin'ni hech kim faolsizlantira olmaydi
+        if (isCreatorId(x)) {
+            sender.edit(chatId, msgId, "⚠️ Asosiy (yaratuvchi) SuperAdmin'ni "
+                    + "faolsizlantirib bo'lmaydi.");
+            return;
+        }
         // SuperAdmin'ni faqat asosiy (yaratuvchi) SuperAdmin o'chira oladi
         if (x.getRole() == Role.SUPERADMIN && !isCreator(me)) {
             sender.edit(chatId, msgId, "⚠️ SuperAdmin'ni faqat asosiy (yaratuvchi) "

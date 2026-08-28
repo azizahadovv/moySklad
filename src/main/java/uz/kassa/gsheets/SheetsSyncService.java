@@ -60,6 +60,14 @@ public class SheetsSyncService {
     private volatile boolean snapsLoaded = false;
 
     private final uz.kassa.service.SettingsService settings;
+    private final uz.kassa.config.AppProps props;
+
+    /** Asosiy (yaratuvchi) SuperAdmin (.env SUPERADMIN_TELEGRAM_ID) — varaq orqali ham
+     *  roli pasaytirilmaydi/faolsizlantirilmaydi (tizim qulflanib qolmasin). */
+    private boolean isCreatorRow(AppUser x) {
+        Long t = props.getSuperadmin().getTelegramId();
+        return t != null && t > 0 && t.equals(x.getTelegramId());
+    }
 
     private void loadSnaps() {
         if (snapsLoaded) return;
@@ -381,9 +389,11 @@ public class SheetsSyncService {
                             log.info("Sheets: {} Telegram bilan bog'landi ({})", x.getFullName(), link);
                         }
                     }
-                    // ROL — operator o'zgartirgan bo'lsa (oxirgi SuperAdmin himoyalangan)
+                    // ROL — operator o'zgartirgan bo'lsa (oxirgi SuperAdmin va
+                    // asosiy/yaratuvchi SuperAdmin himoyalangan)
                     if (role != null && !role.name().equals(pv[3]) && role != x.getRole()) {
-                        if (!(x.getRole() == Role.SUPERADMIN
+                        if (!(isCreatorRow(x) && role != Role.SUPERADMIN)
+                                && !(x.getRole() == Role.SUPERADMIN
                                 && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
                             x.setRole(role);
                             if (role != Role.KASSIR) x.setKassaId(null);
@@ -396,9 +406,10 @@ public class SheetsSyncService {
                             && !kassa.getId().equals(x.getKassaId())) {
                         x.setKassaId(kassa.getId()); ch = true;
                     }
-                    // FAOL — operator o'zgartirgan bo'lsa (oxirgi SuperAdmin himoyalangan)
+                    // FAOL — operator o'zgartirgan bo'lsa (oxirgi va asosiy SuperAdmin himoyalangan)
                     if (!faolN.equals(pv[5]) && faol != x.isActive()) {
-                        if (!(x.getRole() == Role.SUPERADMIN && !faol
+                        if (!(isCreatorRow(x) && !faol)
+                                && !(x.getRole() == Role.SUPERADMIN && !faol
                                 && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
                             x.setActive(faol); ch = true;
                         }
