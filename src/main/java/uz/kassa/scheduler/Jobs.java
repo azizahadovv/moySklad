@@ -326,32 +326,9 @@ public class Jobs {
                 }
                 sb.append("\n");
             }
-            // Жами ham MoySklad bilan avtomatik solishtiriladi
-            long msTotal = 0; int msCnt = 0;
-            for (ClickAccount c : accounts) {
-                String aid = c.getMoyskladAccountId();
-                if (aid != null && !aid.isBlank() && ms.containsKey(aid)) {
-                    msTotal += ms.get(aid); msCnt++;
-                }
-            }
+            // Foydalanuvchi qarori: ost qismda MoySklad-solishtiruv va Нақд жами
+            // KO'RSATILMAYDI — faqat oddiy Жами (kartalar kesimidagi solishtiruv qoladi).
             sb.append("➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
-            if (msCnt > 0)
-                sb.append(total == msTotal ? " ✅ <i>MoySklad билан тенг</i>"
-                        : " ⚠️ <i>MoySklad: " + TextUtil.fmt(msTotal) + " · farq "
-                          + TextUtil.fmt(msTotal - total) + "</i>");
-
-            // Нақд жами ham solishtiriladi (Основной + kassalar vs MoySklad CASH)
-            Long msCash = ms.get("CASH");
-            if (msCash != null) {
-                long naqd = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID,
-                        MoneyType.NAQD).getAmount();
-                for (Kassa k : kassaRepo.findAll())
-                    naqd += ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
-                sb.append("\n💵 <b>Нақд жами: ").append(TextUtil.fmt(naqd)).append("</b> so'm")
-                  .append(naqd == msCash.longValue() ? " ✅ <i>MoySklad билан тенг</i>"
-                        : " ⚠️ <i>MoySklad: " + TextUtil.fmt(msCash) + " · farq "
-                          + TextUtil.fmt(msCash - naqd) + "</i>");
-            }
             // Guruhda hech qanday menyu/klaviatura ko'rinmasligi kerak — faqat shu hisobot.
             // Bitta chatga yuborishda xato bo'lsa (bot chiqarilgan va h.k.) qolganlariga baribir ketadi.
             for (long chatId : chatIds) {
