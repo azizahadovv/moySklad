@@ -176,14 +176,13 @@ public class SheetsSyncService {
         return null;
     }
 
-    /** Telefon raqami bo'yicha mehmon (kontakt yuborganlar) Telegram ID sini topish. */
+    /** Telefon raqami bo'yicha mehmon (kontakt yuborganlar) Telegram ID sini topish.
+     *  Faqat TO'LIQ moslik — suffiks-moslik begona odamni birovning akkauntiga ulardi. */
     private Long guestByPhone(String tel) {
-        String d = tel == null ? "" : tel.replaceAll("\\D", "");
-        if (d.length() < 7) return null;
-        for (Guest g : guestRepo.findAll()) {
-            String gp = g.getPhone() == null ? "" : g.getPhone().replaceAll("\\D", "");
-            if (!gp.isEmpty() && (gp.endsWith(d) || d.endsWith(gp))) return g.getTelegramId();
-        }
+        if (uz.kassa.bot.TextUtil.normPhone(tel).isEmpty()) return null;
+        for (Guest g : guestRepo.findAll())
+            if (g.getPhone() != null && uz.kassa.bot.TextUtil.phoneEq(g.getPhone(), tel))
+                return g.getTelegramId();
         return null;
     }
 
@@ -296,10 +295,18 @@ public class SheetsSyncService {
                     String xato = null;
                     if (ism.isBlank()) xato = "⚠️ Ism yozing";
                     else if (role == null) xato = "⚠️ Rol: KASSIR / BUXGALTER / SUPERADMIN";
+                    else if (role == Role.SUPERADMIN)
+                            // G2 himoyasi: jadvalga yozish huquqi tizim adminligiga
+                            // aylanmasin — SUPERADMIN faqat bot ichidan tayinlanadi.
+                            xato = "⚠️ SUPERADMIN faqat bot ichidan tayinlanadi";
                     else if (tgId != null && userRepo.findByTelegramId(tgId).isPresent())
                             xato = "⚠️ Bu TelegramID allaqachon tizimda";
                     else if (role == Role.KASSIR && kassa == null)
                             xato = "⚠️ KassaID yoki KassaNomi kiriting";
+                    else if (!tel.isBlank() && userRepo.findAll().stream().anyMatch(
+                            uX -> uX.getPhone() != null
+                                    && uz.kassa.bot.TextUtil.phoneEq(uX.getPhone(), tel)))
+                            xato = "⚠️ Bu telefon boshqa foydalanuvchida bor";
 
                     if (xato == null) {
                         // Telegram'siz ham yaratiladi — ro'yxatlarda darhol ko'rinadi,
@@ -392,7 +399,12 @@ public class SheetsSyncService {
                     // ROL — operator o'zgartirgan bo'lsa (oxirgi SuperAdmin va
                     // asosiy/yaratuvchi SuperAdmin himoyalangan)
                     if (role != null && !role.name().equals(pv[3]) && role != x.getRole()) {
-                        if (!(isCreatorRow(x) && role != Role.SUPERADMIN)
+                        if (role == Role.SUPERADMIN) {
+                            // G2 himoyasi: Sheets orqali SUPERADMIN'ga KO'TARISH TAQIQ —
+                            // jadval tahriri tizim adminligiga aylanmasin. Faqat bot ichidan.
+                            log.warn("Sheets: {} ni SUPERADMIN qilishga urinish RAD etildi",
+                                    x.getFullName());
+                        } else if (!(isCreatorRow(x) && role != Role.SUPERADMIN)
                                 && !(x.getRole() == Role.SUPERADMIN
                                 && userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN).size() <= 1)) {
                             x.setRole(role);

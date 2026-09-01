@@ -108,6 +108,27 @@ public class Sender {
         }
     }
 
+    /** Telegram faylini (masalan skrinshotni) vaqtinchalik faylga yuklab olish. null — xato. */
+    public java.io.File downloadTgFile(String fileId) {
+        try {
+            var f = bot().execute(org.telegram.telegrambots.meta.api.methods.GetFile.builder()
+                    .fileId(fileId).build());
+            String path = f.getFilePath();
+            String ext = path != null && path.contains(".")
+                    ? path.substring(path.lastIndexOf('.')) : ".jpg";
+            java.io.File tmp = java.io.File.createTempFile("tgocr-", ext);
+            String url = "https://api.telegram.org/file/bot" + bot().getBotToken() + "/" + path;
+            try (var in = java.net.URI.create(url).toURL().openStream()) {
+                java.nio.file.Files.copy(in, tmp.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            return tmp;
+        } catch (Exception e) {
+            log.debug("downloadTgFile: {}", e.getMessage());
+            return null;
+        }
+    }
+
     /**
      * Chatni to'liq tozalash: 1-xabardan {@code fromMessageId}gacha — BARCHA yozishmalarni o'chiradi.
      * Bot API deleteMessages (100 talik partiyalar) — topilmaganlari/o'chirib bo'lmaydiganlari

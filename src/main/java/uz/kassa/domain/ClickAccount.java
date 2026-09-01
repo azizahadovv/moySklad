@@ -27,6 +27,22 @@ public class ClickAccount {
     @Column(name = "name_locked", nullable = false)
     private boolean nameLocked = false;
 
+    /** Karta (Click ilovasidagi HAQIQIY) qoldig'i, so'mda — mas'ul /karta bilan kiritadi.
+     *  MoySklad'da bu raqam YO'Q; soatlik hisobotda MoySklad qoldig'i bilan solishtiriladi. */
+    @Column(name = "card_balance")
+    private Long cardBalance;
+
+    @Column(name = "card_balance_at")
+    private Instant cardBalanceAt;
+
+    /** Kim kiritgani (ism) — hisobotda ko'rsatiladi. */
+    @Column(name = "card_balance_by")
+    private String cardBalanceBy;
+
+    /** Hisobotdagi murojaat: "@username" yoki "{id=123456;Ism}". /kartamas bilan o'rnatiladi. */
+    @Column(name = "card_responsible")
+    private String cardResponsible;
+
     @Builder.Default
     private boolean active = true;
 

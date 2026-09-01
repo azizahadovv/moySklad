@@ -432,10 +432,12 @@ public class LedgerService {
         b.setAmount(b.getAmount() + signedAmount);
         touch(b);
 
-        // Kassa korrektirovkasi tanlangan SANANING kun yozuviga ham tushadi —
-        // balans va kunlar kesimi (Баланс bo'limi) bir-biridan uzoqlashib ketmasin.
+        // Kassa korrektirovkasi VA boshlang'ich qoldig'i tanlangan SANANING kun
+        // yozuviga ham tushadi — balans va kunlar kesimi (Баланс bo'limi)
+        // bir-biridan uzoqlashib ketmasin (aks holda boshlang'ich qoldiq
+        // «Баланс — НАҚД» ko'rinishida umuman ko'rinmay qolardi).
         LocalDate d = date == null ? today() : date;
-        if (type == OpType.KORREKTIROVKA && ot == OwnerType.KASSA) {
+        if ((type == OpType.KORREKTIROVKA || type == OpType.BOSHLANGICH) && ot == OwnerType.KASSA) {
             if (signedAmount > 0) dayService.addKirim(oid, d, mt, signedAmount);
             else dayService.addChiqim(oid, d, mt, -signedAmount);
             DayRecord day = dayService.getOrCreate(oid, d);
@@ -539,17 +541,14 @@ public class LedgerService {
      */
     @Transactional(readOnly = true)
     public List<Mismatch> verifyIntegrity() {
+        // SQL GROUP BY — butun operations jadvalini xotiraga yuklamasdan
         Map<Balance.Key, Long> computed = new HashMap<>();
-        for (Operation o : opRepo.findAll()) {
-            if (o.getMoneyType() == MoneyType.TERMINAL || o.getStatus() != OpStatus.TASDIQLANGAN) continue;
-            long amt = o.getAmount();
-            if (o.getToOwnerType() != null)
-                computed.merge(new Balance.Key(o.getToOwnerType(), o.getToOwnerId(), o.getMoneyType()),
-                        amt, Long::sum);
-            if (o.getFromOwnerType() != null)
-                computed.merge(new Balance.Key(o.getFromOwnerType(), o.getFromOwnerId(), o.getMoneyType()),
-                        -amt, Long::sum);
-        }
+        for (Object[] r : opRepo.confirmedInSums())
+            computed.merge(new Balance.Key((OwnerType) r[0], (Long) r[1], (MoneyType) r[2]),
+                    (Long) r[3], Long::sum);
+        for (Object[] r : opRepo.confirmedOutSums())
+            computed.merge(new Balance.Key((OwnerType) r[0], (Long) r[1], (MoneyType) r[2]),
+                    -((Long) r[3]), Long::sum);
         List<Mismatch> issues = new java.util.ArrayList<>();
         for (Balance b : balanceRepo.findAll()) {
             if (b.getMoneyType() == MoneyType.TERMINAL) continue;

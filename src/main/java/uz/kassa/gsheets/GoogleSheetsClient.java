@@ -54,7 +54,9 @@ public class GoogleSheetsClient {
     public boolean configured() {
         var g = props.getGsheet();
         if (g == null) return false;
-        if (scriptMode()) return true;
+        // G3: sekret majburiy — bo'sh sekret bilan ishlashga yo'l qo'yilmaydi
+        // (ilgari yml'da ochiq default qiymat bor edi)
+        if (scriptMode()) return g.getSecret() != null && !g.getSecret().isBlank();
         return g.getId() != null && !g.getId().isBlank()
                 && g.getCredentials() != null && !g.getCredentials().isBlank()
                 && Files.exists(Path.of(g.getCredentials()));
@@ -64,15 +66,27 @@ public class GoogleSheetsClient {
 
     /* ---------------- Apps Script transport ---------------- */
 
+    /**
+     * G3: o'qish ham POST orqali — sekret URL query'da EMAS, body ichida yuboriladi
+     * (GET query'lar Apps Script/proksi loglariga tushib qolardi).
+     * Yangi docs/apps-script.gs (action:"read") deploy qilingan bo'lishi shart.
+     */
     private JsonNode scriptGet(String tab, String range) throws Exception {
-        String url = props.getGsheet().getScriptUrl()
-                + "?secret=" + URLEncoder.encode(props.getGsheet().getSecret(), StandardCharsets.UTF_8)
-                + "&tab=" + URLEncoder.encode(tab, StandardCharsets.UTF_8)
-                + (range == null ? "" : "&range=" + URLEncoder.encode(range, StandardCharsets.UTF_8));
-        HttpResponse<String> resp = http.send(HttpRequest.newBuilder(URI.create(url)).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
+        java.util.Map<String, Object> payload = range == null
+                ? java.util.Map.of("secret", props.getGsheet().getSecret(),
+                        "action", "read", "tab", tab)
+                : java.util.Map.of("secret", props.getGsheet().getSecret(),
+                        "action", "read", "tab", tab, "range", range);
+        HttpResponse<String> resp = http.send(HttpRequest.newBuilder(
+                        URI.create(props.getGsheet().getScriptUrl()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        om.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build(), HttpResponse.BodyHandlers.ofString());
         JsonNode j = om.readTree(resp.body());
-        if (j.has("error")) throw new IllegalStateException("Apps Script: " + j.path("error").asText());
+        if (j.has("error")) throw new IllegalStateException("Apps Script: " + j.path("error").asText()
+                + ("unknown".equals(j.path("error").asText())
+                    ? " — docs/apps-script.gs YANGI versiyasini deploy qiling (action:read)" : ""));
         return j;
     }
 

@@ -44,6 +44,13 @@ public class MoySkladClient {
     /** Joriy token keshi (settings o'zgarganda null qilinadi). */
     private volatile String cachedToken = null;
 
+    /** Oxirgi 401/403 (huquq yetmagan) javob vaqti va URL — sinxron ogohlantirishi uchun (M4). */
+    private volatile long last403At = 0;
+    private volatile String last403Url = "";
+
+    public long last403At() { return last403At; }
+    public String last403Url() { return last403Url; }
+
     /**
      * Amaldagi token: avval settings jadvalidagi «moysklad.token» (SuperAdmin
      * botdan o'zgartirgan bo'lsa), bo'lmasa .env dagi MOYSKLAD_TOKEN.
@@ -385,6 +392,53 @@ public class MoySkladClient {
         return out;
     }
 
+    /**
+     * Davr bo'yicha sotuv/vozvrat (retaildemand / retailsalesreturn) — reconcile
+     * uchun. applicable=false hujjatlar HAM qaytariladi — chaqiruvchi STORNO qiladi.
+     */
+    public List<MsDoc> fetchSalesByMoment(String entity, LocalDate from, LocalDate to) {
+        String filter = URLEncoder.encode(
+                "moment>=" + from + " 00:00:00;moment<=" + to + " 23:59:59",
+                StandardCharsets.UTF_8);
+        List<MsDoc> out = new ArrayList<>();
+        for (JsonNode r : rowsFiltered(entity, "", filter)) {
+            String href = r.path("retailStore").path("meta").path("href").asText("");
+            out.add(new MsDoc(
+                    r.path("id").asText(),
+                    date(r),
+                    r.path("cashSum").asLong(0),
+                    r.path("noCashSum").asLong(0),
+                    lastSegment(href),
+                    r.path("applicable").asBoolean(true)));
+        }
+        return out;
+    }
+
+    /** Davr bo'yicha «Выплата денег» (retaildrawercashout) — reconcile uchun. */
+    public List<MsExpense> fetchDrawerCashoutsByMoment(LocalDate from, LocalDate to) {
+        String filter = URLEncoder.encode(
+                "moment>=" + from + " 00:00:00;moment<=" + to + " 23:59:59",
+                StandardCharsets.UTF_8);
+        List<MsExpense> out = new ArrayList<>();
+        for (JsonNode r : rowsFiltered("retaildrawercashout", "&expand=retailShift", filter)) {
+            String storeHref = r.path("retailStore").path("meta").path("href").asText("");
+            if (storeHref.isEmpty())
+                storeHref = r.path("retailShift").path("retailStore").path("meta").path("href").asText("");
+            out.add(new MsExpense(
+                    r.path("id").asText(),
+                    r.path("name").asText(""),
+                    date(r),
+                    r.path("sum").asLong(0),
+                    lastSegment(storeHref),
+                    groupOf(r),
+                    "",
+                    r.path("description").asText(""),
+                    "", "", currencyOf(r), rateOf(r),
+                    r.path("applicable").asBoolean(true), accountOf(r)));
+        }
+        return out;
+    }
+
     /* -------------------- umumiy sahifalangan GET -------------------- */
 
     private List<JsonNode> rows(String entity, String extraQuery, LocalDateTime updatedFrom) {
@@ -475,6 +529,8 @@ public class MoySkladClient {
             String body = decodeBody(resp);
             if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 log.warn("MoySklad ruxsat yo'q -> HTTP {} ({})", resp.statusCode(), url);
+                last403At = System.currentTimeMillis();
+                last403Url = url;
                 return null;
             }
             if (resp.statusCode() != 200)

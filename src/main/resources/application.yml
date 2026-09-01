@@ -46,7 +46,9 @@ app:
     id: ${GSHEET_ID:}
     credentials: ${GOOGLE_SA_JSON:}
     script-url: ${GSHEET_SCRIPT_URL:}
-    secret: ${GSHEET_SECRET:nsb-2026-kassa}
+    # G3: ochiq default OLIB TASHLANDI — sekret faqat .env dan keladi; bo'sh bo'lsa
+    # Sheets sinxroni ishlamaydi (configured() false) va sekret tarqalmaydi.
+    secret: ${GSHEET_SECRET:}
 
 logging:
   level:

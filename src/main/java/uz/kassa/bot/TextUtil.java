@@ -19,12 +19,35 @@ public final class TextUtil {
         return b.reverse().toString();
     }
 
-    /** "1 200 000" / "1.200.000" / "1200000" -> 1200000; xato bo'lsa -1. */
+    /** "1 200 000" / "1.200.000" / "1200000" -> 1200000; xato bo'lsa -1.
+     *  KASR RAD ETILADI: «1.5» ilgari jimgina 15 bo'lib ketardi (10x xato xavfi).
+     *  Oxiri [.,] + 1-2 raqam — kasr deb qaraladi; 3 raqamli dum (1.200.000) —
+     *  minglik ajratkich, ruxsat. */
     public static long parseAmount(String t) {
         if (t == null) return -1;
-        String d = t.replaceAll("[^0-9]", "");
+        String s = t.trim();
+        if (s.matches(".*[.,]\\d{1,2}$")) return -1;   // kasr ko'rinishi — qabul qilinmaydi
+        String d = s.replaceAll("[^0-9]", "");
         if (d.isEmpty() || d.length() > 15) return -1;
         try { return Long.parseLong(d); } catch (NumberFormatException e) { return -1; }
+    }
+
+    /**
+     * Telefonni kanonik ko'rinishga keltirish: faqat raqamlar, 9 xonali mahalliy
+     * raqamga 998 qo'shiladi. To'liq raqam chiqmasa — bo'sh qator (taxminiy
+     * suffiks-moslashtirish TAQIQLANGAN — begona odam akkauntga ulanib qolmasin).
+     */
+    public static String normPhone(String t) {
+        if (t == null) return "";
+        String d = t.replaceAll("\\D", "");
+        if (d.length() == 9) d = "998" + d;
+        return d.length() >= 10 && d.length() <= 15 ? d : "";
+    }
+
+    /** Ikki telefon AYNAN bir xilmi (to'liq, normallashgan holda). */
+    public static boolean phoneEq(String a, String b) {
+        String na = normPhone(a), nb = normPhone(b);
+        return !na.isEmpty() && na.equals(nb);
     }
 
     public static String mtLabel(MoneyType mt) {

@@ -302,7 +302,23 @@ public class MoySkladSyncService {
         settings.set(LAST_SYNC_KEY, now.format(FMT));
         flushQuietFixes("sinxron");
         if (n > 0) log.info("MoySklad sinxron: {} ta yozuv/tuzatish", n);
+
+        // M4: token huquqi yetmagan (401/403) so'rovlar bo'lgan bo'lsa — jim qolmaymiz,
+        // 24 soatda bir marta SuperAdmin ogohlantiriladi (hujjatlar kirmayotgani sababi shu)
+        if (client.last403At() > 0
+                && System.currentTimeMillis() - client.last403At() < 3600_000L
+                && System.currentTimeMillis() - lastPermWarnAt > 24 * 3600_000L) {
+            lastPermWarnAt = System.currentTimeMillis();
+            notify.toRole(uz.kassa.domain.Role.SUPERADMIN,
+                    "🔑⚠️ MoySklad token HUQUQI yetmayapti (401/403) — ba'zi hujjatlar "
+                    + "tizimga KIRMAYAPTI.\nOxirgi rad etilgan so'rov:\n<code>"
+                    + TextUtil.esc(client.last403Url()) + "</code>\n"
+                    + "MoySklad kabinetida token huquqlarini tekshiring.", null);
+        }
     }
+
+    /** Token-huquq ogohlantirishi oxirgi yuborilgan vaqt (24 soatda 1 marta). */
+    private volatile long lastPermWarnAt = 0;
 
     /**
      * CHUQUR TEKSHIRUV (reconcile): oxirgi N kun (app.moysklad.reconcile-days) hujjatlari
@@ -337,8 +353,30 @@ public class MoySkladSyncService {
         if (token == null || token.isBlank()) return -2;
         quietReload = true;   // hujjatma-hujjat xabarlar yuborilmaydi — faqat yakuniy xulosa
         try {
+            // BOSHLANG'ICH QOLDIQLAR SAQLANADI (foydalanuvchi qarori, M2): wipe'dan
+            // oldin yig'ib olinadi va tozalashdan keyin avtomatik qayta qo'llanadi —
+            // qo'lda qayta kiritish shart emas, balanslar MoySklad + boshlang'ich
+            // qoldiq yig'indisiga teng chiqadi.
+            record SavedInit(OwnerType ot, Long oid, MoneyType mt, long signed,
+                             String comment, Long by, LocalDate date) {}
+            java.util.List<SavedInit> saved = new java.util.ArrayList<>();
+            for (Operation o : opRepo.findByStatusAndType(OpStatus.TASDIQLANGAN, OpType.BOSHLANGICH)) {
+                if (o.getToOwnerType() != null)
+                    saved.add(new SavedInit(o.getToOwnerType(), o.getToOwnerId(), o.getMoneyType(),
+                            o.getAmount(), o.getComment(), o.getCreatedBy(), o.getOpDate()));
+                else if (o.getFromOwnerType() != null)
+                    saved.add(new SavedInit(o.getFromOwnerType(), o.getFromOwnerId(), o.getMoneyType(),
+                            -o.getAmount(), o.getComment(), o.getCreatedBy(), o.getOpDate()));
+            }
             ledger.wipeAllFinancialData();
             log.warn("TO'LIQ TOZALASH: barcha operatsiya/kun/hisobot o'chirildi, balanslar 0");
+            for (SavedInit sv : saved)
+                ledger.postAdjustment(OpType.BOSHLANGICH, sv.ot(), sv.oid(), sv.mt(), sv.signed(),
+                        sv.comment() == null || sv.comment().isBlank()
+                                ? "Boshlang'ich qoldiq (qayta yuklashda saqlandi)" : sv.comment(),
+                        sv.by(), sv.date());
+            if (!saved.isEmpty())
+                log.info("Boshlang'ich qoldiqlar qayta qo'llandi: {} ta yozuv", saved.size());
             LocalDate to = LocalDate.now(props.zoneId());
             int n = reconcileRange(ep, to);
             calibrateClickToMoySklad();
@@ -375,6 +413,20 @@ public class MoySkladSyncService {
                         MoneyType.KLIK, diff,
                         "Qayta yuklash: MoySklad joriy qoldig'iga tenglashtirish", null, ledger.today());
                 log.info("Click tenglashtirildi: {} {} -> {}", c.getName(), cur, target);
+            }
+            // NAQD ham (doim bir xil siyosati): jami naqd MoySklad CASH ga tenglashtiriladi
+            Long msCash = ms.get("CASH");
+            if (msCash != null) {
+                long total = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).getAmount();
+                for (Kassa k : kassaRepo.findAll())
+                    total += ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
+                long diffN = msCash - total;
+                if (diffN != 0) {
+                    ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.BUXGALTERIYA,
+                            LedgerService.BUX_ID, MoneyType.NAQD, diffN,
+                            "Qayta yuklash: MoySklad CASH bilan tenglashtirish", null, ledger.today());
+                    log.info("Naqd tenglashtirildi (reload): jami {} -> {}", total, msCash);
+                }
             }
         } catch (Exception ex) {
             log.warn("Click qoldiqlarini tenglashtirish xatosi: {}", ex.getMessage());
@@ -420,6 +472,39 @@ public class MoySkladSyncService {
                     }
                 }
             }
+
+            // RETAIL hujjatlar (sotuv / vozvrat / Выплата денег) — ilgari reconcile
+            // qamrovida YO'Q edi: MoySklad'dan O'CHIRILGAN sotuv botda abadiy qolib
+            // ketardi (updated-filtri o'chirishni ko'rmaydi). Endi (a) davr hujjatlari
+            // qayta qo'llanadi, (b) bazada bor-u API ro'yxatida yo'q yozuvlar hujjat
+            // holati bo'yicha tekshirilib, o'chirilganlari STORNO qilinadi.
+            List<MoySkladClient.MsDoc> rdDocs = client.fetchSalesByMoment("retaildemand", from, to);
+            for (MoySkladClient.MsDoc d : rdDocs) {
+                if (applySale(d, ctx)) n++;
+            }
+            n += stornoRetailOrphans("retaildemand", "rd:", idsOfSales(rdDocs), from, to);
+
+            java.util.Set<String> rrIds = new java.util.HashSet<>();
+            for (MoySkladClient.MsDoc d : client.fetchSalesByMoment("retailsalesreturn", from, to)) {
+                rrIds.add(d.id());
+                if (applyReturn(d, ctx)) n++;
+            }
+            n += stornoRetailOrphans("retailsalesreturn", "rr:", rrIds, from, to);
+
+            java.util.Set<String> dcIds = new java.util.HashSet<>();
+            for (MoySkladClient.MsExpense e : client.fetchDrawerCashoutsByMoment(from, to)) {
+                dcIds.add(e.id());
+                if (applyDrawerExpense(e, ctx)) n++;
+            }
+            for (Operation op : opRepo.findByOpDateBetweenAndMoyskladIdStartingWith(from, to, "dc:")) {
+                String uuid = op.getMoyskladId().substring(3);
+                if (dcIds.contains(uuid)) continue;
+                switch (client.fetchDocStatus("retaildrawercashout", uuid)) {
+                    case DELETED -> { if (storno(op, "hujjat MoySkladdan o'chirilgan", "")) n++; }
+                    case UNAPPLIED -> { if (storno(op, "hujjat o'tkazilishi bekor qilingan", "")) n++; }
+                    default -> { }
+                }
+            }
         } catch (Exception e) {
             log.warn("MoySklad reconcile uzildi: {}", e.getMessage());
             flushQuietFixes("tekshiruv");
@@ -427,6 +512,37 @@ public class MoySkladSyncService {
         }
         flushQuietFixes("tekshiruv");
         if (n > 0) log.info("MoySklad reconcile: {} ta yozuv/tuzatish", n);
+        return n;
+    }
+
+    private java.util.Set<String> idsOfSales(List<MoySkladClient.MsDoc> docs) {
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (MoySkladClient.MsDoc d : docs) ids.add(d.id());
+        return ids;
+    }
+
+    /**
+     * Retail (rd:/rr:) yozuvlari uchun orphan-STORNO. msId formati «rd:&lt;uuid&gt;:n|:b»
+     * — bitta hujjatning naqd va karta bo'laklari; hujjat holati bir marta so'raladi
+     * (kesh) va faqat O'CHIRILGAN/BEKOR tasdiqlangandagina STORNO qilinadi.
+     */
+    private int stornoRetailOrphans(String entity, String prefix,
+                                    java.util.Set<String> apiIds, LocalDate from, LocalDate to) {
+        int n = 0;
+        Map<String, MoySkladClient.DocStatus> statusCache = new HashMap<>();
+        for (Operation op : opRepo.findByOpDateBetweenAndMoyskladIdStartingWith(from, to, prefix)) {
+            String tail = op.getMoyskladId().substring(prefix.length());
+            int colon = tail.lastIndexOf(':');
+            String uuid = colon > 0 ? tail.substring(0, colon) : tail;
+            if (apiIds.contains(uuid)) continue;
+            MoySkladClient.DocStatus st = statusCache.computeIfAbsent(uuid,
+                    x -> client.fetchDocStatus(entity, x));
+            switch (st) {
+                case DELETED -> { if (storno(op, "hujjat MoySkladdan o'chirilgan", "")) n++; }
+                case UNAPPLIED -> { if (storno(op, "hujjat o'tkazilishi bekor qilingan", "")) n++; }
+                default -> { }   // OK (sanasi ko'chgan) yoki ruxsat/tarmoq — tegilmaydi
+            }
+        }
         return n;
     }
 
@@ -438,15 +554,46 @@ public class MoySkladSyncService {
      *   «Картадан тулов» -> TERMINAL (faqat kun hisobotida — firma hisobiga tushadi)
      *   boshqa statuslar — bank o'tkazmalari, kassir puliga tegmaydi.
      */
+    /** Sozlanadigan status nomlari (C1): MoySklad'da status qayta nomlansa, kodni
+     *  emas, settings jadvalidagi shu kalit qiymatini yangilash kifoya. */
+    public static final String KLIK_STATE_KEY = "moysklad.state.klik";
+    public static final String TERMINAL_STATE_KEY = "moysklad.state.terminal";
+
+    private String klikState() {
+        return settings.get(KLIK_STATE_KEY).filter(v -> !v.isBlank()).orElse("Клик");
+    }
+
+    private String terminalState() {
+        return settings.get(TERMINAL_STATE_KEY).filter(v -> !v.isBlank()).orElse("Картадан тулов");
+    }
+
+    /** Klik'ga o'xshagan, lekin sozlangan nomga mos kelmagan statuslar — bir marta ogohlantiriladi. */
+    private final java.util.Set<String> unknownStateWarned =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private MoneyType paymentMt(String state) {
-        return state.equalsIgnoreCase("Клик") ? MoneyType.KLIK
-                : state.equalsIgnoreCase("Картадан тулов") ? MoneyType.TERMINAL
+        return state.equalsIgnoreCase(klikState()) ? MoneyType.KLIK
+                : state.equalsIgnoreCase(terminalState()) ? MoneyType.TERMINAL
                 : null;
     }
 
     private boolean dispatchPaymentIn(MoySkladClient.MsExpense e, Ctx ctx) {
         MoneyType mt = paymentMt(e.state());
         if (mt == null) {
+            // C1: status Klik'ga O'XSHAYDI-yu sozlangan nomga mos emas — ehtimol
+            // MoySklad'da status QAYTA NOMLANGAN. Jimgina o'tkazib yubormaymiz —
+            // aks holda Click kirimlar indamay to'xtab qolardi.
+            String low = e.state().toLowerCase();
+            if ((low.contains("клик") || low.contains("klik") || low.contains("click"))
+                    && unknownStateWarned.add(e.state())) {
+                notify.toRole(uz.kassa.domain.Role.SUPERADMIN,
+                        "⚠️ MoySklad'da Входящий платеж statusi «" + TextUtil.esc(e.state())
+                        + "» uchradi — Klik'ga o'xshaydi, lekin sozlangan nom «"
+                        + TextUtil.esc(klikState()) + "»ga mos EMAS.\n"
+                        + "Status qayta nomlangan bo'lsa, bu to'lovlar tizimga KIRMAYAPTI!\n"
+                        + "Yechim: MoySklad'da statusni eski nomiga qaytaring, yoki bazadagi "
+                        + "settings «" + KLIK_STATE_KEY + "» qiymatini yangi nomga o'zgartiring.", null);
+            }
             // Status endi Klik/Kartadan emas — avval yozilgan bo'lsa STORNO
             Optional<Operation> existing = opRepo.findByMoyskladId("pi:" + e.id());
             if (skipNewPreEpoch(e.date(), existing)) return false;
@@ -858,16 +1005,16 @@ public class MoySkladSyncService {
     /* ==================== CLICK BALANS AUDITI (to'liq tarix) ==================== */
 
     /**
-     * Har bir Click hisobining MoySklad'dagi HAQIQIY qoldig'ini hisob yaratilgandan
-     * buyon BARCHA Входящий/Исходящий платёж hujjatlarini yig'ib qayta hisoblaydi va
-     * botning saqlangan balansi bilan solishtiradi. Farq topilsa — avtomatik
-     * KORREKTIROVKA qo'llanadi (ledger.postAdjustment) va buxgalteriyaga xabar
-     * beriladi. Og'ir operatsiya (to'liq tarix) — kamdan-kam (Jobs: 3 soatda 1)
-     * yoki SuperAdmin /auditclick bilan qo'lda ishga tushiriladi.
+     * DOIM BIR XIL siyosati (foydalanuvchi qarori): bot balanslari MoySklad'ning
+     * JORIY qoldiqlariga (/report/money/byaccount) muntazam tenglashtiriladi —
+     * har bog'langan Click hisobi to'liq, jami NAQD esa CASH bilan (farq
+     * Основнойga yoziladi). Hujjatma-hujjat solishtiruv esa «farq qaysi
+     * hujjatdan» ma'lumoti uchun saqlangan. Jobs: soatda 1 yoki /auditclick.
      */
     public synchronized void auditClickAccounts() {
         String token = client.currentToken();
         if (token == null || token.isBlank()) return;
+        sync();   // avval oxirgi hujjatlar olinadi — «yo'ldagi» hujjat tenglashtirishni adashtirmasin
 
         List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
         Map<String, Long> accountToClick = new HashMap<>();
@@ -879,45 +1026,129 @@ public class MoySkladSyncService {
         Map<Long, Long> trueBalance = new HashMap<>();
         for (Long id : accountToClick.values()) trueBalance.put(id, 0L);
 
+        // «Aybdorni topish» uchun: har hisob bo'yicha MoySklad hujjatlari
+        // (bot jurnalidagi msId -> ishorali summa va inson o'qiy oladigan ta'rif)
+        record MsDocRef(long signedSum, String label) {}
+        Map<Long, Map<String, MsDocRef>> msDocs = new HashMap<>();
+        for (Long id : accountToClick.values()) msDocs.put(id, new HashMap<>());
+
         // Ledger boshlanish sanasidan OLDINGI hujjatlar SANALMAYDI — u davr
         // kalibratsiya (qo'lda kiritilgan qoldiq) ichida, hujjatma-hujjat emas.
         LocalDate ep = epoch();
         try {
             for (MoySkladClient.MsExpense e : client.fetchAllPaymentsIn()) {
                 Long clickId = accountToClick.get(e.accountId());
-                if (clickId == null || !e.applicable() || !e.state().equalsIgnoreCase("Клик")) continue;
+                if (clickId == null || !e.applicable() || !e.state().equalsIgnoreCase(klikState())) continue;
                 if (e.date().isBefore(ep)) continue;
                 long sum = somSum(e);
-                if (sum > 0) trueBalance.merge(clickId, sum, Long::sum);
+                if (sum > 0) {
+                    trueBalance.merge(clickId, sum, Long::sum);
+                    msDocs.get(clickId).put("pi:" + e.id(),
+                            new MsDocRef(sum, "№" + e.docNo() + " · " + e.date().format(D_UZ)));
+                }
             }
             for (MoySkladClient.MsExpense e : client.fetchAllPaymentsOut()) {
                 Long clickId = accountToClick.get(e.accountId());
                 if (clickId == null || !e.applicable()) continue;
                 if (e.date().isBefore(ep)) continue;
                 long sum = somSum(e);
-                if (sum > 0) trueBalance.merge(clickId, -sum, Long::sum);
+                if (sum > 0) {
+                    trueBalance.merge(clickId, -sum, Long::sum);
+                    msDocs.get(clickId).put("po:" + e.id(),
+                            new MsDocRef(-sum, "№" + e.docNo() + " · " + e.date().format(D_UZ)));
+                }
             }
         } catch (Exception ex) {
             log.warn("Click balans auditi uzildi: {}", ex.getMessage());
             return;
         }
 
+        // NISHON — MoySklad'ning o'zi ko'rsatayotgan JORIY qoldiq (to'liq tarix,
+        // epoch'dan oldingi davr bilan birga). Farq TO'LIQ yopiladi.
+        Map<String, Long> msBal;
+        try { msBal = client.fetchAccountBalances(); }
+        catch (Exception ex) {
+            log.warn("MoySklad pul hisoboti o'qilmadi: {}", ex.getMessage());
+            return;
+        }
+        if (msBal.isEmpty()) {
+            log.warn("MoySklad pul hisoboti bo'sh/ruxsat yo'q — tenglashtirish o'tkazildi");
+            return;
+        }
+
         for (ClickAccount c : accounts) {
-            Long real = trueBalance.get(c.getId());
-            if (real == null) continue;
-            // Faqat MoySklad'dan sinxronlangan qism solishtiriladi — qo'lda kiritilgan
-            // korrektirovka/boshlang'ich qoldiqlarga audit TEGMAYDI.
-            long botMs = opRepo.syncNet(OwnerType.CLICK, c.getId(), MoneyType.KLIK);
-            long diff = real - botMs;
-            if (diff == 0) continue;
+            String accId = c.getMoyskladAccountId();
+            if (accId == null || accId.isBlank() || !msBal.containsKey(accId)) continue;
+            long target = msBal.get(accId);
             long bot = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
+            long diff = target - bot;
+            if (diff == 0) continue;
+
+            // AYBDOR HUJJATLAR: MoySklad ro'yxati bilan bot jurnalini hujjatma-hujjat
+            // solishtirib, farq aynan qaysi hujjat(lar)dan chiqqanini ko'rsatamiz.
+            StringBuilder det = new StringBuilder();
+            int shownDocs = 0;
+            Map<String, MsDocRef> expect = msDocs.getOrDefault(c.getId(), Map.of());
+            Map<String, Long> botOps = new HashMap<>();
+            for (Operation op : opRepo.syncOpsOf(OwnerType.CLICK, c.getId(), MoneyType.KLIK)) {
+                long signed = op.getToOwnerType() == OwnerType.CLICK ? op.getAmount() : -op.getAmount();
+                botOps.merge(op.getMoyskladId(), signed, Long::sum);
+            }
+            for (var en : expect.entrySet()) {
+                Long got = botOps.get(en.getKey());
+                if (got != null && got == en.getValue().signedSum()) continue;
+                if (shownDocs++ >= 8) { det.append("…\n"); break; }
+                if (got == null)
+                    det.append("• MoySklad'da bor, botda YO'Q: ")
+                       .append(TextUtil.esc(en.getValue().label())).append(" · ")
+                       .append(TextUtil.fmt(en.getValue().signedSum())).append(" so'm\n");
+                else
+                    det.append("• Summa farq: ").append(TextUtil.esc(en.getValue().label()))
+                       .append(" · bot ").append(TextUtil.fmt(got)).append(" / MS ")
+                       .append(TextUtil.fmt(en.getValue().signedSum())).append(" so'm\n");
+            }
+            if (shownDocs <= 8)
+                for (var en : botOps.entrySet()) {
+                    if (expect.containsKey(en.getKey())) continue;
+                    if (shownDocs++ >= 8) { det.append("…\n"); break; }
+                    det.append("• Botda bor, MoySklad ro'yxatida YO'Q: <code>")
+                       .append(TextUtil.esc(en.getKey())).append("</code> · ")
+                       .append(TextUtil.fmt(en.getValue())).append(" so'm\n");
+                }
+
             ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.CLICK, c.getId(), MoneyType.KLIK,
-                    diff, "MoySklad bilan avto-tenglashtirish (audit, sinxron qismi)", null, ledger.today());
-            notify.toBuxgalteriya("🔄 <b>Click avto-tuzatish</b>: <b>" + TextUtil.esc(c.getName())
-                    + "</b> — MoySklad hujjatlari bilan farq topildi, avtomatik tuzatildi:\n"
+                    diff, "MoySklad joriy qoldig'iga tenglashtirish (doim bir xil siyosati)",
+                    null, ledger.today());
+            notify.toBuxgalteriya("🔄 <b>Click avto-tenglashtirish</b>: <b>" + TextUtil.esc(c.getName())
+                    + "</b> — MoySklad joriy qoldig'i bilan farq topildi, tenglashtirildi:\n"
                     + TextUtil.fmt(bot) + " → <b>" + TextUtil.fmt(bot + diff) + "</b> so'm ("
-                    + (diff > 0 ? "+" : "") + TextUtil.fmt(diff) + ")", null);
+                    + (diff > 0 ? "+" : "") + TextUtil.fmt(diff) + ")"
+                    + (det.length() == 0 ? "" : "\n\n<b>Farq bergan hujjatlar:</b>\n" + det), null);
             log.info("Click audit tuzatish: {} {} -> {} (farq {})", c.getName(), bot, bot + diff, diff);
+        }
+
+        // NAQD ham DOIM teng: jami naqd (Основной + barcha kassalar) MoySklad CASH
+        // bilan solishtiriladi. MoySklad naqdni otdel kesimida bermagani uchun farq
+        // Основнойga yoziladi — kassalar o'z hujjatlari bilan yuraveradi.
+        Long msCash = msBal.get("CASH");
+        if (msCash != null) {
+            long total = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).getAmount();
+            for (Kassa k : kassaRepo.findAll())
+                total += ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
+            long diffN = msCash - total;
+            if (diffN != 0) {
+                long osn = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).getAmount();
+                ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.BUXGALTERIYA, LedgerService.BUX_ID,
+                        MoneyType.NAQD, diffN,
+                        "MoySklad CASH bilan tenglashtirish (doim bir xil siyosati)", null, ledger.today());
+                notify.toBuxgalteriya("🔄 <b>Naqd avto-tenglashtirish</b>\n"
+                        + "MoySklad CASH: <b>" + TextUtil.fmt(msCash) + "</b> so'm · "
+                        + "bot jami naqd: " + TextUtil.fmt(total) + " so'm\n"
+                        + "Farq <b>" + (diffN > 0 ? "+" : "") + TextUtil.fmt(diffN)
+                        + "</b> so'm Основнойga yozildi: " + TextUtil.fmt(osn) + " → <b>"
+                        + TextUtil.fmt(osn + diffN) + "</b> so'm", null);
+                log.info("Naqd tenglashtirildi: jami {} -> {} (farq {})", total, msCash, diffN);
+            }
         }
     }
 

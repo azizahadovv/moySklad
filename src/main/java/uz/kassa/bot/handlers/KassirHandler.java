@@ -196,7 +196,7 @@ public class KassirHandler {
         s.reset(); s.state = Session.State.TR_TGT;
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
-            if (!k.getId().equals(u.getKassaId()))
+            if (!k.getId().equals(u.getKassaId()) && !k.isCashless())   // B5: cashless'ga pul kiritilmaydi
                 rows.add(irow(btn("🏪 " + k.getName(), "k:tg:K" + k.getId())));
         rows.add(irow(btn("🏦 Buxgalteriya", "k:tg:B")));
         rows.add(irow(btn("❌ Bekor", "cx")));
@@ -549,9 +549,12 @@ public class KassirHandler {
                     || (o.getToOwnerType() == OwnerType.KASSA && u.getKassaId().equals(o.getToOwnerId()));
             if (!mine) continue;
             total++;
-            if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
-            if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                    || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+            // Faqat TASDIQLANGAN operatsiyalar summaga kiradi
+            if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
+                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
+                if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
+                        || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+            }
             if (lines.size() < 25) lines.add(opLine(o, u.getKassaId()));
         }
         StringBuilder sb = new StringBuilder("📜 <b>Tarix</b> · " + label + "\n\n"

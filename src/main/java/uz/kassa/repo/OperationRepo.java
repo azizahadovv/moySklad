@@ -81,4 +81,39 @@ public interface OperationRepo extends JpaRepository<Operation, Long> {
         order by o.id asc
         """)
     List<Operation> incomingTransfers(@Param("ot") OwnerType ot, @Param("oid") Long oid);
+
+    /** Egaga tegishli sinxron (moysklad_id bor) TASDIQLANGAN operatsiyalar —
+     *  Click auditi «aynan qaysi hujjat farq beryapti»ni ko'rsatishi uchun. */
+    @Query("""
+        select o from Operation o
+        where o.moyskladId is not null and o.moneyType = :mt
+          and o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and ((o.fromOwnerType = :ot and o.fromOwnerId = :oid)
+            or (o.toOwnerType = :ot and o.toOwnerId = :oid))
+        """)
+    List<Operation> syncOpsOf(@Param("ot") OwnerType ot, @Param("oid") Long oid,
+                              @Param("mt") MoneyType mt);
+
+    /** Yaxlitlik tekshiruvi: TASDIQLANGAN kirimlar (to-tomon) egalar kesimida —
+     *  butun jadvalni xotiraga yuklamasdan (SQL GROUP BY). */
+    @Query("""
+        select o.toOwnerType, o.toOwnerId, o.moneyType, sum(o.amount)
+        from Operation o
+        where o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and o.moneyType <> uz.kassa.domain.MoneyType.TERMINAL
+          and o.toOwnerType is not null
+        group by o.toOwnerType, o.toOwnerId, o.moneyType
+        """)
+    List<Object[]> confirmedInSums();
+
+    /** Yaxlitlik tekshiruvi: TASDIQLANGAN chiqimlar (from-tomon) egalar kesimida. */
+    @Query("""
+        select o.fromOwnerType, o.fromOwnerId, o.moneyType, sum(o.amount)
+        from Operation o
+        where o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and o.moneyType <> uz.kassa.domain.MoneyType.TERMINAL
+          and o.fromOwnerType is not null
+        group by o.fromOwnerType, o.fromOwnerId, o.moneyType
+        """)
+    List<Object[]> confirmedOutSums();
 }

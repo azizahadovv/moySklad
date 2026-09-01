@@ -120,11 +120,11 @@ public class BuxgalterHandler {
             int open = submissionService.submittableDays(k.getId()).size();
             sb.append("\n<b>").append(esc(k.getName())).append("</b>\n")
               .append("  💵 Naqd: ").append(fmt(n.getAmount()))
-              .append(n.getReserved() > 0 ? " (band " + fmt(n.getReserved()) + ")" : "")
+              .append(n.getReserved() > 0 ? " (rezervda " + fmt(n.getReserved()) + " · mavjud " + fmt(n.available()) + ")" : "")
               .append("\n  📲 Click: ").append(fmt(kl.getAmount()))
-              .append(kl.getReserved() > 0 ? " (band " + fmt(kl.getReserved()) + ")" : "")
+              .append(kl.getReserved() > 0 ? " (rezervda " + fmt(kl.getReserved()) + " · mavjud " + fmt(kl.available()) + ")" : "")
               .append("\n  💳 Terminal (bugun): ").append(fmt(term))
-              .append("\n  ➕ <b>Jami: ").append(fmt(n.getAmount() + kl.getAmount() + term))
+              .append("\n  ➕ <b>Jami (naqd+click): ").append(fmt(n.getAmount() + kl.getAmount()))
               .append("</b> so'm");
             if (open > 0) sb.append("\n  ⏳ Topshirilmagan kunlar: ").append(open);
             sb.append("\n");
@@ -137,13 +137,14 @@ public class BuxgalterHandler {
         sb.append("\n\n💰 <b>UMUMIY</b> (kassalar + buxgalteriya)")
           .append("\n  💵 Naqd: ").append(fmt(totN + bn.getAmount()))
           .append("\n  📲 Click: ").append(fmt(totK + bk.getAmount()))
-          .append("\n  💳 Terminal (bugun): ").append(fmt(totT))
-          .append("\n  ➕ <b>Jami: ")
-          .append(fmt(totN + bn.getAmount() + totK + bk.getAmount() + totT))
+          .append("\n  💳 Terminal (bugun, balansga KIRMAYDI — firma bank hisobida): ").append(fmt(totT))
+          .append("\n  ➕ <b>Jami (naqd+click): ")
+          .append(fmt(totN + bn.getAmount() + totK + bk.getAmount()))
           .append("</b> so'm");
         sb.append("\n\nKassa profili uchun tugmani bosing:");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        List<Kassa> ks = kassaRepo.findByActiveTrueOrderByIdAsc();
+        List<Kassa> ks = kassaRepo.findByActiveTrueOrderByIdAsc().stream()
+                .filter(k -> !k.isCashless()).toList();   // B5: hisobotda yo'q kassaga tugma ham yo'q
         for (int i = 0; i < ks.size(); i += 2) {
             if (i + 1 < ks.size())
                 rows.add(irow(btn("🏪 " + ks.get(i).getName(), "b:kp:" + ks.get(i).getId()),
@@ -203,8 +204,10 @@ public class BuxgalterHandler {
     public void trStart(Session s, long chatId) {
         s.reset(); s.state = Session.State.TR_TGT;
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+            if (k.isCashless()) continue;   // B5: cashless'ga pul kiritilmaydi
             rows.add(irow(btn("🏪 " + k.getName(), "b:tg:" + k.getId())));
+        }
         rows.add(irow(btn("❌ Bekor", "cx")));
         sender.send(chatId, "🔁 <b>O'tkazma</b> (Buxgalteriya → kassa)\n\nQaysi kassaga?", inline(rows));
     }
@@ -429,9 +432,12 @@ public class BuxgalterHandler {
             else if (who.equals("B")) show = touches(o, OwnerType.BUXGALTERIYA, LedgerService.BUX_ID);
             else show = touches(o, OwnerType.KASSA, Long.parseLong(who));
             if (!show) continue;
-            if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
-            if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                    || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+            // Faqat TASDIQLANGAN operatsiyalar summaga kiradi — rad etilgan/yo'ldagi pul emas
+            if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
+                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
+                if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
+                        || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+            }
             if (lines.size() < 25) lines.add(opText(o));
         }
         String whoLabel = who.equals("0") ? "🏢 Hammasi"
@@ -501,11 +507,11 @@ public class BuxgalterHandler {
 
         StringBuilder sb = new StringBuilder("🏪 <b>" + esc(k.getName()) + "</b> — profil\n\n");
         sb.append("💵 Naqd: <b>").append(fmt(n.getAmount())).append("</b>")
-          .append(n.getReserved() > 0 ? " (band " + fmt(n.getReserved()) + ")" : "").append("\n")
+          .append(n.getReserved() > 0 ? " (rezervda " + fmt(n.getReserved()) + " · mavjud " + fmt(n.available()) + ")" : "").append("\n")
           .append("📲 Click: <b>").append(fmt(kl.getAmount())).append("</b>")
-          .append(kl.getReserved() > 0 ? " (band " + fmt(kl.getReserved()) + ")" : "").append("\n")
+          .append(kl.getReserved() > 0 ? " (rezervda " + fmt(kl.getReserved()) + " · mavjud " + fmt(kl.available()) + ")" : "").append("\n")
           .append("💳 Terminal (bugun): ").append(fmt(term)).append("\n")
-          .append("➕ <b>Jami: ").append(fmt(n.getAmount() + kl.getAmount() + term)).append("</b> so'm\n");
+          .append("➕ <b>Jami (naqd+click): ").append(fmt(n.getAmount() + kl.getAmount())).append("</b> so'm\n");
         if (open > 0) sb.append("⏳ Topshirilmagan kunlar: <b>").append(open).append("</b>\n");
 
         List<AppUser> kassirs = userRepo.findByKassaIdAndActiveTrue(id);
@@ -519,9 +525,11 @@ public class BuxgalterHandler {
         List<String> lines = new ArrayList<>();
         for (Operation o : opRepo.byPeriod(p[0], p[1])) {
             if (!touches(o, OwnerType.KASSA, id)) continue;
-            if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
-            if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                    || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+            if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
+                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
+                if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
+                        || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+            }
             if (lines.size() < 15) lines.add(opText(o));
         }
         sb.append("\n📜 <b>").append(periodLabel(code)).append("</b>\n")

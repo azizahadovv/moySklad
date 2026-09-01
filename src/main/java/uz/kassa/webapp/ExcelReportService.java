@@ -131,6 +131,8 @@ public class ExcelReportService {
         }
 
         for (Operation o : ops) {
+            // Rad etilgan / yo'ldagi operatsiyalar pul emas — svodga kirmaydi
+            if (o.getStatus() != uz.kassa.domain.OpStatus.TASDIQLANGAN) continue;
             boolean in = o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH;
             boolean out = o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT;
             if (in && o.getToOwnerType() != null) {

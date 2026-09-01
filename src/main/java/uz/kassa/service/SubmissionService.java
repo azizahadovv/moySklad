@@ -112,9 +112,11 @@ public class SubmissionService {
 
     /**
      * Buxgalter/Admin pulni kassadan BEVOSITA qabul qiladi (hisobot kutmasdan):
-     * kassa balansidan yechiladi (manfiyga tushishi mumkin — pul qo'lda olingan fakt),
-     * Buxgalteriyaga kiradi, kunlar FIFO qoplanadi. TERMINAL — faqat jurnalga yoziladi
-     * (terminal puli firma bank hisobida, kassir balansida yuritilmaydi).
+     * kassa balansidan yechiladi, Buxgalteriyaga kiradi, kunlar FIFO qoplanadi.
+     * HIMOYA: mavjud (available) qoldiqdan ko'p qabul qilib BO'LMAYDI — balans 0
+     * bo'lsa kassada pul yo'q, «qayerdan beradi?»; kutilayotgan hisobot borida ham
+     * taqiq — rezervdagi pul ikki marta yechilib ketmasin. TERMINAL — faqat
+     * jurnalga yoziladi (terminal puli firma bank hisobida).
      */
     @Transactional
     public Operation directCollect(Long kassaId, MoneyType mt, long amount,
@@ -135,7 +137,14 @@ public class SubmissionService {
                     + "yig'iladi. Klik hisoboti kassir yuborgan hisobot orqali yopiladi.");
 
         if (mt != MoneyType.TERMINAL) {
-            ledger.settle(OwnerType.KASSA, kassaId, mt, 0, amount);
+            // Kutilayotgan hisobot borida bevosita qabul TAQIQ — o'sha pul allaqachon
+            // rezervda, qabul qilinsa bir pul IKKI MARTA yechiladi (minus sababi edi).
+            if (!subRepo.findByKassaIdAndStatusOrderByIdAsc(kassaId, SubmissionStatus.KUTILMOQDA).isEmpty())
+                throw new BusinessException("Bu kassaning ko'rib chiqilmagan hisoboti bor — "
+                        + "avval «📥 Kutilayotganlar»da uni qabul qiling yoki rad eting, "
+                        + "keyin pul qabul qilinadi (aks holda bir pul ikki marta yechiladi).");
+            // debit() mavjud qoldiqni QULF ostida tekshiradi — 0 balansdan qabul o'tmaydi.
+            ledger.debit(OwnerType.KASSA, kassaId, mt, amount);
             ledger.credit(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, mt, amount);
         }
 

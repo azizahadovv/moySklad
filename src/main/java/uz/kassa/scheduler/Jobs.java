@@ -34,6 +34,8 @@ public class Jobs {
     private final NotificationService notify;
     private final uz.kassa.bot.NameService names;
     private final uz.kassa.repo.ClickAccountRepo clickRepo;
+    private final uz.kassa.repo.OperationRepo opRepo;
+    private final uz.kassa.service.moysklad.MoySkladClient msClient;
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.bot.Sender sender;
     private final uz.kassa.repo.AppUserRepo userRepo;
@@ -160,12 +162,32 @@ public class Jobs {
         }
     }
 
+    /**
+     * Ketma-ket xatolar hisoblagichi (T1): bitta rejali ish 10 marta KETMA-KET
+     * yiqilsa — SuperAdmin'ga bir martalik ogohlantirish (ilgari doimiy buzilgan
+     * job faqat log yozib, hech kim bilmay qolardi). Muvaffaqiyatda nolga qaytadi.
+     */
+    private final java.util.Map<String, Integer> jobFails =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void jobOk(String job) { jobFails.remove(job); }
+
+    private void jobFail(String job, Exception e) {
+        int n = jobFails.merge(job, 1, Integer::sum);
+        if (n == 10)
+            notify.toRole(Role.SUPERADMIN, "🚨 <b>" + job + "</b> ishi 10 marta KETMA-KET "
+                    + "xato bermoqda — tizim qisman ishlamayapti!\nOxirgi xato: "
+                    + TextUtil.esc(String.valueOf(e.getMessage())), null);
+    }
+
     /** Tez sinxron — realtime'ga yaqin: har 30 soniyada yangi/o'zgargan hujjatlar. */
     @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT15S")
     public void moyskladSync() {
         try {
             syncService.sync();
+            jobOk("MoySklad sinxron");
         } catch (Exception e) {
+            jobFail("MoySklad sinxron", e);
             log.error("Sinxron xatosi: {}", e.getMessage(), e);
         }
     }
@@ -180,7 +202,9 @@ public class Jobs {
     public void moyskladReconcile() {
         try {
             syncService.reconcile();
+            jobOk("MoySklad tekshiruv (reconcile)");
         } catch (Exception e) {
+            jobFail("MoySklad tekshiruv (reconcile)", e);
             log.error("Reconcile xatosi: {}", e.getMessage(), e);
         }
     }
@@ -221,6 +245,19 @@ public class Jobs {
                   .append("kutilgan ").append(TextUtil.fmt(m.expected()))
                   .append(" · haqiqiy ").append(TextUtil.fmt(m.actual()))
                   .append(" · farq <b>").append(TextUtil.fmt(m.diff())).append("</b> so'm");
+                // «Aybdorni topish» yordami: oxirgi 14 kunda aynan |farq| summali
+                // operatsiyalar — ehtimoliy sabab sifatida ko'rsatiladi (evristika)
+                long ad = Math.abs(m.diff());
+                int cn = 0;
+                for (Operation o : opRepo.balanceOpsAfter(
+                        m.ownerType(), m.ownerId(), m.moneyType(), ledger.today().minusDays(14))) {
+                    if (o.getAmount() != ad) continue;
+                    if (cn++ >= 3) { sb.append("\n   …yana bor"); break; }
+                    sb.append("\n   ↳ ehtimoliy sabab: #").append(o.getId()).append(" ")
+                      .append(o.getType()).append(" ").append(TextUtil.fmt(o.getAmount()))
+                      .append(" so'm · ").append(o.getOpDate())
+                      .append(o.getMoyskladId() == null ? " (qo'lda)" : " (MoySklad)");
+                }
             }
             notify.toRole(Role.SUPERADMIN, sb.toString(), null);
             log.warn("Balans nomuvofiqligi: {} ta qator", issues.size());
@@ -252,6 +289,12 @@ public class Jobs {
             List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
             if (accounts.isEmpty()) return;
 
+            // MoySklad joriy qoldiqlari — har qator yonida AVTOMATIK solishtiruv uchun
+            // (✅ teng / ⚠️ farq). O'qib bo'lmasa hisobot belgisiz chiqaveradi.
+            java.util.Map<String, Long> ms;
+            try { ms = msClient.fetchAccountBalances(); }
+            catch (Exception e) { ms = java.util.Map.of(); }
+
             StringBuilder sb = new StringBuilder("📲 <b>Click қолдиқлари</b>\n📅 "
                     + java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"))
                             .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
@@ -268,8 +311,7 @@ public class Jobs {
                     long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
                     total += bal;
                     shown.add(c.getId());
-                    sb.append("• ").append(TextUtil.esc(c.getName())).append(": <b>")
-                      .append(TextUtil.fmt(bal)).append("</b> so'm\n");
+                    sb.append(cardBlock(ms, c, bal)).append("\n");
                 }
                 sb.append("\n");
             }
@@ -280,12 +322,36 @@ public class Jobs {
                 for (ClickAccount c : rest) {
                     long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
                     total += bal;
-                    sb.append("• ").append(TextUtil.esc(c.getName())).append(": <b>")
-                      .append(TextUtil.fmt(bal)).append("</b> so'm\n");
+                    sb.append(cardBlock(ms, c, bal)).append("\n");
                 }
                 sb.append("\n");
             }
+            // Жами ham MoySklad bilan avtomatik solishtiriladi
+            long msTotal = 0; int msCnt = 0;
+            for (ClickAccount c : accounts) {
+                String aid = c.getMoyskladAccountId();
+                if (aid != null && !aid.isBlank() && ms.containsKey(aid)) {
+                    msTotal += ms.get(aid); msCnt++;
+                }
+            }
             sb.append("➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
+            if (msCnt > 0)
+                sb.append(total == msTotal ? " ✅ <i>MoySklad билан тенг</i>"
+                        : " ⚠️ <i>MoySklad: " + TextUtil.fmt(msTotal) + " · farq "
+                          + TextUtil.fmt(msTotal - total) + "</i>");
+
+            // Нақд жами ham solishtiriladi (Основной + kassalar vs MoySklad CASH)
+            Long msCash = ms.get("CASH");
+            if (msCash != null) {
+                long naqd = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID,
+                        MoneyType.NAQD).getAmount();
+                for (Kassa k : kassaRepo.findAll())
+                    naqd += ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
+                sb.append("\n💵 <b>Нақд жами: ").append(TextUtil.fmt(naqd)).append("</b> so'm")
+                  .append(naqd == msCash.longValue() ? " ✅ <i>MoySklad билан тенг</i>"
+                        : " ⚠️ <i>MoySklad: " + TextUtil.fmt(msCash) + " · farq "
+                          + TextUtil.fmt(msCash - naqd) + "</i>");
+            }
             // Guruhda hech qanday menyu/klaviatura ko'rinmasligi kerak — faqat shu hisobot.
             // Bitta chatga yuborishda xato bo'lsa (bot chiqarilgan va h.k.) qolganlariga baribir ketadi.
             for (long chatId : chatIds) {
@@ -306,13 +372,62 @@ public class Jobs {
         }
     }
 
+    private static final java.time.format.DateTimeFormatter CARD_TF =
+            java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm");
+
     /**
-     * 📲 Click balans auditi: har bir Click hisobining MoySklad'dagi TO'LIQ tarix
-     * bo'yicha haqiqiy qoldig'i qayta hisoblanadi va bot balansi bilan solishtiriladi —
-     * farq (masalan MoySklad'da qo'lda korrektirovka qilingan bo'lsa) avtomatik
-     * tuzatiladi. Og'ir operatsiya (butun tarix) — kam-kam ishga tushadi.
+     * Bitta karta bloki — foydalanuvchi formati: MoySklad qoldig'i (hozirgi vaqt) ·
+     * mas'ul kiritgan KARTA (haqiqiy) qoldig'i (qachon, kim) · Фарқ.
+     * Karta qoldig'i /karta buyrug'i bilan kiritiladi — MoySklad'da bu raqam yo'q.
      */
-    @Scheduled(fixedDelayString = "PT3H", initialDelayString = "PT5M")
+    private String cardBlock(java.util.Map<String, Long> ms, ClickAccount c, long botBal) {
+        var zone = java.time.ZoneId.of("Asia/Tashkent");
+        String now = java.time.LocalTime.now(zone)
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        StringBuilder b = new StringBuilder();
+        b.append("💳 <b>").append(TextUtil.esc(c.getName())).append("</b>");
+        if (c.getCardResponsible() != null && !c.getCardResponsible().isBlank())
+            b.append(" — ").append(mention(c.getCardResponsible()));
+        b.append("\n");
+        String aid = c.getMoyskladAccountId();
+        Long msv = (aid == null || aid.isBlank()) ? null : ms.get(aid);
+        long msShown = msv != null ? msv : botBal;   // MS o'qilmasa — bot (tenglashtirilgan) qiymati
+        b.append("Мой склад қолдиғи ").append(now).append(" ҳолатида: <b>")
+         .append(TextUtil.fmt(msShown)).append("</b>\n");
+        if (c.getCardBalance() == null) {
+            b.append("Карта қолдиғи: <i>киритилмаган</i> ❗\n")
+             .append("Карта остаткасини юборинг ва текширинг! ")
+             .append("(<code>/karta ").append(c.getId()).append(" СУММА</code>)\n");
+        } else {
+            long kartaBal = c.getCardBalance();
+            String at = c.getCardBalanceAt() == null ? "?"
+                    : java.time.LocalDateTime.ofInstant(c.getCardBalanceAt(), zone).format(CARD_TF);
+            b.append("Карта қолдиғи ").append(at).append(" ҳолатида: <b>")
+             .append(TextUtil.fmt(kartaBal)).append("</b>")
+             .append(c.getCardBalanceBy() == null ? ""
+                    : " <i>(" + TextUtil.esc(c.getCardBalanceBy()) + ")</i>")
+             .append("\n");
+            long farq = msShown - kartaBal;
+            if (farq == 0) b.append("Фарқ: <b>0</b> ✅\n");
+            else b.append("Фарқ: <b>").append(TextUtil.fmt(farq)).append("</b> ⚠️\n")
+                  .append("Карта остаткасини юборинг ва текширинг!\n");
+        }
+        return b.toString();
+    }
+
+    /** Mas'ul matnini mention'ga aylantirish: @username o'zi ishlaydi, {id=..;Ism} — havola. */
+    private String mention(String r) {
+        String out = TextUtil.esc(r.trim());
+        return out.replaceAll("\\{id=(\\d+);([^}]+)\\}", "<a href=\"tg://user?id=$1\">$2</a>");
+    }
+
+    /**
+     * 🔄 MoySklad bilan tenglashtirish (DOIM BIR XIL siyosati): har soatda barcha
+     * Click hisoblari va jami NAQD MoySklad'ning joriy qoldiqlariga tenglashtiriladi
+     * (naqd farqi Основнойga yoziladi). Farq topilsa buxgalteriyaga hujjat
+     * tafsiloti bilan xabar boradi; farq yo'q — jim.
+     */
+    @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT5M")
     public void clickAccountAudit() {
         try {
             syncService.auditClickAccounts();
@@ -326,7 +441,9 @@ public class Jobs {
     public void googleSheets() {
         try {
             sheetsSync.sync();
+            jobOk("Google Sheets sinxron");
         } catch (Exception e) {
+            jobFail("Google Sheets sinxron", e);
             log.warn("Sheets sinxron xatosi: {}", e.getMessage());
         }
     }
@@ -336,7 +453,9 @@ public class Jobs {
     public void googleSheetsNastroyka() {
         try {
             sheetsSync.syncNastroyka();
+            jobOk("Sheets НАСТРОЙКА sinxron");
         } catch (Exception e) {
+            jobFail("Sheets НАСТРОЙКА sinxron", e);
             log.warn("Sheets tez sinxron xatosi: {}", e.getMessage());
         }
     }

@@ -37,6 +37,7 @@ public class WebAppController {
     private final TransferService transferService;
     private final SubmissionService submissionService;
     private final NotificationService notify;
+    private final AuditService audit;
     private final ExcelReportService excel;
     private final uz.kassa.bot.Sender sender;
     private final DebtRepo debtRepo;
@@ -185,9 +186,11 @@ public class WebAppController {
         for (Operation o : opRepo.byPeriod(f, t)) {
             if (!isForKassa(o, id)) continue;
             boolean in = (o.getToOwnerType() == OwnerType.KASSA && id == o.getToOwnerId());
-            if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH
-                    || (o.getType() == OpType.OTKAZMA && in)) kirim += o.getAmount();
-            else chiqim += o.getAmount();
+            if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
+                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH
+                        || (o.getType() == OpType.OTKAZMA && in)) kirim += o.getAmount();
+                else chiqim += o.getAmount();
+            }
             if (ops.size() < 100)
                 ops.add(Map.of("id", o.getId(), "date", o.getOpDate().toString(),
                         "type", o.getType().name(), "mt", o.getMoneyType().name(),
@@ -290,6 +293,10 @@ public class WebAppController {
         if (fromId == null) throw new BusinessException("Sizga kassa biriktirilmagan");
         OwnerType toT = "B".equals(r.toType()) ? OwnerType.BUXGALTERIYA : OwnerType.KASSA;
         Long toId = toT == OwnerType.BUXGALTERIYA ? LedgerService.BUX_ID : r.toId();
+        // W1 himoyasi: toId'siz o'tkazma «osilib» qolardi — rezerv olinib, hech kim
+        // ko'rmaydigan (to_owner_id=NULL) yozuv paydo bo'lardi.
+        if (toT == OwnerType.KASSA && (toId == null || kassaRepo.findById(toId).isEmpty()))
+            throw new BusinessException("Qabul qiluvchi kassa tanlanmagan yoki topilmadi");
         TransferKind kind = r.kind() == null || r.kind().isBlank()
                 ? TransferKind.ODDIY : TransferKind.valueOf(r.kind());
         String comment = r.comment() == null ? "" : r.comment().trim();
@@ -394,15 +401,21 @@ public class WebAppController {
     @PostMapping("/admin/user")
     public Map<String, Object> addUser(@RequestHeader("X-Telegram-Init-Data") String init,
                                        @RequestBody NewUserReq r) {
-        adminOnly(user(init));
+        AppUser me = user(init); adminOnly(me);
         if (userRepo.findByTelegramId(r.tgId()).isPresent())
             throw new BusinessException("Bu ID bilan foydalanuvchi allaqachon mavjud");
         Role role = Role.valueOf(r.role());
+        // W2 himoyasi: Mini App orqali SUPERADMIN tayinlash TAQIQ — faqat bot ichidan
+        if (role == Role.SUPERADMIN)
+            throw new BusinessException("SUPERADMIN faqat bot ichidan tayinlanadi");
         if (role == Role.KASSIR && r.kassaId() == null)
             throw new BusinessException("Kassir uchun kassa tanlang");
-        userRepo.save(AppUser.builder().telegramId(r.tgId()).fullName(r.name())
+        AppUser created = userRepo.save(AppUser.builder().telegramId(r.tgId()).fullName(r.name())
                 .role(role).kassaId(role == Role.KASSIR ? r.kassaId() : null).active(true).build());
         guestRepo.deleteById(r.tgId());
+        audit.log(me.getId(), "USER_QOSHILDI_MINIAPP", "user", created.getId(),
+                r.name() + " (" + role + ") tg=" + r.tgId()
+                        + (r.kassaId() == null ? "" : " kassa=" + r.kassaId()));
         notify.toUser(r.tgId(), "✅ Siz tizimga qo'shildingiz! Botga /start yozing.");
         return Map.of("ok", true);
     }
@@ -427,7 +440,12 @@ public class WebAppController {
         AppUser me = user(init); adminOnly(me);
         AppUser x = userRepo.findById(r.id()).orElseThrow(() -> new BusinessException("Topilmadi"));
         if (x.getId().equals(me.getId())) throw new BusinessException("O'zingizni o'chira olmaysiz");
+        // W2 himoyasi: SUPERADMIN'ni Mini App orqali o'chirish TAQIQ (bot ichidagi
+        // yaratuvchi/oxirgi-admin himoyalari chetlab o'tilmasin)
+        if (x.getRole() == Role.SUPERADMIN)
+            throw new BusinessException("SUPERADMIN faqat bot ichidan boshqariladi");
         x.setActive(false); userRepo.save(x);
+        audit.log(me.getId(), "USER_OCHIRILDI_MINIAPP", "user", x.getId(), x.getFullName());
         return Map.of("ok", true);
     }
 
@@ -445,12 +463,13 @@ public class WebAppController {
     @PostMapping("/admin/kassa")
     public Map<String, Object> addKassa(@RequestHeader("X-Telegram-Init-Data") String init,
                                         @RequestBody NewKassaReq r) {
-        adminOnly(user(init));
+        AppUser me = user(init); adminOnly(me);
         if (r.name() == null || r.name().isBlank()) throw new BusinessException("Nom kiriting");
         Kassa k = kassaRepo.save(Kassa.builder().name(r.name().trim())
                 .moyskladStoreId(r.storeId() == null || r.storeId().isBlank() ? null : r.storeId().trim())
                 .moyskladGroupId(r.groupId() == null || r.groupId().isBlank() ? null : r.groupId())
                 .active(true).build());
+        audit.log(me.getId(), "KASSA_QOSHILDI_MINIAPP", "kassa", k.getId(), k.getName());
         return Map.of("ok", true, "id", k.getId());
     }
 
@@ -467,6 +486,8 @@ public class WebAppController {
                 r.naqd(), "Boshlang'ich qoldiq", u.getId());
         if (r.klik() > 0) ledger.postAdjustment(OpType.BOSHLANGICH, ot, oid, MoneyType.KLIK,
                 r.klik(), "Boshlang'ich qoldiq", u.getId());
+        audit.log(u.getId(), "BOSHLANGICH_MINIAPP", "balance", oid,
+                ot + ":" + oid + " naqd=" + r.naqd() + " klik=" + r.klik());
         return Map.of("ok", true);
     }
 

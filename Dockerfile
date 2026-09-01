@@ -10,5 +10,7 @@ RUN mvn -q -DskipTests package
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 ENV TZ=Asia/Tashkent
+# OCR: guruhga izohsiz tashlangan karta skrinshotlaridan qoldiqni o'qish uchun
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/kassa-nazorati-*.jar app.jar
 ENTRYPOINT ["java","-jar","app.jar"]
