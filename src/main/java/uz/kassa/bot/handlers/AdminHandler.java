@@ -98,7 +98,8 @@ public class AdminHandler {
             case "💰 БУГУНГИ ТУШУМ" -> { tushumAll(s, chatId); return true; }
             case "💰 Баланс" -> {
                 syncService.syncIfStale(45);
-                sendContent(s, chatId, balansSvc.buildAll(uz.kassa.service.BalansService.NAQD),
+                // Foydalanuvchi qarori: Баланс bosilganda FAQAT KLIK qoldiqlar ochiladi
+                sendContent(s, chatId, balansSvc.buildAll(uz.kassa.service.BalansService.KLIK),
                         balansKb());
                 return true;
             }

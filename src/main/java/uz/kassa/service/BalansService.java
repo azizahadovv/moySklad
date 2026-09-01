@@ -90,12 +90,14 @@ public class BalansService {
         return sb.toString();
     }
 
+    /**
+     * FAQAT KLIK QOLDIQLARI (foydalanuvchi qarori): kun/topshiriq ro'yxatlari
+     * ko'rsatilmaydi — har otdel ostida faqat klik hisob(lar)i qoldig'i.
+     * Kliki yo'q kassa umuman chiqmaydi.
+     */
     private String allKlik() {
-        LocalDate today = ledger.today();
         Balance bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
         StringBuilder sb = header("📲 <b>БАЛАНС — КЛИК</b>");
-        sb.append("<i>Klik har bir kassaning o'z hisobida yig'iladi — "
-                + "buxgalteriyaga o'tkazilmaydi.</i>\n");
         if (bk.getAmount() != 0)
             sb.append("\n🏦 <b>Отдел основной</b>: <b>").append(fmt(bk.getAmount()))
               .append("</b> so'm\n");
@@ -107,23 +109,13 @@ public class BalansService {
             if (k.isCashless()) continue;
             long bal = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
             sumBal += bal;
-            List<DayRecord> days = openDays(k.getId()).stream()
-                    .filter(d -> d.remainKlik() != 0).toList();
+            List<ClickAccount> mine = clicks.stream()
+                    .filter(c -> k.getId().equals(c.getKassaId())).toList();
+            if (bal == 0 && mine.isEmpty()) continue;   // klik yo'q — kassa chiqmaydi
             sb.append("\n🏪 <b>").append(esc(k.getName())).append("</b>\n");
-            if (!days.isEmpty()) {
-                long dk = 0;
-                for (DayRecord d : days) {
-                    dk += d.remainKlik();
-                    sb.append("• ").append(d.getDate().format(DF))
-                      .append(d.getDate().equals(today) ? " (bugun)" : "")
-                      .append(" — <b>").append(fmt(d.remainKlik())).append("</b> so'm\n");
-                }
-                sb.append("⏳ Hisoboti topshirilmagan: <b>").append(fmt(dk)).append("</b> so'm\n");
-            }
-            sb.append("💼 Klik hisobi (jami yig'ilgan): <b>").append(fmt(bal)).append("</b> so'm\n");
-            // Shu otdelga bog'langan alohida Click hisoblari shu yerda ko'rinadi
-            for (ClickAccount c : clicks) {
-                if (!k.getId().equals(c.getKassaId())) continue;
+            if (bal != 0)
+                sb.append("💼 Kassa klik hisobi: <b>").append(fmt(bal)).append("</b> so'm\n");
+            for (ClickAccount c : mine) {
                 long cb = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
                 sumClick += cb;
                 shownClicks.add(c.getId());
