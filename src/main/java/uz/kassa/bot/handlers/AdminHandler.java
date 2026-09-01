@@ -188,6 +188,11 @@ public class AdminHandler {
                         + "Bekor qilish uchun «-» yuboring.");
             }
             case "cg" -> clickGroupMenu(s, chatId, msgId);
+            case "kml" -> kartaMasList(chatId, msgId);
+            case "kmc" -> kartaMasCard(Long.parseLong(arg), chatId, msgId);
+            case "kmu" -> kartaMasUsers(Long.parseLong(arg), chatId, msgId);
+            case "kms" -> kartaMasSet(u, arg, chatId, msgId);
+            case "kmx" -> kartaMasClear(u, Long.parseLong(arg), chatId, msgId);
             case "cge" -> {
                 s.state = Session.State.ADM_CG_ID;
                 sender.edit(chatId, msgId, "📣 <b>Гуруҳлар/Каналлар — yangi chat qo'shish</b>\n\n"
@@ -318,7 +323,7 @@ public class AdminHandler {
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
                     "🛠 Корректировка", "📋 Аудит",
                     "🏷 Тугма номлари", "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "👁 Ҳуқуқлар",
-                    "📣 Гуруҳлар/Каналлар", "📅 Ledger санаси",
+                    "📣 Гуруҳлар/Каналлар", "💳 Карта масъуллари", "📅 Ledger санаси",
                     "🩺 Диагностика", "📥 Қайта юклаш", "♻️ Нол бошлаш");
     private static final List<String> STAT_MENU =
             List.of("🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
@@ -502,6 +507,7 @@ public class AdminHandler {
                     case "🔑 MoySklad API" -> msToken(s, chatId, 0);
                     case "🔄 Номлар (MoySklad)" -> msNamesMenu(chatId, 0);
                     case "📣 Гуруҳлар/Каналлар" -> clickGroupMenu(s, chatId, 0);
+                    case "💳 Карта масъуллари" -> kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> diagMenu(s, chatId, 0);
                     case "📥 Қайта юклаш" -> reloadConfirm(s, chatId, 0);
@@ -1191,7 +1197,99 @@ public class AdminHandler {
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
                 irow(btn("🔄 Номлар (MoySklad)", "a:msr")),
                 irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📣 Гуруҳлар/Каналлар", "a:cg")),
+                irow(btn("💳 Карта масъуллари", "a:kml")),
                 irow(bk("a:p:main"))));
+    }
+
+    /* ---------- 💳 KARTA MAS'ULLARI (kim qaysi otdel kartasiga biriktirilgan) ---------- */
+
+    private void kartaMasList(long chatId, int msgId) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
+            String otdel = c.getKassaId() == null ? "—"
+                    : kassaRepo.findById(c.getKassaId()).map(Kassa::getName).orElse("?");
+            String mas = kartaMasName(c);
+            rows.add(irow(btn("💳 " + c.getName() + " · " + otdel + " · " + mas,
+                    "a:kmc:" + c.getId())));
+        }
+        rows.add(irow(bk("a:p:set")));
+        String text = "💳 <b>Карта масъуллари</b>\n\n"
+                + "Karta → otdel → mas'ul. O'zgartirish uchun kartani bosing:";
+        // Reply-menyu (Настройка) yo'lidan ham TUGMALAR bilan ochilsin (show() 0 da
+        // inline'siz yuborardi — bu bo'limda tugmasiz ma'no yo'q)
+        if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
+        else sender.send(chatId, text, inline(rows));
+    }
+
+    /** Mas'ul yorlig'i: {id=..;Ism} / @username / — . */
+    private String kartaMasName(ClickAccount c) {
+        String r = c.getCardResponsible();
+        if (r == null || r.isBlank()) return "mas'ul yo'q";
+        var m = java.util.regex.Pattern.compile("\\{id=(\\d+);([^}]+)\\}").matcher(r);
+        return m.find() ? m.group(2) : r;
+    }
+
+    private void kartaMasCard(long id, long chatId, int msgId) {
+        ClickAccount c = clickRepo.findById(id).orElse(null);
+        if (c == null) { kartaMasList(chatId, msgId); return; }
+        String otdel = c.getKassaId() == null ? "biriktirilmagan"
+                : kassaRepo.findById(c.getKassaId()).map(Kassa::getName).orElse("?");
+        String r = c.getCardResponsible();
+        var m = java.util.regex.Pattern.compile("\\{id=(\\d+);([^}]+)\\}")
+                .matcher(r == null ? "" : r);
+        String masLine = (r == null || r.isBlank()) ? "<i>biriktirilmagan</i>"
+                : m.find() ? "<b>" + esc(m.group(2)) + "</b> · ID: <code>" + m.group(1) + "</code>"
+                : "<b>" + esc(r) + "</b>";
+        show(chatId, msgId, "💳 <b>" + esc(c.getName()) + "</b>\n"
+                + "🏪 Otdel: <b>" + esc(otdel) + "</b>\n"
+                + "👤 Mas'ul: " + masLine + "\n"
+                + (c.getCardBalance() == null ? ""
+                    : "💰 Karta qoldig'i: <b>" + fmt(c.getCardBalance()) + "</b> so'm ("
+                      + esc(c.getCardBalanceBy() == null ? "?" : c.getCardBalanceBy()) + ")\n"),
+                List.of(
+                        irow(btn("👤 Mas'ulni tanlash", "a:kmu:" + id)),
+                        irow(btn("🗑 Mas'ulni olib tashlash", "a:kmx:" + id)),
+                        irow(bk("a:kml"))));
+    }
+
+    private void kartaMasUsers(long cardId, long chatId, int msgId) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        int shown = 0;
+        for (AppUser x : userRepo.findByActiveTrueOrderByRoleAscIdAsc()) {
+            if (x.getTelegramId() == null) continue;   // Telegram'siz odam tanlolmaydi
+            if (shown++ >= 20) break;
+            rows.add(irow(btn("👤 " + x.getFullName(), "a:kms:" + cardId + ":" + x.getId())));
+        }
+        rows.add(irow(bk("a:kmc:" + cardId)));
+        show(chatId, msgId, "👤 <b>Mas'ulni tanlang</b> (user ID bilan biriktiriladi):", rows);
+    }
+
+    private void kartaMasSet(AppUser admin, String arg, long chatId, int msgId) {
+        String[] p = arg.split(":");
+        long cardId = Long.parseLong(p[0]);
+        long userId = Long.parseLong(p[1]);
+        ClickAccount c = clickRepo.findById(cardId).orElse(null);
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (c == null || x == null || x.getTelegramId() == null) {
+            kartaMasList(chatId, msgId);
+            return;
+        }
+        c.setCardResponsible("{id=" + x.getTelegramId() + ";" + x.getFullName() + "}");
+        clickRepo.save(c);
+        audit.log(admin.getId(), "KARTA_MASUL", "click", cardId,
+                admin.getFullName() + ": " + c.getName() + " -> " + x.getFullName()
+                        + " (tg=" + x.getTelegramId() + ")");
+        kartaMasCard(cardId, chatId, msgId);
+    }
+
+    private void kartaMasClear(AppUser admin, long cardId, long chatId, int msgId) {
+        clickRepo.findById(cardId).ifPresent(c -> {
+            c.setCardResponsible(null);
+            clickRepo.save(c);
+            audit.log(admin.getId(), "KARTA_MASUL", "click", cardId,
+                    admin.getFullName() + ": " + c.getName() + " -> mas'ul olib tashlandi");
+        });
+        kartaMasCard(cardId, chatId, msgId);
     }
 
     private void setKassa(long chatId, int msgId) {

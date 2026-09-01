@@ -241,6 +241,32 @@ public class Router {
                 return;
             }
 
+            // E'TIBORLILIK FILTRLARI (foydalanuvchi talabi):
+            // 1) CHEK/tranzaksiya xabari (to'ldirish, o'tkazma, oplata...) — bu QOLDIQ
+            //    emas; faqat ichida balans belgisi (💰/qoldiq/остаток) bo'lsa qabul.
+            String lowAll = text.toLowerCase();
+            boolean balanceMarked = !balSums.isEmpty();
+            boolean receipt = lowAll.matches(
+                    "(?s).*(to['’`]?ldirish|пополнен|перевод|оплат|o['’`]?tkazma"
+                    + "|humo to|p2p|muvaffaqiyatli|успешн|перечисл).*")
+                    || text.contains("➕") || text.contains("➖");
+            if (receipt && !balanceMarked) {
+                log.info("Karta capture: chek/tranzaksiya deb topildi — IGNOR (chat {})", chatId);
+                return;
+            }
+            // 2) Oddiy yozilgan matn (OCR emas) balans belgisisiz UZUN GAP bo'lsa —
+            //    bu guruh suhbati, aralashmaymiz (faqat «toza summa» qabul qilinadi).
+            if (!fromOcr && !balanceMarked) {
+                String leftover = lowAll
+                        .replaceAll("so['’`]?m|сум|uzs", " ")
+                        .replaceAll("[\\d ,.'’`\\u00A0:+-]+", " ").trim();
+                if (leftover.length() > 15) {
+                    log.info("Karta capture: balans belgisisiz erkin matn — IGNOR ({} harf qoldiq)",
+                            leftover.length());
+                    return;
+                }
+            }
+
             // 2) Kartani aniqlash: to'liq nom -> nom SO'ZLARI (Samoyiddin, Zufar...)
             //    -> nomdagi raqam-token (5344) -> mas'ul. Shablon talab qilinmaydi —
             //    skrinshot/matn qanday ko'rinishda bo'lsa ham nomdagi o'ziga xos so'z
@@ -382,8 +408,58 @@ public class Router {
                 + (learned ? "\n🔗 Bu karta endi sizga biriktirildi — keyingi safar shunchaki "
                     + "summa yoki skrinshot yuboring, bot o'zi taniydi." : "")
                 + "\nKeyingi hisobotda MoySklad bilan solishtiriladi.";
-        if (editMsgId > 0) sender.edit(chatId, editMsgId, text);
-        else sender.send(chatId, text);
+        // Adashib noto'g'ri otdel/karta tanlangan bo'lsa — orqaga yo'l: ✏️ Tuzatish
+        // (yuborgan odam yoki SuperAdmin bosadi, to'g'ri kartaga ko'chiradi)
+        var fixKb = Keyboards.inline(java.util.List.of(Keyboards.irow(
+                Keyboards.btn("✏️ Tuzatish", "kf:" + card.getId() + ":" + sum + ":" + fromTgId))));
+        if (editMsgId > 0) sender.edit(chatId, editMsgId, text, fixKb);
+        else sender.send(chatId, text, fixKb);
+    }
+
+    /** Tuzatish klaviaturasi: eski (adashilgan) kartadan BOSHQA barcha kartalar. */
+    private org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
+            movePickKb(long oldId, long sum, long senderTg) {
+        var cards = clickRepo.findByActiveTrueOrderByIdAsc().stream()
+                .filter(c -> c.getId() != oldId).toList();
+        java.util.List<java.util.List<
+                org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>>
+                rows = new java.util.ArrayList<>();
+        for (int i = 0; i < cards.size(); i += 2) {
+            if (i + 1 < cards.size())
+                rows.add(Keyboards.irow(
+                        Keyboards.btn(cards.get(i).getName(),
+                                "km:" + cards.get(i).getId() + ":" + oldId + ":" + sum + ":" + senderTg),
+                        Keyboards.btn(cards.get(i + 1).getName(),
+                                "km:" + cards.get(i + 1).getId() + ":" + oldId + ":" + sum + ":" + senderTg)));
+            else rows.add(Keyboards.irow(
+                    Keyboards.btn(cards.get(i).getName(),
+                            "km:" + cards.get(i).getId() + ":" + oldId + ":" + sum + ":" + senderTg)));
+        }
+        rows.add(Keyboards.irow(Keyboards.btn("⬅️ O'zgarishsiz qoldirish", "kq:" + senderTg)));
+        return Keyboards.inline(rows);
+    }
+
+    /** Adashib tanlangan kartadan TO'G'RI kartaga ko'chirish: eski kartadagi xato
+     *  yozuv (va o'sha yuboruvchiga adashib bog'langan mas'ullik) tozalanadi. */
+    private void moveCardBalance(long oldId, long newId, long sum, long senderTg,
+                                 org.telegram.telegrambots.meta.api.objects.User presser,
+                                 long chatId, int msgId) {
+        var newCo = clickRepo.findById(newId);
+        if (newCo.isEmpty()) { sender.edit(chatId, msgId, "⚠️ Hisob topilmadi"); return; }
+        clickRepo.findById(oldId).ifPresent(oldC -> {
+            if (oldC.getCardBalance() != null && oldC.getCardBalance() == sum) {
+                oldC.setCardBalance(null);
+                oldC.setCardBalanceAt(null);
+                oldC.setCardBalanceBy(null);
+            }
+            String r = oldC.getCardResponsible();
+            if (r != null && r.contains("id=" + senderTg)) oldC.setCardResponsible(null);
+            clickRepo.save(oldC);
+            Long uid0 = userRepo.findByTelegramId(presser.getId()).map(AppUser::getId).orElse(null);
+            audit.log(uid0, "KARTA_TUZATISH", "click", oldId,
+                    oldC.getName() + " dan olib tashlandi (adashib tanlangan edi, summa=" + sum + ")");
+        });
+        saveCardBalance(newCo.get(), sum, displayName(presser), presser.getId(), chatId, msgId, true);
     }
 
     /** Karta tanlash klaviaturasi (2 tadan qator) — «kb:&lt;cardId&gt;:&lt;sum&gt;:&lt;sender&gt;». */
@@ -424,12 +500,41 @@ public class Router {
             if (presser != senderTg && !superadmin) return;
             switch (p[0]) {
                 case "kx" -> sender.edit(chatId, msgId, "❌ Bekor qilindi");
-                case "ku" -> {
+                case "kq" -> sender.edit(chatId, msgId,
+                        "✅ O'zgarishsiz qoldirildi — avvalgi saqlash kuchda.");
+                case "kf" -> {   // ✏️ Tuzatish: to'g'ri kartani tanlash oynasi
+                    long cardId = Long.parseLong(p[1]);
+                    long sum = Long.parseLong(p[2]);
+                    sender.edit(chatId, msgId, "✏️ <b>Tuzatish</b> — summa: <code>" + fmt(sum)
+                            + "</code> so'm\nTO'G'RI kartani tanlang:",
+                            movePickKb(cardId, sum, senderTg));
+                }
+                case "km" -> {   // to'g'ri karta tanlandi — ko'chirish
+                    long newId = Long.parseLong(p[1]);
+                    long oldId = Long.parseLong(p[2]);
+                    long sum = Long.parseLong(p[3]);
+                    moveCardBalance(oldId, newId, sum, senderTg, cb.getFrom(), chatId, msgId);
+                }
+                case "ku", "kp" -> {   // summa tanlandi / ⬅️ boshqa karta — karta ro'yxati
                     long sum = Long.parseLong(p[1]);
                     sender.edit(chatId, msgId, "Summa: <code>" + fmt(sum)
                             + "</code> so'm\nQAYSI kartaning qoldig'i?", cardPickKb(sum, senderTg));
                 }
-                default -> {   // kb / ks — karta va summa aniq
+                case "kb" -> {   // karta tanlandi — DARHOL SAQLANMAYDI: avval tasdiq,
+                                 // adashgan bo'lsa ⬅️ bilan orqaga qaytadi (foydalanuvchi talabi)
+                    long cardId = Long.parseLong(p[1]);
+                    long sum = Long.parseLong(p[2]);
+                    var co = clickRepo.findById(cardId);
+                    if (co.isEmpty()) { sender.edit(chatId, msgId, "⚠️ Hisob topilmadi"); return; }
+                    sender.edit(chatId, msgId, "💳 <b>" + esc(co.get().getName()) + "</b>\n"
+                            + "Summa: <code>" + fmt(sum) + "</code> so'm\n\nTo'g'rimi?",
+                            Keyboards.inline(java.util.List.of(Keyboards.irow(
+                                    Keyboards.btn("✅ Ha, saqlansin",
+                                            "kv:" + cardId + ":" + sum + ":" + senderTg),
+                                    Keyboards.btn("⬅️ Boshqa karta",
+                                            "kp:" + sum + ":" + senderTg)))));
+                }
+                case "kv", "ks" -> {   // yakuniy tasdiq (kv) / karta ma'lum, summa tanlandi (ks)
                     long cardId = Long.parseLong(p[1]);
                     long sum = Long.parseLong(p[2]);
                     var co = clickRepo.findById(cardId);
@@ -437,6 +542,7 @@ public class Router {
                     saveCardBalance(co.get(), sum, displayName(cb.getFrom()), presser,
                             chatId, msgId, true);
                 }
+                default -> { }
             }
         } catch (Exception e) {
             log.debug("karta pick callback: {}", e.getMessage());
@@ -791,7 +897,10 @@ public class Router {
         // to'siqlardan OLDIN qayta ishlanadi (ichida o'z himoyasi bor).
         if (data.startsWith("kc:")) { kartaOcrDecision(cb, data, chatId, msgId); return; }
         if (data.startsWith("kb:") || data.startsWith("ks:")
-                || data.startsWith("ku:") || data.startsWith("kx:")) {
+                || data.startsWith("ku:") || data.startsWith("kx:")
+                || data.startsWith("kf:") || data.startsWith("km:")
+                || data.startsWith("kq:") || data.startsWith("kv:")
+                || data.startsWith("kp:")) {
             kartaPickDecision(cb, data, chatId, msgId);
             return;
         }
