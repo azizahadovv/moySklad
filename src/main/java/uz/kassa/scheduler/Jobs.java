@@ -326,9 +326,10 @@ public class Jobs {
                 }
                 sb.append("\n");
             }
-            // Foydalanuvchi qarori: ost qismda MoySklad-solishtiruv va Нақд жами
-            // KO'RSATILMAYDI — faqat oddiy Жами (kartalar kesimidagi solishtiruv qoladi).
-            sb.append("➕ <b>Жами: ").append(TextUtil.fmt(total)).append("</b> so'm");
+            // Foydalanuvchi qarori: ost qismda ЖАМИ ham KO'RSATILMAYDI — u bot
+            // balanslari yig'indisi bo'lib, qatorlardagi MoySklad qiymatlari bilan
+            // manba jihatdan farq qilib chalg'itardi (masalan 200 002 farq hodisasi).
+            // Hisobot faqat kartalar kesimida.
             // Guruhda hech qanday menyu/klaviatura ko'rinmasligi kerak — faqat shu hisobot.
             // Bitta chatga yuborishda xato bo'lsa (bot chiqarilgan va h.k.) qolganlariga baribir ketadi.
             for (long chatId : chatIds) {

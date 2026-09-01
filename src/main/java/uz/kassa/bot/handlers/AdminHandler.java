@@ -98,8 +98,9 @@ public class AdminHandler {
             case "💰 БУГУНГИ ТУШУМ" -> { tushumAll(s, chatId); return true; }
             case "💰 Баланс" -> {
                 syncService.syncIfStale(45);
-                // Foydalanuvchi qarori: Баланс bosilganda FAQAT KLIK qoldiqlar ochiladi
-                sendContent(s, chatId, balansSvc.buildAll(uz.kassa.service.BalansService.KLIK),
+                // Foydalanuvchi qarori: Баланс bosilganda DOIM avval НАҚД oynasi ochiladi
+                // (КЛИК/ЖАМИ — pastdagi tugmalar orqali)
+                sendContent(s, chatId, balansSvc.buildAll(uz.kassa.service.BalansService.NAQD),
                         balansKb());
                 return true;
             }
