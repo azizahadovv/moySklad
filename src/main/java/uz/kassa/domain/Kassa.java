@@ -28,6 +28,11 @@ public class Kassa {
     @Builder.Default
     private boolean cashless = false;
 
+    /** Otdel yonida ko'rsatiladigan do'kon/xizmat nomi («Компьютер дукон», «Сервис 1»).
+     *  Click hisobotida: «🏪 Отдел Зуфар | Компьютер дукон». /dukon bilan o'rnatiladi. */
+    @Column(name = "shop_label")
+    private String shopLabel;
+
     /** true — nom qo'lda qo'yilgan, MoySklad nom-yangilashi unga tegmaydi. */
     @Builder.Default
     @Column(name = "name_locked", nullable = false)

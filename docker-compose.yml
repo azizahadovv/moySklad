@@ -21,6 +21,8 @@ services:
       TZ: Asia/Tashkent
     ports:
       - "${WEBAPP_PORT:-8080}:8080"
+    volumes:
+      - applogs:/app/logs
     depends_on:
       db:
         condition: service_healthy
@@ -28,3 +30,4 @@ services:
 
 volumes:
   pgdata:
+  applogs:

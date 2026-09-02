@@ -572,11 +572,20 @@ public class MoySkladClient {
      */
     public java.util.Map<String, Long> fetchAccountBalances() {
         java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
+        for (var e : fetchAccountBalancesTiyin().entrySet())
+            out.put(e.getKey(), Math.round(e.getValue() / 100.0));
+        return out;
+    }
+
+    /** Xuddi shu hisobot, lekin TIYINDA (yaxlitlanmagan) — Click hisobotida karta
+     *  qoldig'i bilan tiyingacha solishtirish uchun. */
+    public java.util.Map<String, Long> fetchAccountBalancesTiyin() {
+        java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
         JsonNode root = getJson(props.getMoysklad().getBaseUrl() + "/report/money/byaccount");
         if (root == null) return out;
         for (JsonNode r : root.path("rows")) {
             String id = lastSegment(r.path("account").path("meta").path("href").asText(""));
-            long bal = Math.round(r.path("balance").asDouble(0) / 100.0);
+            long bal = Math.round(r.path("balance").asDouble(0));
             out.merge(id.isEmpty() ? "CASH" : id, bal, Long::sum);
         }
         return out;

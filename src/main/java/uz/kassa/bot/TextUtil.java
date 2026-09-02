@@ -23,6 +23,28 @@ public final class TextUtil {
      *  KASR RAD ETILADI: «1.5» ilgari jimgina 15 bo'lib ketardi (10x xato xavfi).
      *  Oxiri [.,] + 1-2 raqam — kasr deb qaraladi; 3 raqamli dum (1.200.000) —
      *  minglik ajratkich, ruxsat. */
+    /** Tiyindagi summa: «12 235.45»; tiyin nol bo'lsa «12 235». */
+    public static String fmtTiyin(long tiyin) {
+        long a = Math.abs(tiyin);
+        String s = fmt(a / 100);
+        if (a % 100 != 0) s += "." + String.format("%02d", a % 100);
+        return (tiyin < 0 ? "-" : "") + s;
+    }
+
+    /** «12235.45», «12 235,45», «12235» → tiyin; noto'g'ri bo'lsa -1. */
+    public static long parseAmountTiyin(String t) {
+        if (t == null) return -1;
+        String s = t.trim().replace("\u00A0", " ");
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^(.*?)(?:[.,](\\d{1,2}))?$").matcher(s);
+        if (!m.matches()) return -1;
+        String whole = m.group(1).replaceAll("[^0-9]", "");
+        if (whole.isEmpty() || whole.length() > 13) return -1;
+        String frac = m.group(2) == null ? "0" : (m.group(2).length() == 1 ? m.group(2) + "0" : m.group(2));
+        try { return Long.parseLong(whole) * 100 + Long.parseLong(frac); }
+        catch (NumberFormatException e) { return -1; }
+    }
+
     public static long parseAmount(String t) {
         if (t == null) return -1;
         String s = t.trim();

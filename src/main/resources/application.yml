@@ -53,3 +53,12 @@ app:
 logging:
   level:
     uz.kassa: INFO
+  # Loglar FAYLGA ham yoziladi (docker konteyner qayta yaratilganda stdout logi
+  # yo'qoladi — hodisa tahlili uchun 14 kunlik arxiv saqlanadi)
+  file:
+    name: ${LOG_FILE:logs/kassa.log}
+  logback:
+    rollingpolicy:
+      max-file-size: 20MB
+      max-history: 14
+      total-size-cap: 300MB

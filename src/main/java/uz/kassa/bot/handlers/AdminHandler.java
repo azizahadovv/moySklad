@@ -246,6 +246,12 @@ public class AdminHandler {
                         u.getFullName() + " hisobot intervalini o'zgartirdi: har " + arg + " soatda");
                 clickScheduleMenu(s, chatId, msgId);
             }
+            case "cgo" -> {   // minut siljishi: -20…+20
+                settings.set(uz.kassa.scheduler.Jobs.CLICK_OFFSET_KEY, arg);
+                audit.log(u.getId(), "CLICK_JADVAL", "settings", null,
+                        u.getFullName() + " hisobot minut siljishini o'zgartirdi: " + arg + " min");
+                clickScheduleMenu(s, chatId, msgId);
+            }
             case "cgw" -> {
                 String[] w = arg.split(":");
                 settings.set(uz.kassa.scheduler.Jobs.CLICK_FROM_KEY, w[0]);
@@ -1244,7 +1250,7 @@ public class AdminHandler {
                 + "🏪 Otdel: <b>" + esc(otdel) + "</b>\n"
                 + "👤 Mas'ul: " + masLine + "\n"
                 + (c.getCardBalance() == null ? ""
-                    : "💰 Karta qoldig'i: <b>" + fmt(c.getCardBalance()) + "</b> so'm ("
+                    : "💰 Karta qoldig'i: <b>" + uz.kassa.bot.TextUtil.fmtTiyin(c.getCardBalance()) + "</b> so'm ("
                       + esc(c.getCardBalanceBy() == null ? "?" : c.getCardBalanceBy()) + ")\n"),
                 List.of(
                         irow(btn("👤 Mas'ulni tanlash", "a:kmu:" + id)),
@@ -2459,7 +2465,10 @@ public class AdminHandler {
                 + "Bu chatlarda bot hech qanday menyu ko'rsatmaydi va faqat SuperAdmin "
                 + "buyruqlariga javob beradi.\n\n"
                 + "⏰ Jadval: <b>har " + jobs.clickEvery() + " soatda</b>, "
-                + String.format("<b>%02d:00–%02d:00</b> oralig'ida\n", jobs.clickFrom(), jobs.clickTo())
+                + String.format("<b>%02d:00–%02d:00</b> oralig'ida", jobs.clickFrom(), jobs.clickTo())
+                + (jobs.clickOffsetMin() == 0 ? "" : String.format(", siljish <b>%+d min</b> (masalan %s)",
+                        jobs.clickOffsetMin(), jobs.clickTimeExample(jobs.clickFrom())))
+                + "\n"
                 + (jobs.clickFooter().isEmpty() ? ""
                     : "✍️ Ost matn: <code>" + esc(jobs.clickFooter()) + "</code>\n")
                 + "\n" + status;
@@ -2537,12 +2546,16 @@ public class AdminHandler {
     /** ⏰ Hisobot yuborish jadvali: interval (necha soatda bir) va soat oynasi. */
     private void clickScheduleMenu(Session s, long chatId, int msgId) {
         int every = jobs.clickEvery(), from = jobs.clickFrom(), to = jobs.clickTo();
+        int off = jobs.clickOffsetMin();
         String text = "⏰ <b>Yuborish vaqtlari</b>\n\n"
                 + "Joriy jadval: <b>har " + every + " soatda</b>, "
-                + String.format("<b>%02d:00–%02d:00</b> oralig'ida.\n\n", from, to)
-                + "Hisobot har soatning boshida (00 daqiqada) tekshiriladi: soat tanlangan "
-                + "oraliqda bo'lsa va intervalga to'g'ri kelsa — yuboriladi.\n\n"
-                + "<b>Interval</b> (necha soatda bir):";
+                + String.format("<b>%02d:00–%02d:00</b> oralig'ida", from, to)
+                + (off == 0 ? "" : String.format(", siljish <b>%+d min</b>", off)) + ".\n"
+                + "Masalan: <b>" + jobs.clickTimeExample(from) + "</b>, <b>"
+                + jobs.clickTimeExample(Math.min(23, from + every)) + "</b>, …\n\n"
+                + "Hisobot nominal soat + siljish vaqtida yuboriladi: soat tanlangan "
+                + "oraliqda bo'lsa va intervalga to'g'ri kelsa.\n\n"
+                + "<b>Interval</b> (necha soatda bir) · <b>Oraliq</b> · <b>Minut siljishi</b>:";
         java.util.function.BiFunction<Integer, String, InlineKeyboardButton> ib = (h, cb) ->
                 btn((h == every ? "✅ " : "") + h + " soat", cb);
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
@@ -2557,6 +2570,12 @@ public class AdminHandler {
                       wb.apply(new int[]{8, 20}, "a:cgw:8:20")));
         rows.add(irow(wb.apply(new int[]{9, 18}, "a:cgw:9:18"),
                       wb.apply(new int[]{9, 22}, "a:cgw:9:22")));
+        // Minut siljishi: -20 … +20 (5 daqiqalik qadam). ✅ — joriy tanlov.
+        java.util.function.Function<Integer, InlineKeyboardButton> ob = m ->
+                btn((m == off ? "✅ " : "") + (m == 0 ? ":00" : String.format("%+d min", m)), "a:cgo:" + m);
+        rows.add(irow(ob.apply(-20), ob.apply(-15), ob.apply(-10), ob.apply(-5)));
+        rows.add(irow(ob.apply(0)));
+        rows.add(irow(ob.apply(5), ob.apply(10), ob.apply(15), ob.apply(20)));
         rows.add(irow(btn("⬅️ Orqaga", "a:cg")));
         InlineKeyboardMarkup kb = inline(rows);
         if (msgId > 0) sender.edit(chatId, msgId, text, kb);

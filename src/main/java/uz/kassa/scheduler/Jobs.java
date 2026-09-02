@@ -93,6 +93,20 @@ public class Jobs {
     public int clickFrom() { return intSetting(CLICK_FROM_KEY, 0, 0, 23); }
     public int clickTo() { return intSetting(CLICK_TO_KEY, 23, 0, 23); }
 
+    /** Soat boshiga nisbatan MINUT siljishi (-20…+20, 5 ga karrali): +15 → 13:15, 14:15…;
+     *  -10 → 12:50, 13:50… (nominal soat 13:00, 14:00 bo'lib qolaveradi). */
+    public static final String CLICK_OFFSET_KEY = "notify.clickOffsetMin";
+    public int clickOffsetMin() {
+        int v = intSetting(CLICK_OFFSET_KEY, 0, -20, 20);
+        return v - Math.floorMod(v, 5) + (Math.floorMod(v, 5) >= 3 ? 5 : 0);   // 5 ga yaxlitlash
+    }
+
+    /** Sozlamalar/hisobot uchun: «13:15» ko'rinishidagi misol vaqt. */
+    public String clickTimeExample(int hour) {
+        java.time.LocalTime t = java.time.LocalTime.of(hour, 0).plusMinutes(clickOffsetMin());
+        return t.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+    }
+
     /** Hisobot ostiga qo'shiladigan ixtiyoriy matn (masalan @username eslatmalar). */
     public static final String CLICK_FOOTER_KEY = "notify.clickFooter";
 
@@ -268,16 +282,22 @@ public class Jobs {
 
     /**
      * 📲 Click qoldiqlari — jadval bo'yicha ro'yxatdagi barcha guruh/kanallarga
-     * yuboriladi. Cron har soat :00 da uyg'onadi, lekin haqiqiy yuborish admin
-     * sozlagan interval (clickEvery) va soat oynasi (clickFrom..clickTo) ga qarab
-     * o'tkaziladi yoki tashlab yuboriladi. Ro'yxat bo'sh bo'lsa — jim o'tadi.
+     * yuboriladi. Cron har 5 daqiqada uyg'onadi; hozirgi vaqtdan minut siljishi
+     * (clickOffsetMin) ayrilganda ROPPA-ROSA soat boshi chiqsa — o'sha NOMINAL soat
+     * interval (clickEvery) va soat oynasi (clickFrom..clickTo) bo'yicha tekshiriladi.
+     * Masalan siljish +15: 13:15 da nominal 13:00; siljish -10: 12:50 da nominal 13:00.
+     * Ro'yxat bo'sh bo'lsa — jim o'tadi.
      */
-    @Scheduled(cron = "0 0 * * * *", zone = "Asia/Tashkent")
+    @Scheduled(cron = "0 */5 * * * *", zone = "Asia/Tashkent")
     public void clickHourlyReport() {
-        int h = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent")).getHour();
+        java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"));
+        java.time.LocalDateTime nominal = now.minusMinutes(clickOffsetMin());
+        if (nominal.getMinute() != 0) return;   // bu 5 daqiqalik uyg'onish bizniki emas
+        int h = nominal.getHour();
         int from = clickFrom(), to = clickTo();
         if (h < from || h > to) return;
         if ((h - from) % clickEvery() != 0) return;
+        log.info("Click hisobot: nominal {}:00 (siljish {} min) — yuborilmoqda", h, clickOffsetMin());
         clickReportNow();
     }
 
@@ -292,40 +312,51 @@ public class Jobs {
             // MoySklad joriy qoldiqlari — har qator yonida AVTOMATIK solishtiruv uchun
             // (✅ teng / ⚠️ farq). O'qib bo'lmasa hisobot belgisiz chiqaveradi.
             java.util.Map<String, Long> ms;
-            try { ms = msClient.fetchAccountBalances(); }
+            try { ms = msClient.fetchAccountBalancesTiyin(); }   // TIYINDA — tiyin farqi ham ko'rinsin
             catch (Exception e) { ms = java.util.Map.of(); }
 
-            StringBuilder sb = new StringBuilder("📲 <b>Click қолдиқлари</b>\n📅 "
-                    + java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"))
-                            .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
-                    + "\n\n");
+            var zone = java.time.ZoneId.of("Asia/Tashkent");
+            var nowDt = java.time.LocalDateTime.now(zone);
+            StringBuilder sb = new StringBuilder();
+            sb.append("📲 <b>CLICK ҚОЛДИҚЛАРИ</b>\n")
+              .append("📅 ").append(nowDt.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")))
+              .append("  🕐 ").append(nowDt.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))).append("\n")
+              .append(RULE_TOP).append("\n\n");
+
             // Otdel (kassa) kesimida guruhlab chiqariladi; bog'lanmaganlar — «Бошқа»
-            long total = 0;
+            int[] stat = new int[3];   // 0 — тенг, 1 — фарқ, 2 — киритилмаган
             java.util.Set<Long> shown = new java.util.HashSet<>();
+            boolean firstSection = true;
             for (uz.kassa.domain.Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
                 List<ClickAccount> mine = accounts.stream()
                         .filter(c -> k.getId().equals(c.getKassaId())).toList();
                 if (mine.isEmpty()) continue;
-                sb.append("🏪 <b>").append(TextUtil.esc(k.getName())).append("</b>\n");
+                if (!firstSection) sb.append(RULE_MID).append("\n");
+                firstSection = false;
+                sb.append("🏪 <b>").append(TextUtil.esc(k.getName().toUpperCase())).append("</b>");
+                if (k.getShopLabel() != null && !k.getShopLabel().isBlank())
+                    sb.append("  |  <i>").append(TextUtil.esc(k.getShopLabel())).append("</i>");
+                sb.append("\n\n");
                 for (ClickAccount c : mine) {
                     long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
-                    total += bal;
                     shown.add(c.getId());
-                    sb.append(cardBlock(ms, c, bal)).append("\n");
+                    sb.append(cardBlock(ms, c, bal, stat)).append("\n");
                 }
-                sb.append("\n");
             }
             List<ClickAccount> rest = accounts.stream()
                     .filter(c -> !shown.contains(c.getId())).toList();
             if (!rest.isEmpty()) {
-                sb.append("📌 <b>Бошқа</b>\n");
+                if (!firstSection) sb.append(RULE_MID).append("\n");
+                sb.append("📌 <b>БОШҚА</b>\n\n");
                 for (ClickAccount c : rest) {
                     long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
-                    total += bal;
-                    sb.append(cardBlock(ms, c, bal)).append("\n");
+                    sb.append(cardBlock(ms, c, bal, stat)).append("\n");
                 }
-                sb.append("\n");
             }
+            sb.append(RULE_TOP).append("\n")
+              .append("📊 <b>ХУЛОСА:</b>  ✅ тенг — ").append(stat[0])
+              .append("   ⚠️ фарқ — ").append(stat[1])
+              .append("   ❗️ киритилмаган — ").append(stat[2]).append("\n\n");
             // Foydalanuvchi qarori: ost qismda ЖАМИ ham KO'RSATILMAYDI — u bot
             // balanslari yig'indisi bo'lib, qatorlardagi MoySklad qiymatlari bilan
             // manba jihatdan farq qilib chalg'itardi (masalan 200 002 farq hodisasi).
@@ -334,7 +365,9 @@ public class Jobs {
             // Bitta chatga yuborishda xato bo'lsa (bot chiqarilgan va h.k.) qolganlariga baribir ketadi.
             for (long chatId : chatIds) {
                 // Ost matn chatga xos: {adminlar}/{xodimlar} shu chat bo'yicha hisoblanadi
-                String text = sb.toString() + clickFooterHtml(chatId);
+                String footer = clickFooterHtml(chatId);
+                String text = sb.toString()
+                        + (footer.isEmpty() ? "" : "📣 <b>Карта қолдиқларини юборинг!</b>\n" + footer);
                 var chat = sender.getChat(chatId);
                 if (chat != null && chat.isChannelChat()) {
                     // Kanalda reply-klaviatura bo'lmaydi — Telegram markupli xabarni rad etadi.
@@ -352,13 +385,19 @@ public class Jobs {
 
     private static final java.time.format.DateTimeFormatter CARD_TF =
             java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm");
+    private static final String RULE_TOP = "━━━━━━━━━━━━━━━━━━━━";
+    private static final String RULE_MID = "──────────────────────";
 
     /**
-     * Bitta karta bloki — foydalanuvchi formati: MoySklad qoldig'i (hozirgi vaqt) ·
-     * mas'ul kiritgan KARTA (haqiqiy) qoldig'i (qachon, kim) · Фарқ.
-     * Karta qoldig'i /karta buyrug'i bilan kiritiladi — MoySklad'da bu raqam yo'q.
+     * Bitta karta bloki (foydalanuvchi shabloni, 02.09.2026):
+     *   💳 <b>Karta</b> — mas'ul
+     *   📦 Мой склад қолдиғи HH:mm ҳолатида: <b>summa</b>
+     *   💳 Карта қолдиғи dd.MM HH:mm ҳолатида: <b>summa</b> (kim ✔)
+     *   ✅ Фарқ: 0 — тенг   |   ⚠️ Фарқ: X — Карта остаткасини юборинг ва текширинг!
+     *   ❗️ Карта қолдиғи: киритилмаган — ... (/karta id СУММА)
+     * stat[] — xulosa hisoblagichi: 0 тенг, 1 фарқ, 2 киритилмаган.
      */
-    private String cardBlock(java.util.Map<String, Long> ms, ClickAccount c, long botBal) {
+    private String cardBlock(java.util.Map<String, Long> ms, ClickAccount c, long botBal, int[] stat) {
         var zone = java.time.ZoneId.of("Asia/Tashkent");
         String now = java.time.LocalTime.now(zone)
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
@@ -369,26 +408,33 @@ public class Jobs {
         b.append("\n");
         String aid = c.getMoyskladAccountId();
         Long msv = (aid == null || aid.isBlank()) ? null : ms.get(aid);
-        long msShown = msv != null ? msv : botBal;   // MS o'qilmasa — bot (tenglashtirilgan) qiymati
-        b.append("Мой склад қолдиғи ").append(now).append(" ҳолатида: <b>")
-         .append(TextUtil.fmt(msShown)).append("</b>\n");
+        long msShown = msv != null ? msv : botBal * 100;   // TIYIN; MS o'qilmasa — bot (so'm) qiymati
+        b.append("📦 Мой склад қолдиғи ").append(now).append(" ҳолатида: <b>")
+         .append(TextUtil.fmtTiyin(msShown)).append("</b>\n");
         if (c.getCardBalance() == null) {
-            b.append("Карта қолдиғи: <i>киритилмаган</i> ❗\n")
-             .append("Карта остаткасини юборинг ва текширинг! ")
+            stat[2]++;
+            b.append("❗️ Карта қолдиғи: <b>киритилмаган</b>\n")
+             .append("➡️ Карта остаткасини юборинг ва текширинг! ")
              .append("(<code>/karta ").append(c.getId()).append(" СУММА</code>)\n");
         } else {
-            long kartaBal = c.getCardBalance();
+            long kartaBal = c.getCardBalance();   // tiyin
             String at = c.getCardBalanceAt() == null ? "?"
                     : java.time.LocalDateTime.ofInstant(c.getCardBalanceAt(), zone).format(CARD_TF);
-            b.append("Карта қолдиғи ").append(at).append(" ҳолатида: <b>")
-             .append(TextUtil.fmt(kartaBal)).append("</b>")
-             .append(c.getCardBalanceBy() == null ? ""
-                    : " <i>(" + TextUtil.esc(c.getCardBalanceBy()) + ")</i>")
+            String by = c.getCardBalanceBy() == null ? ""
+                    : TextUtil.esc(c.getCardBalanceBy().replace("(tasdiqlangan)", "").trim()) + " ✔";
+            b.append("💳 Карта қолдиғи ").append(at).append(" ҳолатида: <b>")
+             .append(TextUtil.fmtTiyin(kartaBal)).append("</b>")
+             .append(by.isEmpty() ? "" : " <i>(" + by + ")</i>")
              .append("\n");
             long farq = msShown - kartaBal;
-            if (farq == 0) b.append("Фарқ: <b>0</b> ✅\n");
-            else b.append("Фарқ: <b>").append(TextUtil.fmt(farq)).append("</b> ⚠️\n")
-                  .append("Карта остаткасини юборинг ва текширинг!\n");
+            if (farq == 0) {
+                stat[0]++;
+                b.append("✅ Фарқ: <b>0</b> — тенг\n");
+            } else {
+                stat[1]++;
+                b.append("⚠️ Фарқ: <b>").append(farq > 0 ? "+" : "").append(TextUtil.fmtTiyin(farq))
+                 .append("</b> — Карта остаткасини юборинг ва текширинг!\n");
+            }
         }
         return b.toString();
     }
@@ -400,10 +446,11 @@ public class Jobs {
     }
 
     /**
-     * 🔄 MoySklad bilan tenglashtirish (DOIM BIR XIL siyosati): har soatda barcha
-     * Click hisoblari va jami NAQD MoySklad'ning joriy qoldiqlariga tenglashtiriladi
-     * (naqd farqi Основнойga yoziladi). Farq topilsa buxgalteriyaga hujjat
-     * tafsiloti bilan xabar boradi; farq yo'q — jim.
+     * 🔄 MoySklad bilan tenglashtirish: har soatda barcha Click hisoblari
+     * MoySklad'ning joriy qoldiqlariga tenglashtiriladi. NAQD tenglashtirilMAYDI
+     * (2026-09-02 dan o'chirildi — Основной/kassa qoldiqlarini buzar edi): jami naqd
+     * MoySklad CASH bilan faqat SOLISHTIRILADI, farq bo'lsa sabab + summa + tuzatish
+     * yo'li bilan xabar boradi (auditNaqd). Farq yo'q — jim.
      */
     @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT5M")
     public void clickAccountAudit() {
@@ -411,6 +458,11 @@ public class Jobs {
             syncService.auditClickAccounts();
         } catch (Exception e) {
             log.warn("Click balans auditi xatosi: {}", e.getMessage());
+        }
+        try {
+            syncService.auditNaqd();   // faqat xabar: sabab + summa + tuzatish yo'li
+        } catch (Exception e) {
+            log.warn("Naqd tekshiruvi xatosi: {}", e.getMessage());
         }
     }
 

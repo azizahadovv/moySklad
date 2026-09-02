@@ -30,7 +30,7 @@ public class ClickAccount {
     /** Karta (Click ilovasidagi HAQIQIY) qoldig'i, so'mda — mas'ul /karta bilan kiritadi.
      *  MoySklad'da bu raqam YO'Q; soatlik hisobotda MoySklad qoldig'i bilan solishtiriladi. */
     @Column(name = "card_balance")
-    private Long cardBalance;
+    private Long cardBalance;   // TIYINDA (V18 dan): 12 235.45 so'm = 1223545
 
     @Column(name = "card_balance_at")
     private Instant cardBalanceAt;

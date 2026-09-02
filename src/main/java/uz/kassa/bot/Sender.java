@@ -75,6 +75,23 @@ public class Sender {
         }
     }
 
+    /** Guruhda aynan shu xabarga JAVOB (reply) — qaysi rasm haqida gap ketayotgani ko'rinsin. */
+    public void reply(long chatId, int replyToMessageId, String text, ReplyKeyboard kb) {
+        SendMessage m = SendMessage.builder()
+                .chatId(String.valueOf(chatId))
+                .text(text)
+                .parseMode("HTML")
+                .replyToMessageId(replyToMessageId)
+                .build();
+        if (kb != null) m.setReplyMarkup(kb);
+        try {
+            bot().execute(m);
+        } catch (TelegramApiException e) {
+            log.warn("Javob yuborilmadi ({}): {}", chatId, e.getMessage());
+            send(chatId, text, kb);   // asl xabar o'chirilgan bo'lsa — oddiy xabar
+        }
+    }
+
     public void edit(long chatId, int messageId, String text) { edit(chatId, messageId, text, null); }
 
     public void edit(long chatId, int messageId, String text, InlineKeyboardMarkup kb) {
@@ -225,6 +242,16 @@ public class Sender {
         } catch (TelegramApiException e) {
             log.debug("getChatMember ({}): {}", chatId, e.getMessage());
             return null;
+        }
+    }
+
+    /** Tugma bosgan odamga POP-UP ogohlantirish (faqat unga ko'rinadi). */
+    public void answerAlert(String callbackId, String text) {
+        try {
+            bot().execute(AnswerCallbackQuery.builder().callbackQueryId(callbackId)
+                    .text(text).showAlert(true).build());
+        } catch (TelegramApiException e) {
+            log.debug("answerAlert: {}", e.getMessage());
         }
     }
 
