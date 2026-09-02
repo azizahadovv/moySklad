@@ -10,6 +10,32 @@ import java.util.Optional;
 
 public interface OperationRepo extends JpaRepository<Operation, Long> {
 
+    /** Kunlik hisobot: kassadan buxgalteriyaga TOPSHIRILGAN naqd (sana bo'yicha). */
+    @Query("""
+        select coalesce(sum(o.amount), 0) from Operation o
+        where o.type = uz.kassa.domain.OpType.TOPSHIRIQ
+          and o.moneyType = uz.kassa.domain.MoneyType.NAQD
+          and o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and o.fromOwnerType = uz.kassa.domain.OwnerType.KASSA and o.fromOwnerId = :kassaId
+          and o.opDate = :date
+        """)
+    long sumTopshiriqNaqd(@Param("kassaId") Long kassaId, @Param("date") java.time.LocalDate date);
+
+    /** Kunlik hisobot: otdelga bog'langan CLICK hisoblariga shu kuni tushgan Klik kirimlar
+     *  (PRIXOD) minus vozvratlar — kun yozuvi (days) ularni o'z ichiga olmaydi, chunki
+     *  pul kassaga emas, Click hisobiga yoziladi. */
+    @Query("""
+        select coalesce(sum(case when o.type = uz.kassa.domain.OpType.PRIXOD then o.amount else -o.amount end), 0)
+        from Operation o, ClickAccount c
+        where c.kassaId = :kassaId and c.active = true
+          and o.moneyType = uz.kassa.domain.MoneyType.KLIK
+          and o.status = uz.kassa.domain.OpStatus.TASDIQLANGAN
+          and o.opDate = :date
+          and ((o.type = uz.kassa.domain.OpType.PRIXOD and o.toOwnerType = uz.kassa.domain.OwnerType.CLICK and o.toOwnerId = c.id)
+            or (o.type = uz.kassa.domain.OpType.VOZVRAT and o.fromOwnerType = uz.kassa.domain.OwnerType.CLICK and o.fromOwnerId = c.id))
+        """)
+    long sumClickSalesNet(@Param("kassaId") Long kassaId, @Param("date") java.time.LocalDate date);
+
     Optional<Operation> findByMoyskladId(String moyskladId);
 
     /** MoySklad reconcile: davr ichidagi sinxron yozuvlar (prefiks: ci:/pi:/co:/dc:). */

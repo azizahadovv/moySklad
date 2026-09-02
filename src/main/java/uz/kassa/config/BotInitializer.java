@@ -34,35 +34,53 @@ public class BotInitializer {
     }
 
     /**
-     * Buyruqlar menyusi FAQAT shaxsiy chatlarda ko'rinadi. Guruh/kanalda «/» bosilganda
-     * /start, /clear kabi buyruqlar ro'yxati umuman chiqmaydi (default scope'dagi eski
-     * BotFather buyruqlari ham o'chiriladi — guruh scope'lari bo'shligicha qoladi).
+     * Buyruqlar menyusi: shaxsiy chatda /start /kunlik /karta /clear; guruh/kanalda
+     * /kunlik /karta; guruh adminlariga qo'shimcha sozlash buyruqlari (02.09.2026,
+     * foydalanuvchi talabi — avval guruhlarda menyu umuman chiqmas edi).
      */
     private void setupCommandScopes() {
         try {
-            var cmds = java.util.List.of(
-                    new org.telegram.telegrambots.meta.api.objects.commands.BotCommand(
-                            "start", "Botni ishga tushirish"),
-                    new org.telegram.telegrambots.meta.api.objects.commands.BotCommand(
-                            "clear", "Chatni tozalash"));
+            java.util.function.BiFunction<String, String, org.telegram.telegrambots.meta.api.objects.commands.BotCommand> c =
+                    (n, d) -> new org.telegram.telegrambots.meta.api.objects.commands.BotCommand(n, d);
+            // Shaxsiy chat: hamma uchun
+            var priv = java.util.List.of(
+                    c.apply("start", "Botni ishga tushirish"),
+                    c.apply("kunlik", "Kunlik kassa solishtirish (rasm + Excel)"),
+                    c.apply("karta", "Karta qoldig'ini kiritish"),
+                    c.apply("clear", "Chatni tozalash"));
+            // Guruh/kanal: oddiy a'zolar
+            var group = java.util.List.of(
+                    c.apply("kunlik", "Kunlik kassa solishtirish (rasm + Excel)"),
+                    c.apply("karta", "Karta qoldig'ini kiritish"));
+            // Guruh adminlari: qo'shimcha sozlash buyruqlari
+            var admins = java.util.List.of(
+                    c.apply("kunlik", "Kunlik kassa solishtirish (rasm + Excel)"),
+                    c.apply("karta", "Karta qoldig'ini kiritish"),
+                    c.apply("auditclick", "Click va naqd auditi"),
+                    c.apply("dukon", "Otdel yonidagi do'kon nomi"),
+                    c.apply("setclickgroup", "Shu chatni Click guruhi qilish"));
             bot.execute(org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands.builder()
-                    .commands(cmds)
+                    .commands(priv)
                     .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
                             .BotCommandScopeAllPrivateChats.builder().build())
                     .build());
-            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands.builder()
-                    .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
-                            .BotCommandScopeDefault.builder().build())
-                    .build());
-            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands.builder()
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands.builder()
+                    .commands(group)
                     .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
                             .BotCommandScopeAllGroupChats.builder().build())
                     .build());
-            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.DeleteMyCommands.builder()
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands.builder()
+                    .commands(admins)
                     .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
                             .BotCommandScopeAllChatAdministrators.builder().build())
                     .build());
-            log.info("Buyruqlar scope'i sozlandi: faqat shaxsiy chatlar, guruhlarda ko'rinmaydi");
+            bot.execute(org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands.builder()
+                    .commands(group)
+                    .scope(org.telegram.telegrambots.meta.api.objects.commands.scope
+                            .BotCommandScopeDefault.builder().build())
+                    .build());
+            log.info("Buyruqlar menyusi sozlandi: shaxsiy {} ta, guruh {} ta, admin {} ta",
+                    priv.size(), group.size(), admins.size());
         } catch (Exception e) {
             log.warn("Buyruqlar scope'ini sozlashda xato: {}", e.getMessage());
         }

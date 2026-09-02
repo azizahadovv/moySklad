@@ -110,6 +110,40 @@ public class Sender {
     }
 
     /** Fayl (hujjat) yuborish — Excel hisobotlar uchun. */
+    /** Rasm (PNG) + izoh + tugma. Yuborilgan xabar ID si (tasdiq tugmasini keyin yangilash uchun); xato — null. */
+    public Integer sendPhoto(long chatId, byte[] png, String filename, String caption, InlineKeyboardMarkup kb) {
+        var ph = org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder()
+                .chatId(String.valueOf(chatId))
+                .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(
+                        new java.io.ByteArrayInputStream(png), filename))
+                .caption(caption)
+                .parseMode("HTML")
+                .build();
+        if (kb != null) ph.setReplyMarkup(kb);
+        try {
+            return bot().execute(ph).getMessageId();
+        } catch (TelegramApiException e) {
+            log.warn("Rasm yuborilmadi ({}): {}", chatId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** Rasmli xabarning izohini (caption) yangilash. */
+    public void editCaption(long chatId, int messageId, String caption, InlineKeyboardMarkup kb) {
+        var ec = org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageCaption.builder()
+                .chatId(String.valueOf(chatId))
+                .messageId(messageId)
+                .caption(caption)
+                .parseMode("HTML")
+                .build();
+        if (kb != null) ec.setReplyMarkup(kb);
+        try {
+            bot().execute(ec);
+        } catch (TelegramApiException e) {
+            log.warn("Izoh tahrirlanmadi ({}): {}", chatId, e.getMessage());
+        }
+    }
+
     public void sendDocument(long chatId, byte[] data, String filename, String caption) {
         var doc = org.telegram.telegrambots.meta.api.methods.send.SendDocument.builder()
                 .chatId(String.valueOf(chatId))

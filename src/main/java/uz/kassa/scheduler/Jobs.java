@@ -40,6 +40,7 @@ public class Jobs {
     private final uz.kassa.bot.Sender sender;
     private final uz.kassa.repo.AppUserRepo userRepo;
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
+    private final uz.kassa.service.DailyReportService dailyReport;
 
     /**
      * Click qoldiqlari soatlik hisoboti yuboriladigan guruh/kanallar — vergul bilan
@@ -288,6 +289,13 @@ public class Jobs {
      * Masalan siljish +15: 13:15 da nominal 13:00; siljish -10: 12:50 da nominal 13:00.
      * Ro'yxat bo'sh bo'lsa — jim o'tadi.
      */
+    /** 📋 Kunlik kassa solishtirish hisoboti — sozlangan vaqtda (standart 22:00) bir marta. */
+    @Scheduled(cron = "0 */5 * * * *", zone = "Asia/Tashkent")
+    public void dailyReportTick() {
+        try { dailyReport.tick(); }
+        catch (Exception e) { log.warn("Kunlik hisobot xatosi: {}", e.getMessage()); }
+    }
+
     @Scheduled(cron = "0 */5 * * * *", zone = "Asia/Tashkent")
     public void clickHourlyReport() {
         java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"));

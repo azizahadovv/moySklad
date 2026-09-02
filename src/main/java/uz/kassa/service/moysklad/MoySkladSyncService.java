@@ -1400,6 +1400,47 @@ public class MoySkladSyncService {
         return (v > 0 ? "+" : "") + TextUtil.fmt(v) + " so'm";
     }
 
+    /* ==================== KUNLIK HISOBOT: MoySklad savdosi ==================== */
+
+    /**
+     * Kunlik kassa solishtirish uchun MoySklad'dan BEVOSITA: kassa (otdel) kesimida
+     * kunlik savdo, so'mda — cashin (naqd kirim) + paymentin (Klik/terminal statusli)
+     * + retail sotuv − retail vozvrat. Bot kun yozuvi bilan solishtiriladi (Farq).
+     * Kalit — kassa id; hech qaysi otdelga bog'lanmagan hujjatlar — kalit -1.
+     */
+    public Map<Long, Long> moyskladDaySales(LocalDate d) {
+        Map<Long, Long> out = new HashMap<>();
+        Ctx ctx = buildCtx();
+        for (MoySkladClient.MsExpense e : client.fetchDocsByMoment("cashin", d, d)) {
+            long sum = somSum(e);
+            if (sum <= 0) continue;
+            Long k = ctx.groupToKassa().get(e.groupId());
+            out.merge(k == null ? -1L : k, sum, Long::sum);
+        }
+        for (MoySkladClient.MsExpense e : client.fetchDocsByMoment("paymentin", d, d)) {
+            if (paymentMt(e.state()) == null) continue;
+            long sum = somSum(e);
+            if (sum <= 0) continue;
+            Long k = ctx.groupToKassa().get(e.groupId());
+            out.merge(k == null ? -1L : k, sum, Long::sum);
+        }
+        try {
+            for (MoySkladClient.MsDoc sd : client.fetchSalesByMoment("retaildemand", d, d)) {
+                if (!sd.applicable()) continue;
+                Long k = ctx.storeToKassa().get(sd.storeId());
+                out.merge(k == null ? -1L : k, (sd.cashTiyin() + sd.noCashTiyin()) / 100, Long::sum);
+            }
+            for (MoySkladClient.MsDoc sd : client.fetchSalesByMoment("retailsalesreturn", d, d)) {
+                if (!sd.applicable()) continue;
+                Long k = ctx.storeToKassa().get(sd.storeId());
+                out.merge(k == null ? -1L : k, -(sd.cashTiyin() + sd.noCashTiyin()) / 100, Long::sum);
+            }
+        } catch (Exception ex) {
+            log.debug("Kunlik retail o'qilmadi: {}", ex.getMessage());
+        }
+        return out;
+    }
+
     /* ==================== yordamchi ==================== */
 
     /** Sinxron opni STORNO qilib buxgalteriyaga xabar berish. */

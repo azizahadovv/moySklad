@@ -55,8 +55,10 @@ public class Router {
     private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
     private final uz.kassa.repo.ClickAccountRepo clickRepo;
+    private final uz.kassa.service.DailyReportService dailyReport;
 
     public void route(Update u) {
+        if (u.hasChannelPost()) { onChannelPost(u.getChannelPost()); return; }
         if (u.hasMessage()) trackGroupMembers(u.getMessage());
         if (u.hasCallbackQuery()) onCallback(u.getCallbackQuery());
         else if (u.hasMessage() && u.getMessage().hasContact()) onContact(u.getMessage());
@@ -78,6 +80,32 @@ public class Router {
                 // rasmning O'ZI o'qiladi (OCR, Tesseract). HAR yuborilgan rasm alohida
                 // qayta ishlanadi — 50 marta yuborilsa 50 marta o'qiladi.
                 ocrCardCapture(pm);
+        }
+    }
+
+    /**
+     * KANAL posti: kanalda yozgan odam noma'lum (from yo'q), shuning uchun faqat Click
+     * guruh/kanallar ro'yxatidagi kanalda va faqat /kunlik [sana] buyrug'i ishlaydi —
+     * jadval (rasm + Excel) shu kanalga yuboriladi.
+     */
+    private void onChannelPost(Message m) {
+        try {
+            if (m.getText() == null || !m.getText().trim().startsWith("/kunlik")) return;
+            long chatId = m.getChatId();
+            if (!jobs.clickChatIds().contains(chatId)) return;
+            String[] kp = m.getText().trim().split("\\s+");
+            java.time.LocalDate d = java.time.LocalDate.now(props.zoneId());
+            if (kp.length >= 2) {
+                try { d = java.time.LocalDate.parse(kp[1], java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")); }
+                catch (Exception e) { sender.send(chatId, "Sana formati: <code>/kunlik 02.09.2026</code>"); return; }
+            }
+            final java.time.LocalDate dd = d;
+            new Thread(() -> {
+                try { dailyReport.sendTo(chatId, dd); }
+                catch (Exception ex) { log.warn("Kanal /kunlik ({}): {}", chatId, ex.getMessage()); }
+            }, "daily-report-channel").start();
+        } catch (Exception e) {
+            log.debug("Kanal posti: {}", e.getMessage());
         }
     }
 
@@ -925,9 +953,10 @@ public class Router {
         // yuborgan buyruqlar — JIM e'tiborsiz qoldiriladi: guruhga bot hech narsa yozmaydi.
         if (m.getChat().isGroupChat() || m.getChat().isSuperGroupChat()) {
             boolean cfgCmd = text.equals("/setclickgroup") || text.equals("/testclickgroup")
-                    || text.startsWith("/kartamas");
-            boolean kartaCmd = !cfgCmd && text.startsWith("/karta");
-            if (!cfgCmd && !kartaCmd) {
+                    || text.startsWith("/kartamas") || text.startsWith("/dukon") || text.equals("/auditclick");
+            boolean kunlikCmd = text.startsWith("/kunlik");   // SuperAdmin yoki buxgalter — guruhga jadval
+            boolean kartaCmd = !cfgCmd && !kunlikCmd && text.startsWith("/karta");
+            if (!cfgCmd && !kartaCmd && !kunlikCmd) {
                 // Buyruq emas — lekin karta qoldig'i yozilgan oddiy xabar bo'lishi
                 // mumkin (mas'ullar skrinshot + matn tashlab boradi): ushlab ko'riladi
                 tryGroupCardCapture(m, text);
@@ -938,6 +967,10 @@ public class Router {
                         .filter(AppUser::isActive)
                         .map(x -> x.getRole() == Role.SUPERADMIN).orElse(false);
                 if (!superadmin) return;
+            } else if (kunlikCmd) {
+                boolean ok = userRepo.findByTelegramId(tgId).filter(AppUser::isActive)
+                        .map(x -> x.getRole() == Role.SUPERADMIN || x.getRole() == Role.BUXGALTER).orElse(false);
+                if (!ok) return;   // begonalar/kassirlar — JIM
             } else {
                 // /karta — ro'yxatdagi faol xodim kifoya; begonalar JIM e'tiborsiz
                 if (userRepo.findByTelegramId(tgId).filter(AppUser::isActive).isEmpty()) return;
@@ -1025,6 +1058,34 @@ public class Router {
                 return;
             }
             handleKartaMas(user, text, chatId);
+            return;
+        }
+
+        if (text.startsWith("/kunlik")) {
+            // 📋 /kunlik [dd.MM.yyyy] — kunlik kassa solishtirish jadvali (shu chatga);
+            //    /kunlik vaqt HH:MM — avtomatik yuborish vaqti (SuperAdmin)
+            if (user.getRole() != Role.SUPERADMIN && user.getRole() != Role.BUXGALTER) {
+                sender.send(chatId, "⚠️ Bu buyruq SuperAdmin va buxgalter uchun");
+                return;
+            }
+            String[] kp = text.trim().split("\\s+");
+            if (kp.length >= 3 && kp[1].equalsIgnoreCase("vaqt")) {
+                if (user.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Vaqtni faqat SuperAdmin o'zgartiradi"); return; }
+                if (!kp[2].matches("\\d{2}:\\d{2}")) { sender.send(chatId, "Format: <code>/kunlik vaqt 22:00</code> (5 daqiqaga karrali)"); return; }
+                settings.set(uz.kassa.service.DailyReportService.TIME_KEY, kp[2]);
+                sender.send(chatId, "✅ Kunlik hisobot vaqti: <b>" + kp[2] + "</b> (Click guruhlari + SuperAdmin + buxgalter)");
+                return;
+            }
+            java.time.LocalDate d = java.time.LocalDate.now(props.zoneId());
+            if (kp.length >= 2) {
+                try { d = java.time.LocalDate.parse(kp[1], java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")); }
+                catch (Exception e) { sender.send(chatId, "Sana formati: <code>/kunlik 02.09.2026</code>"); return; }
+            }
+            final java.time.LocalDate dd = d;
+            new Thread(() -> {
+                try { dailyReport.sendTo(chatId, dd); }
+                catch (Exception ex) { sender.send(chatId, "⚠️ Hisobot xatosi: " + esc(String.valueOf(ex.getMessage()))); }
+            }, "daily-report-cmd").start();
             return;
         }
 
@@ -1159,6 +1220,24 @@ public class Router {
         // botda ro'yxatdan o'tmagan bo'lishi ham mumkin, shuning uchun umumiy
         // to'siqlardan OLDIN qayta ishlanadi (ichida o'z himoyasi bor).
         if (data.startsWith("kc:")) { kartaOcrDecision(cb, data, chatId, msgId); return; }
+        if (data.startsWith("dr:ok:")) {   // 📋 kunlik hisobot — moliya menejeri tasdig'i
+            try {
+                var uo = userRepo.findByTelegramId(cb.getFrom().getId()).filter(AppUser::isActive);
+                if (uo.isEmpty() || (uo.get().getRole() != Role.SUPERADMIN && uo.get().getRole() != Role.BUXGALTER)) {
+                    sender.answerAlert(cb.getId(), "⛔ Tasdiqlashni faqat buxgalter yoki SuperAdmin bosa oladi.");
+                    return;
+                }
+                java.time.LocalDate d = java.time.LocalDate.parse(data.substring(6));
+                boolean fresh = dailyReport.confirm(d, uo.get());
+                var c = dailyReport.confirmRepoView(d);
+                sender.editCaption(chatId, msgId, dailyReport.caption(d, dailyReport.rows(d), c), null);
+                sender.answerAlert(cb.getId(), fresh ? "✅ Tasdiqlandi" : "Bu kun allaqachon tasdiqlangan");
+                audit.log(uo.get().getId(), "KUNLIK_TASDIQ", "daily", null, uo.get().getFullName() + " " + d + " kunlik hisobotni tasdiqladi");
+            } catch (Exception e) {
+                log.warn("Kunlik tasdiq xatosi: {}", e.getMessage());
+            }
+            return;
+        }
         if (data.startsWith("kb:") || data.startsWith("ks:")
                 || data.startsWith("ku:") || data.startsWith("kx:")
                 || data.startsWith("kf:") || data.startsWith("km:")
