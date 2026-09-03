@@ -51,6 +51,7 @@ public class AdminHandler {
     private final uz.kassa.service.BalansService balansSvc;
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
+    private final NotifyAdminHandler notifyAdmin;
 
     private static final java.time.format.DateTimeFormatter DF =
             java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy");
@@ -82,6 +83,9 @@ public class AdminHandler {
             case ADM_CG_ID -> { cgIdSave(u, s, text, chatId); return true; }
             case ADM_CG_FOOTER -> { cgFooterSave(u, s, text, chatId); return true; }
             case ADM_LS_DATE -> { lsSave(u, s, text, chatId); return true; }
+            case ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE -> {
+                if (notifyAdmin.onText(u, s, text, chatId)) return true;
+            }
             default -> { }
         }
 
@@ -305,7 +309,11 @@ public class AdminHandler {
             case "ckq" -> ckStart(s, arg, chatId, msgId);
             case "ckd" -> ckSanaBtn(u, s, arg, chatId, msgId);
             case "ux" -> deactivate(u, Long.parseLong(arg), chatId, msgId);
-            default -> { return false; }
+            default -> {
+                // 🔔 Bildirishnomalar — «a:nf…» (alohida handler)
+                if (cmd.startsWith("nf")) return notifyAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
+                return false;
+            }
         }
         return true;
     }
@@ -329,7 +337,7 @@ public class AdminHandler {
             List.of("🏪 Касса", "👥 Фойдаланувчилар", "💼 Бошланғич қолдиқ",
                     "🛠 Корректировка", "📋 Аудит",
                     "🏷 Тугма номлари", "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "👁 Ҳуқуқлар",
-                    "📣 Гуруҳлар/Каналлар", "💳 Карта масъуллари", "📅 Ledger санаси",
+                    "📣 Гуруҳлар/Каналлар", "🔔 Билдиришномалар", "💳 Карта масъуллари", "📅 Ledger санаси",
                     "🩺 Диагностика", "📥 Қайта юклаш", "♻️ Нол бошлаш");
     private static final List<String> STAT_MENU =
             List.of("🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
@@ -513,6 +521,7 @@ public class AdminHandler {
                     case "🔑 MoySklad API" -> msToken(s, chatId, 0);
                     case "🔄 Номлар (MoySklad)" -> msNamesMenu(chatId, 0);
                     case "📣 Гуруҳлар/Каналлар" -> clickGroupMenu(s, chatId, 0);
+                    case "🔔 Билдиришномалар" -> notifyAdmin.menu(s, chatId, 0);
                     case "💳 Карта масъуллари" -> kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> diagMenu(s, chatId, 0);
@@ -1203,6 +1212,7 @@ public class AdminHandler {
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
                 irow(btn("🔄 Номлар (MoySklad)", "a:msr")),
                 irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📣 Гуруҳлар/Каналлар", "a:cg")),
+                irow(btn("🔔 Билдиришномалар", "a:nfm")),
                 irow(btn("💳 Карта масъуллари", "a:kml")),
                 irow(bk("a:p:main"))));
     }

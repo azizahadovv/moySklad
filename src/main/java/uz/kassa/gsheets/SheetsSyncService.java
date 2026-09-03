@@ -38,6 +38,7 @@ public class SheetsSyncService {
     private final MoySkladClient msClient;
     private final GuestRepo guestRepo;
     private final ClickAccountRepo clickRepo;
+    private final NotifyRepo notifyRepo;
 
     private volatile boolean tabsReady = false;
 
@@ -57,6 +58,9 @@ public class SheetsSyncService {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<Long, String> kassaSnap =
             new java.util.concurrent.ConcurrentHashMap<>();
+    /** 🔔 Shablon varag'i: id → tahrirlanadigan ustunlar hash'i. */
+    private final java.util.Map<Long, String> notifySnap =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean snapsLoaded = false;
 
     private final uz.kassa.service.SettingsService settings;
@@ -73,6 +77,7 @@ public class SheetsSyncService {
         if (snapsLoaded) return;
         parseSnap(settings.get("sheets.snap.users").orElse(""), userSnap);
         parseSnap(settings.get("sheets.snap.kassa").orElse(""), kassaSnap);
+        parseSnap(settings.get("sheets.snap.notify").orElse(""), notifySnap);
         snapsLoaded = true;
     }
 
@@ -109,11 +114,13 @@ public class SheetsSyncService {
             ensureTabs();
             pullKassalar();
             pullUsers();
+            pullShablon();
             pushOperatsiyalar();
             pushBalanslar();
             pushKunlar();
             pushKassalar();
             pushUsers();
+            pushShablon();
             pushSozlamalar();
         } catch (Exception e) {
             log.warn("Google Sheets sinxron xatosi: {}", e.getMessage());
@@ -129,8 +136,10 @@ public class SheetsSyncService {
             ensureTabs();
             pullKassalar();
             pullUsers();
+            pullShablon();
             pushKassalar();
             pushUsers();
+            pushShablon();
         } catch (Exception e) {
             log.warn("Google Sheets tez sinxron xatosi: {}", e.getMessage());
         }
@@ -139,7 +148,7 @@ public class SheetsSyncService {
     private void ensureTabs() throws Exception {
         if (tabsReady) return;
         gs.ensureTabs(List.of("Operatsiyalar", "Balanslar", "Kunlar",
-                "Kassalar", "Foydalanuvchilar", "Sozlamalar"));
+                "Kassalar", "Foydalanuvchilar", "Shablon", "Sozlamalar"));
         tabsReady = true;
         log.info("Google Sheets ulandi");
     }
@@ -566,11 +575,93 @@ public class SheetsSyncService {
         saveSnap("sheets.snap.users", userSnap);
     }
 
+    /* ==================== 🔔 SHABLON (bildirishnomalar) ==================== */
+
+    /** Tahrirlanadigan ustunlar hash'i — snapshot uchun (shablonda yangi qatorlar bo'lgani uchun xom saqlanmaydi). */
+    private static String notifyHash(String nomi, String kimga, String jadval, String kunlar,
+                                     String avto, String faol, String shablon) {
+        String all = nomi + "\u0001" + kimga + "\u0001" + jadval + "\u0001" + kunlar + "\u0001"
+                + avto + "\u0001" + faol + "\u0001" + shablon;
+        return Integer.toHexString(all.hashCode()) + ":" + all.length();
+    }
+
+    /** Shablon varag'i: [ID, Nomi, Kimga, Jadval, HaftaKunlari, AvtoOchirish, Faol, Shablon, OxirgiYuborilgan, Xato]. */
+    private void pullShablon() {
+        try {
+            List<List<String>> rows = gs.get("Shablon!A2:J200");
+            for (List<String> r : rows) {
+                if (r.stream().allMatch(c -> c == null || c.isBlank())) continue;
+                String id = cell(r, 0), nomi = cell(r, 1), kimga = cell(r, 2), jadval = cell(r, 3),
+                        kunlar = cell(r, 4), avto = cell(r, 5), faolS = cell(r, 6);
+                String shablon = r.size() > 7 && r.get(7) != null ? r.get(7).trim() : "";
+                if (id.isBlank()) {
+                    if (nomi.isBlank()) continue;
+                    if (notifyRepo.findAll().stream().anyMatch(n -> n.getName().equalsIgnoreCase(nomi))) continue;
+                    Notify n = Notify.builder().name(nomi).template(shablon)
+                            .recipients(uz.kassa.service.notify.NotifyService.parseRecipientsText(kimga))
+                            .schedule(uz.kassa.service.notify.NotifyService.parseScheduleText(jadval))
+                            .weekdays(uz.kassa.service.notify.NotifyService.parseWeekdaysText(kunlar))
+                            .autoDeleteMin(parseIntSafe(avto, 0))
+                            .active(bool(faolS, true)).build();
+                    notifyRepo.save(n);
+                    log.info("Sheets: yangi bildirishnoma yaratildi — {}", nomi);
+                    continue;
+                }
+                long nid;
+                try { nid = Long.parseLong(id); } catch (NumberFormatException e) { continue; }
+                String snap = notifySnap.get(nid);
+                if (snap == null) continue;   // bot yozmagan satr — DB'ga tegilmaydi
+                String h = notifyHash(nomi, kimga, jadval, kunlar, avto, faolS.toUpperCase(), shablon);
+                if (h.equals(snap)) continue;   // operator tahrirlamagan
+                notifyRepo.findById(nid).ifPresent(n -> {
+                    if (!nomi.isBlank()) n.setName(nomi);
+                    n.setRecipients(uz.kassa.service.notify.NotifyService.parseRecipientsText(kimga));
+                    n.setSchedule(uz.kassa.service.notify.NotifyService.parseScheduleText(jadval));
+                    n.setWeekdays(uz.kassa.service.notify.NotifyService.parseWeekdaysText(kunlar));
+                    n.setAutoDeleteMin(parseIntSafe(avto, n.getAutoDeleteMin()));
+                    n.setActive(bool(faolS, n.isActive()));
+                    n.setTemplate(shablon);
+                    notifyRepo.save(n);
+                    log.info("Sheets: bildirishnoma #{} yangilandi (operator tahriri)", nid);
+                });
+            }
+        } catch (Exception e) {
+            log.warn("Sheets Shablon o'qish: {}", e.getMessage());
+        }
+    }
+
+    private static int parseIntSafe(String s, int def) {
+        try { return Math.max(0, Math.min(1440, Integer.parseInt(s.replaceAll("\\D", "")))); }
+        catch (NumberFormatException e) { return def; }
+    }
+
+    private void pushShablon() throws Exception {
+        List<List<Object>> rows = new ArrayList<>();
+        rows.add(List.of("ID", "Nomi", "Kimga", "Jadval", "Hafta kunlari", "Avto-o'chirish (min)", "Faol",
+                "Shablon matni", "Oxirgi yuborilgan", "Xato"));
+        java.util.Map<Long, String> snap = new java.util.HashMap<>();
+        for (Notify n : notifyRepo.findAllByOrderByIdAsc()) {
+            String faol = n.isActive() ? "TRUE" : "FALSE";
+            String avto = String.valueOf(n.getAutoDeleteMin());
+            rows.add(List.of(n.getId(), n.getName(), n.getRecipients(), n.getSchedule(), n.getWeekdays(),
+                    avto, faol, n.getTemplate(),
+                    n.getLastSent() == null ? "" : n.getLastSent().replace('T', ' '),
+                    n.getLastError() == null ? "" : n.getLastError()));
+            snap.put(n.getId(), notifyHash(n.getName(), n.getRecipients(), n.getSchedule(), n.getWeekdays(),
+                    avto, faol, n.getTemplate()));
+        }
+        gs.overwrite("Shablon", rows);
+        notifySnap.clear();
+        notifySnap.putAll(snap);
+        saveSnap("sheets.snap.notify", notifySnap);
+    }
+
     private void pushSozlamalar() throws Exception {
         gs.overwrite("Sozlamalar", List.of(
                 List.of("Ko'rsatma", "Qiymat"),
                 List.of("Oxirgi sinxron", LocalDateTime.now().withNano(0).toString()),
-                List.of("Tahrir qilinadigan varaqlar", "Kassalar, Foydalanuvchilar"),
+                List.of("Tahrir qilinadigan varaqlar", "Kassalar, Foydalanuvchilar, Shablon"),
+                List.of("Shablon", "Bildirishnomalar: Nomi / Kimga (group:-100123, rol:KASSIR, user:5, kassa:2, karta_masul, click_chats, mehmonlar) / Jadval (every:2;from:9;to:21;off:0 YOKI 09:00,13:00) / Hafta kunlari (1-7, bo'sh=har kuni) / Avto-o'chirish (min) / Faol / Shablon matni; yangi satr (ID bo'sh) = yangi bildirishnoma. O'rinbosarlar ro'yxati: bot -> Настройка -> Билдиришномалар -> 📖"),
                 List.of("Kassalar", "Nomi/Otdel (ID yoki nomi)/Faol; yangi satr (ID bo'sh) = yangi kassa"),
                 List.of("Foydalanuvchilar", "Ism + Rol (kassir/buxgalter/admin) + TelegramID YOKI Telefon + Kassa (ID yoki nomi); yangi satr (ID bo'sh) = yangi foydalanuvchi"),
                 List.of("Holat ustuni", "Satr qabul qilinmasa sabab shu ustunda chiqadi — satr O'CHMAYDI, to'ldirsangiz keyingi siklda qabul qilinadi"),

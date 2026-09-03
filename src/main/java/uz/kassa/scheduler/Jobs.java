@@ -41,6 +41,7 @@ public class Jobs {
     private final uz.kassa.repo.AppUserRepo userRepo;
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
     private final uz.kassa.service.DailyReportService dailyReport;
+    private final uz.kassa.service.notify.NotifyService notifySvc;
 
     /**
      * Click qoldiqlari soatlik hisoboti yuboriladigan guruh/kanallar — vergul bilan
@@ -518,6 +519,20 @@ public class Jobs {
     @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT30S")
     public void closeDaysCatchup() {
         closeDays();
+    }
+
+    /** 🔔 Bildirishnomalar (shablonli, jadvalli) — har daqiqa tekshiriladi. */
+    @Scheduled(cron = "0 * * * * *", zone = "Asia/Tashkent")
+    public void notifyTick() {
+        try { notifySvc.tick(); }
+        catch (Exception e) { log.warn("Bildirishnoma tick xatosi: {}", e.getMessage()); }
+    }
+
+    /** Avto-o'chirish navbati (tasdiq xabarlari, bildirishnomalar) — har 30 soniyada. */
+    @Scheduled(fixedDelayString = "PT30S", initialDelayString = "PT20S")
+    public void pendingDeleteTick() {
+        try { notifySvc.deleteTick(); }
+        catch (Exception e) { log.debug("Avto-o'chirish xatosi: {}", e.getMessage()); }
     }
 
     /** Har kuni app.reminder-hour (standart 21:00) — kassirlarga eslatma (TZ 7.2). */

@@ -13,4 +13,6 @@ public interface DayRepo extends JpaRepository<DayRecord, Long> {
     List<DayRecord> findByKassaIdAndStatusOrderByDateAsc(Long kassaId, DayStatus status);
     List<DayRecord> findByKassaIdAndStatusInOrderByDateAsc(Long kassaId, Collection<DayStatus> statuses);
     List<DayRecord> findByStatusAndDateBefore(DayStatus status, LocalDate before);
+    /** 🔔 Bildirishnoma shablonlari: davr bo'yicha kun yozuvlari (MoySklad o'qilmasa zaxira). */
+    List<DayRecord> findByKassaIdAndDateBetween(Long kassaId, LocalDate from, LocalDate to);
 }

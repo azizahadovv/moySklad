@@ -56,6 +56,7 @@ public class Router {
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
     private final uz.kassa.repo.ClickAccountRepo clickRepo;
     private final uz.kassa.service.DailyReportService dailyReport;
+    private final uz.kassa.service.notify.NotifyService notifySvc;
 
     public void route(Update u) {
         if (u.hasChannelPost()) { onChannelPost(u.getChannelPost()); return; }
@@ -628,8 +629,12 @@ public class Router {
         // (yuborgan odam yoki SuperAdmin bosadi, to'g'ri kartaga ko'chiradi)
         var fixKb = Keyboards.inline(java.util.List.of(Keyboards.irow(
                 Keyboards.btn("✏️ Tuzatish", "kf:" + card.getId() + ":" + sum + ":" + fromTgId))));
-        if (editMsgId > 0) sender.edit(chatId, editMsgId, text, fixKb);
-        else sender.send(chatId, text, fixKb);
+        Integer mid;
+        if (editMsgId > 0) { sender.edit(chatId, editMsgId, text, fixKb); mid = editMsgId; }
+        else mid = sender.sendId(chatId, text, fixKb);
+        // 🔔 Tasdiq xabari N daqiqadan keyin o'chiriladi (sozlama: Билдиришномалар).
+        // Tuzatishdan keyin qayta saqlanganda taymer 0 dan boshlanadi.
+        notifySvc.scheduleDelete(chatId, mid, notifySvc.confirmDeleteMin());
     }
 
     /** Tuzatish klaviaturasi: eski (adashilgan) kartadan BOSHQA barcha kartalar. */
@@ -726,11 +731,16 @@ public class Router {
                     superadmin && presser != senderTg ? " [SuperAdmin]" : "", data);
             switch (p[0]) {
                 case "kx" -> sender.edit(chatId, msgId, "❌ Bekor qilindi");
-                case "kq" -> sender.edit(chatId, msgId,
-                        "✅ O'zgarishsiz qoldirildi — avvalgi saqlash kuchda.");
+                case "kq" -> {
+                    sender.edit(chatId, msgId,
+                            "✅ O'zgarishsiz qoldirildi — avvalgi saqlash kuchda.");
+                    // Tuzatish yakunlandi — o'chirish taymeri 0 dan qayta
+                    notifySvc.scheduleDelete(chatId, msgId, notifySvc.confirmDeleteMin());
+                }
                 case "kf" -> {   // ✏️ Tuzatish: to'g'ri kartani tanlash oynasi
                     long cardId = Long.parseLong(p[1]);
                     long sum = Long.parseLong(p[2]);
+                    notifySvc.cancelDelete(chatId, msgId);   // odam tanlayotganda o'chib ketmasin
                     sender.edit(chatId, msgId, "✏️ <b>Tuzatish</b> — summa: <code>" + fmtT(sum)
                             + "</code> so'm\nTO'G'RI kartani tanlang:",
                             movePickKb(cardId, sum, senderTg));
