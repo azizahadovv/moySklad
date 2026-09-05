@@ -334,6 +334,65 @@ public class NotifyService {
     }
 
     /* ==================================================================
+     * 🔘 MENYU TUGMALARI — shablon asosiy menyuda tugma sifatida (rollar bo'yicha).
+     * Mavjud bo'limlarga tegilmaydi: tugmalar menyu OXIRIGA qo'shiladi.
+     * ================================================================== */
+
+    /** Shu rol uchun asosiy menyuga qo'shiladigan tugma matnlari (faol shablonlar, ID tartibida). */
+    public List<String> buttonLabelsFor(Role role) {
+        List<String> out = new ArrayList<>();
+        for (Notify n : repo.findByActiveTrueOrderByIdAsc())
+            if (n.isButtonFor(role) && !out.contains(n.getButtonLabel().trim())) out.add(n.getButtonLabel().trim());
+        return out;
+    }
+
+    /** Bosilgan matn shu rolning shablon tugmasimi. */
+    public Optional<Notify> buttonByLabel(Role role, String text) {
+        if (text == null || text.isBlank()) return Optional.empty();
+        String t = text.trim();
+        for (Notify n : repo.findByActiveTrueOrderByIdAsc())
+            if (n.isButtonFor(role) && n.getButtonLabel().trim().equals(t)) return Optional.of(n);
+        return Optional.empty();
+    }
+
+    /** Tugma bosilganda: foydalanuvchi kontekstida (o'z chati, o'z otdeli — {kassa:mening…}) render. */
+    public TemplateService.Result renderForUser(Notify n, AppUser u) {
+        return templates.render(n.getTemplate(), new TemplateService.Ctx(u.getTelegramId(), u.getKassaId()));
+    }
+
+    /** Tugma matni muammosi: null — yaroqli; aks holda sabab (bo'sh, uzun, buyruq, mavjud tugma). */
+    public static String buttonLabelProblem(String label) {
+        if (label == null || label.isBlank()) return "bo'sh";
+        String t = label.trim();
+        if (t.length() > 40) return "40 belgidan uzun";
+        if (t.startsWith("/")) return "buyruq (/) ko'rinishida bo'lmasin";
+        if (t.equals("-")) return "«-» band";
+        if (uz.kassa.bot.Keyboards.isMenuLabel(t) || uz.kassa.bot.LabelService.RENAMABLE.contains(t)
+                || t.equals("⬅️ Orqaga")) return "mavjud menyu tugmasi bilan bir xil";
+        return null;
+    }
+
+    /** Sheets «Tugma rollar» ustuni: «kassir, bux» → «KASSIR,BUXGALTER». */
+    public static String parseButtonRolesText(String raw) {
+        if (raw == null) return "";
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        for (String p : raw.split("[,;\s]+")) {
+            String v = p.trim().toUpperCase();
+            if (v.isEmpty()) continue;
+            if (v.startsWith("KASSIR") || v.startsWith("КАССИР")) out.add("KASSIR");
+            else if (v.startsWith("BUX") || v.startsWith("БУХ")) out.add("BUXGALTER");
+            else if (v.contains("ADMIN") || v.contains("АДМИН") || v.startsWith("SUPER")) out.add("SUPERADMIN");
+        }
+        return String.join(",", out);
+    }
+
+    public static String rolesText(Notify n) {
+        List<String> l = new ArrayList<>();
+        for (Role r : n.buttonRoleSet()) l.add(roleLabel(r.name()));
+        return l.isEmpty() ? "hech kimga" : String.join(", ", l);
+    }
+
+    /* ==================================================================
      * MATN TAVSIFLARI (admin panel va Sheets uchun)
      * ================================================================== */
 

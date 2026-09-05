@@ -1,0 +1,195 @@
+/* ============================================================
+   Касса Назорати — Админ панел (Telegram Mini App)
+   Дизайн тизими «Ledger»: ям-яшил чуқур бренд полосаси, қоғоз-ранг фон,
+   Manrope (матн) + JetBrains Mono (рақамлар). Ҳолат — квадрат маркерлар:
+   ■ яшил мос · ■ сариқ фарқ · ■ қизил муаммо. Соялар йўқ, 1px чизиқлар.
+   ============================================================ */
+:root {
+  --bg: #EEF1EE;
+  --surface: #FFFFFF;
+  --surface-2: #E5EAE6;
+  --text: #16211C;
+  --muted: #64746C;
+  --line: #D3DBD5;
+  --brand: #0B3D36;
+  --brand-text: #DCEFE9;
+  --accent: #0B6B5D;
+  --accent-soft: #D7EBE6;
+  --accent-text: #FFFFFF;
+  --link: #0B6B5D;
+  --good: #1E7F4F; --good-soft: #DCF1E4;
+  --warn: #B4780E; --warn-soft: #F7EBD0;
+  --bad: #B8372E;  --bad-soft: #F6DAD6;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --sans: "Manrope", -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1513; --surface: #17201C; --surface-2: #1F2A25; --text: #E4EBE6; --muted: #8C9A93; --line: #2A3630;
+    --brand: #0A2E29; --brand-text: #BFE3D8; --accent: #3FBFA6; --accent-soft: #163B35; --accent-text: #0B1512; --link: #5FD0BA;
+    --good: #4CC47E; --good-soft: #143826; --warn: #E3A23B; --warn-soft: #3B2D12; --bad: #EF6F63; --bad-soft: #3F1B18;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1513; --surface: #17201C; --surface-2: #1F2A25; --text: #E4EBE6; --muted: #8C9A93; --line: #2A3630;
+  --brand: #0A2E29; --brand-text: #BFE3D8; --accent: #3FBFA6; --accent-soft: #163B35; --accent-text: #0B1512; --link: #5FD0BA;
+  --good: #4CC47E; --good-soft: #143826; --warn: #E3A23B; --warn-soft: #3B2D12; --bad: #EF6F63; --bad-soft: #3F1B18;
+}
+:root[data-theme="light"] {
+  --bg: #EEF1EE; --surface: #FFFFFF; --surface-2: #E5EAE6; --text: #16211C; --muted: #64746C; --line: #D3DBD5;
+  --brand: #0B3D36; --brand-text: #DCEFE9; --accent: #0B6B5D; --accent-soft: #D7EBE6; --accent-text: #FFFFFF; --link: #0B6B5D;
+  --good: #1E7F4F; --good-soft: #DCF1E4; --warn: #B4780E; --warn-soft: #F7EBD0; --bad: #B8372E; --bad-soft: #F6DAD6;
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body { background: var(--bg); color: var(--text); font: 500 14.5px/1.45 var(--sans); padding-bottom: 32px; min-height: 100vh; }
+a { color: var(--link); text-decoration: none; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+h1, h2, h3 { font-family: var(--sans); font-weight: 800; letter-spacing: -.015em; line-height: 1.15; }
+
+/* ---------- бренд полосаси ---------- */
+.brand { background: var(--brand); color: var(--brand-text); display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; gap: 10px; position: sticky; top: 0; z-index: 6; }
+.brand-l, .brand-r { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo { display: flex; align-items: center; gap: 8px; }
+.logo .mark { font-family: var(--mono); font-weight: 600; font-size: 12px; letter-spacing: .12em; background: rgba(255,255,255,.14); padding: 3px 6px; border-radius: 4px; }
+.logo .name { font-weight: 700; font-size: 13px; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; }
+.brand .who { font-size: 11.5px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42vw; }
+.back { width: 32px; height: 32px; border-radius: 4px; background: rgba(255,255,255,.12); font-size: 22px; line-height: 1; display: flex; align-items: center; justify-content: center; color: inherit; flex: none; }
+.theme { width: 32px; height: 32px; border-radius: 4px; background: rgba(255,255,255,.12); font-size: 15px; display: flex; align-items: center; justify-content: center; }
+
+/* ---------- бўлим навигацияси (юқори) ---------- */
+.nav { position: sticky; top: 52px; z-index: 5; background: var(--bg); display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--line); }
+.nav button { position: relative; padding: 10px 4px 8px; font-size: 12.5px; font-weight: 700; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.nav button i { font-style: normal; font-family: var(--mono); font-size: 10px; letter-spacing: .1em; opacity: .7; }
+.nav button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.nav .dot { position: absolute; top: 8px; right: 14%; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
+
+/* ---------- саҳифа сарлавҳаси ---------- */
+.head { padding: 14px 16px 6px; }
+.crumbs { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crumbs b { color: var(--accent); font-weight: 600; }
+.head h1 { font-size: 21px; }
+.head .sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+main { padding: 6px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------- бўлим сарлавҳаси ва блоклар ---------- */
+.label { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 8px 0 -6px; }
+.label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.card h2 { font-size: 16px; } .card h3 { font-size: 14px; font-weight: 700; }
+.hint { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.empty { color: var(--muted); font-size: 13.5px; padding: 6px 2px; }
+.err { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); border-radius: var(--radius); padding: 12px 14px; font-weight: 600; }
+
+/* ---------- KPI ---------- */
+.kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--radius); padding: 9px 11px 10px; display: flex; flex-direction: column; gap: 3px; }
+.kpi .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+.kpi .v { font-family: var(--mono); font-weight: 600; font-size: 19px; letter-spacing: -.02em; }
+.kpi .v.bad { color: var(--bad); } .kpi .v.good { color: var(--good); } .kpi .v.warn { color: var(--warn); }
+.kpi .s { font-size: 11.5px; color: var(--muted); }
+.kpi.link { cursor: pointer; } .kpi.link:active { background: var(--surface-2); }
+
+/* ---------- қаторлар (ҳолат маркер билан) ---------- */
+.rows { display: flex; flex-direction: column; gap: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); position: relative; }
+.row:last-child { border-bottom: 0; }
+.row::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--line); flex: none; }
+.row.ok::before { background: var(--good); } .row.warn::before { background: var(--warn); } .row.bad::before { background: var(--bad); }
+.row.tap:active { background: var(--surface-2); }
+.row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.row .t b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .t span { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .n { font-family: var(--mono); font-weight: 600; white-space: nowrap; text-align: right; font-size: 14px; }
+.row .n small { display: block; font-family: var(--sans); font-size: 11px; font-weight: 500; color: var(--muted); }
+.row .chev { color: var(--muted); font-size: 18px; line-height: 1; }
+
+.pill { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; white-space: nowrap; letter-spacing: .02em; }
+.pill.good { background: var(--good-soft); color: var(--good); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.muted { background: var(--surface-2); color: var(--muted); }
+
+/* ---------- плиткалар ---------- */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 12px; text-align: left; display: flex; flex-direction: column; gap: 3px; min-height: 82px; }
+.tile .i { font-size: 20px; line-height: 1; margin-bottom: 3px; }
+.tile b { font-size: 13.5px; font-weight: 700; line-height: 1.2; }
+.tile span { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.tile.warn { border-color: var(--warn); } .tile.bad { border-color: var(--bad); }
+.tile:active { background: var(--surface-2); }
+
+/* ---------- сегмент ---------- */
+.seg { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px; gap: 3px; overflow-x: auto; }
+.seg button { flex: 1; padding: 6px 6px; border-radius: 4px; color: var(--muted); font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.seg button.on { background: var(--accent); color: var(--accent-text); }
+.seg input[type="date"] { flex: 3; background: none; border: 0; color: var(--text); font: inherit; font-weight: 700; text-align: center; }
+
+/* ---------- жадвал ---------- */
+.tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; position: sticky; top: 0; background: var(--surface-2); }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)); }
+tr:last-child td { border-bottom: 0; } tr.total td { font-weight: 700; background: var(--surface-2) !important; }
+
+/* ---------- калит/қиймат ---------- */
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; font-size: 13.5px; }
+.kv dt { color: var(--muted); } .kv dd { text-align: right; font-family: var(--mono); font-weight: 600; }
+
+/* ---------- тугмалар ---------- */
+.actions { display: flex; flex-direction: column; gap: 8px; }
+.btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 11px 12px; border-radius: var(--radius); font-weight: 700; font-size: 14px; border: 1px solid transparent; }
+.btn.main { background: var(--accent); color: var(--accent-text); }
+.btn.ghost { background: var(--surface); color: var(--text); border-color: var(--line); }
+.btn.danger { background: var(--surface); color: var(--bad); border-color: var(--bad); }
+.btn:disabled { opacity: .45; } .btn.sm { width: auto; padding: 6px 10px; font-size: 12.5px; }
+
+/* ---------- форма ---------- */
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.field input, .field textarea, .field select, select { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 11px; width: 100%; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); outline: none; }
+
+/* ---------- bottom sheet ---------- */
+.sheet-bg { position: fixed; inset: 0; background: rgba(10,20,16,.55); z-index: 20; display: flex; align-items: flex-end; }
+.sheet { background: var(--bg); width: 100%; border-radius: 12px 12px 0 0; border-top: 3px solid var(--accent); padding: 12px 16px calc(16px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 12px; max-height: 88vh; overflow: auto; }
+.sheet h2 { font-size: 17px; } .sheet .grab { display: none; }
+
+/* ---------- юкланиш / toast ---------- */
+.skel { height: 56px; border-radius: var(--radius); border: 1px solid var(--line); background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%); background-size: 200% 100%; animation: sh 1.1s infinite; }
+@keyframes sh { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--brand); color: var(--brand-text); padding: 9px 16px; border-radius: 4px; font-size: 13px; font-weight: 600; z-index: 30; max-width: 92vw; }
+
+/* ---------- 🧩 сxема муҳаррири ---------- */
+.schema { display: flex; flex-direction: column; gap: 12px; }
+.menu-block { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.menu-block > .mh { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.menu-block > .mh b { font-size: 13px; } .menu-block > .mh small { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+.menu-block .items { min-height: 34px; padding: 4px 0; }
+.menu-block .items.over { background: var(--accent-soft); }
+.mi { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px dashed var(--line); touch-action: none; }
+.mi:last-child { border-bottom: 0; }
+.mi .h { font-family: var(--mono); color: var(--muted); cursor: grab; padding: 4px 6px; border-radius: 3px; background: var(--surface-2); font-size: 12px; user-select: none; }
+.mi .t { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mi .t small { display: block; font-size: 10.5px; color: var(--muted); font-weight: 500; }
+.mi .t.hidden { color: var(--muted); text-decoration: line-through; }
+.mi .ib { width: 30px; height: 28px; border-radius: 3px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; display: flex; align-items: center; justify-content: center; flex: none; }
+.mi .ib:disabled { opacity: .3; }
+.mi.dragging { opacity: .35; }
+.mi.drop-before { box-shadow: inset 0 3px 0 var(--accent); } .mi.drop-after { box-shadow: inset 0 -3px 0 var(--accent); }
+.ghost { position: fixed; z-index: 40; pointer-events: none; background: var(--surface); border: 1px solid var(--accent); border-radius: 4px; padding: 6px 10px; font-weight: 700; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+.savebar { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0 4px; display: flex; gap: 8px; border-top: 1px solid var(--line); }
+
+/* сxема: рол чиплари */
+.mi-roles { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 8px 40px; border-bottom: 1px dashed var(--line); }
+.mi-roles:last-child { border-bottom: 0; }
+.rc { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 3px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
+.rc.on { color: var(--good); border-color: var(--good); } .rc.off { color: var(--bad); border-color: var(--bad); }
+.rc.inh { border-style: dashed; } .rc.sa { color: var(--muted); border-style: dotted; } .rc.ex { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.rc:disabled { opacity: .45; }

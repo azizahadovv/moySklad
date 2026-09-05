@@ -15,9 +15,7 @@ import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.OperationRepo;
 import uz.kassa.repo.SubmissionRepo;
 import uz.kassa.service.*;
-
 import java.util.Optional;
-
 import static uz.kassa.bot.TextUtil.*;
 
 /**
@@ -33,12 +31,12 @@ public class Router {
 
     private final uz.kassa.config.AppProps props;
     private final AppUserRepo userRepo;
-    private final uz.kassa.repo.GuestRepo guestRepo;
     private final uz.kassa.repo.KassaRepo kassaRepo;
     private final OperationRepo opRepo;
     private final SubmissionRepo subRepo;
     private final SessionStore sessions;
     private final Sender sender;
+    private final uz.kassa.service.notify.NotifyService notifySvc;
     private final NameService names;
     private final LabelService labelSvc;
     private final PermService permSvc;
@@ -53,16 +51,19 @@ public class Router {
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
     private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
-    private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
-    private final uz.kassa.repo.ClickAccountRepo clickRepo;
+    private final uz.kassa.service.moysklad.MoySkladAuditService auditSvc;
     private final uz.kassa.service.DailyReportService dailyReport;
-    private final uz.kassa.service.notify.NotifyService notifySvc;
+    private final MenuSupport menus;
+    private final MembershipTracker members;
+    private final CardCaptureHandler cardCapture;
+    private final CardCommandHandler cardCmd;
+
 
     public void route(Update u) {
-        if (u.hasChannelPost()) { onChannelPost(u.getChannelPost()); return; }
-        if (u.hasMessage()) trackGroupMembers(u.getMessage());
+        if (u.hasChannelPost()) { members.onChannelPost(u.getChannelPost()); return; }
+        if (u.hasMessage()) members.trackGroupMembers(u.getMessage());
         if (u.hasCallbackQuery()) onCallback(u.getCallbackQuery());
-        else if (u.hasMessage() && u.getMessage().hasContact()) onContact(u.getMessage());
+        else if (u.hasMessage() && u.getMessage().hasContact()) members.onContact(u.getMessage());
         else if (u.hasMessage() && u.getMessage().hasText()) onMessage(u.getMessage());
         else if (u.hasMessage() && (u.getMessage().hasPhoto() || u.getMessage().hasDocument())
                 && (u.getMessage().getChat().isGroupChat() || u.getMessage().getChat().isSuperGroupChat())) {
@@ -75,872 +76,15 @@ public class Router {
                     pm.getMessageId(), ageSec, pm.hasPhoto(), pm.hasDocument());
             if (pm.getCaption() != null && !pm.getCaption().isBlank())
                 // Skrinshot + izoh — izoh matnidan karta qoldig'i ushlanadi
-                tryGroupCardCapture(pm, pm.getCaption());
+                cardCapture.tryGroupCardCapture(pm, pm.getCaption());
             else
                 // Izohsiz skrinshot (photo yoki fayl sifatida yuborilgan rasm) —
                 // rasmning O'ZI o'qiladi (OCR, Tesseract). HAR yuborilgan rasm alohida
                 // qayta ishlanadi — 50 marta yuborilsa 50 marta o'qiladi.
-                ocrCardCapture(pm);
+                cardCapture.ocrCardCapture(pm);
         }
     }
 
-    /**
-     * KANAL posti: kanalda yozgan odam noma'lum (from yo'q), shuning uchun faqat Click
-     * guruh/kanallar ro'yxatidagi kanalda va faqat /kunlik [sana] buyrug'i ishlaydi —
-     * jadval (rasm + Excel) shu kanalga yuboriladi.
-     */
-    private void onChannelPost(Message m) {
-        try {
-            if (m.getText() == null || !m.getText().trim().startsWith("/kunlik")) return;
-            long chatId = m.getChatId();
-            if (!jobs.clickChatIds().contains(chatId)) return;
-            String[] kp = m.getText().trim().split("\\s+");
-            java.time.LocalDate d = java.time.LocalDate.now(props.zoneId());
-            if (kp.length >= 2) {
-                try { d = java.time.LocalDate.parse(kp[1], java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")); }
-                catch (Exception e) { sender.send(chatId, "Sana formati: <code>/kunlik 02.09.2026</code>"); return; }
-            }
-            final java.time.LocalDate dd = d;
-            new Thread(() -> {
-                try { dailyReport.sendTo(chatId, dd); }
-                catch (Exception ex) { log.warn("Kanal /kunlik ({}): {}", chatId, ex.getMessage()); }
-            }, "daily-report-channel").start();
-        } catch (Exception e) {
-            log.debug("Kanal posti: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Guruh a'zolari registri ({hamma} shabloni uchun): Bot API to'liq a'zolar
-     * ro'yxatini bermaydi, shuning uchun guruhda YOZGAN yoki QO'SHILGAN har bir
-     * odam eslab qolinadi, chiqib ketgani o'chiriladi. Hech qanday javob yozilmaydi.
-     */
-    private void trackGroupMembers(Message m) {
-        try {
-            if (!m.getChat().isGroupChat() && !m.getChat().isSuperGroupChat()) return;
-            long chatId = m.getChatId();
-            if (m.getFrom() != null) rememberMember(chatId, m.getFrom());
-            if (m.getNewChatMembers() != null)
-                for (var nu : m.getNewChatMembers()) rememberMember(chatId, nu);
-            if (m.getLeftChatMember() != null)
-                groupMemberRepo.findByChatIdAndUserId(chatId, m.getLeftChatMember().getId())
-                        .ifPresent(groupMemberRepo::delete);
-        } catch (Exception e) {
-            log.debug("Guruh a'zo kuzatish: {}", e.getMessage());
-        }
-    }
-
-    private void rememberMember(long chatId, org.telegram.telegrambots.meta.api.objects.User u) {
-        if (Boolean.TRUE.equals(u.getIsBot())) return;
-        var existing = groupMemberRepo.findByChatIdAndUserId(chatId, u.getId()).orElse(null);
-        String un = u.getUserName(), fn = u.getFirstName();
-        if (existing == null) {
-            groupMemberRepo.save(GroupMember.builder()
-                    .chatId(chatId).userId(u.getId()).username(un).firstName(fn).build());
-        } else if (!java.util.Objects.equals(existing.getUsername(), un)
-                || !java.util.Objects.equals(existing.getFirstName(), fn)) {
-            existing.setUsername(un);
-            existing.setFirstName(fn);
-            existing.setLastSeen(java.time.Instant.now());
-            groupMemberRepo.save(existing);
-        }
-    }
-
-    /** «📱 Telefon raqamni yuborish» tugmasi orqali kelgan kontakt. */
-    private void onContact(Message m) {
-        long chatId = m.getChatId();
-        long tgId = m.getFrom().getId();
-        Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
-        if (uo.isPresent() && uo.get().isActive()) {
-            sender.send(chatId, "✅ Raqamingiz allaqachon tizimda", menuFor(uo.get()));
-            return;
-        }
-        rememberGuest(m);
-        Guest g = guestRepo.findById(tgId).orElse(null);
-        if (g != null) {
-            g.setPhone(m.getContact().getPhoneNumber());
-            guestRepo.save(g);
-        }
-        // Jadvaldan (Sheets) telefon bilan oldindan yaratilgan foydalanuvchi bo'lsa — darhol ulaymiz.
-        // Moslik faqat TO'LIQ raqam bo'yicha — suffiks (oxirgi 7 raqam) mosligi begona
-        // odamni birovning akkauntiga (roli bilan!) ulab yuborishi mumkin edi.
-        String contactPhone = m.getContact().getPhoneNumber();
-        if (!TextUtil.normPhone(contactPhone).isEmpty()) {
-            for (AppUser cand : userRepo.findAll()) {
-                if (cand.getTelegramId() == null && cand.getPhone() != null
-                        && TextUtil.phoneEq(cand.getPhone(), contactPhone)) {
-                    cand.setTelegramId(tgId);
-                    userRepo.save(cand);
-                    sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(cand.getFullName())
-                            + "</b>!\n" + otdelLabel(cand), menuFor(cand));
-                    notify.toRole(Role.SUPERADMIN, "🔗 <b>" + esc(cand.getFullName())
-                            + "</b> botga ulandi (telefon mos keldi: <code>"
-                            + esc(m.getContact().getPhoneNumber()) + "</code>)", null);
-                    return;
-                }
-            }
-        }
-        sender.send(chatId, "✅ Telefon raqamingiz qabul qilindi: <b>"
-                + esc(m.getContact().getPhoneNumber()) + "</b>\n\n"
-                + "SuperAdmin sizni shu raqam orqali topib tizimga qo'shadi.");
-        String who = m.getFrom().getFirstName() == null ? "" : m.getFrom().getFirstName();
-        if (m.getFrom().getLastName() != null) who += " " + m.getFrom().getLastName();
-        notify.toRole(Role.SUPERADMIN, "📱 <b>Yangi kontakt:</b> " + esc(who.trim())
-                + (m.getFrom().getUserName() == null ? "" : " (@" + esc(m.getFrom().getUserName()) + ")")
-                + "\nTelefon: <code>" + esc(m.getContact().getPhoneNumber()) + "</code>"
-                + "\nTelegramID: <code>" + tgId + "</code>\n\n"
-                + "Jadvalda shu odam qatoriga Telefon yoki TelegramID ni yozsangiz — ulanadi.", null);
-    }
-
-    /** Salomlashishda rol o'rniga foydalanuvchining O'Z otdeli ko'rsatiladi. */
-    private String otdelLabel(AppUser u) {
-        if (u.getKassaId() != null)
-            return "🏪 Отдел " + esc(names.owner(OwnerType.KASSA, u.getKassaId()));
-        return "🏪 Отдел основной";
-    }
-
-    /**
-     * Izohsiz SKRINSHOTdan qoldiqni o'qish — OCR (Tesseract). Rasm yuklab olinadi,
-     * matnga aylantiriladi va odatiy ajratgichdan o'tadi. Tesseract o'rnatilmagan
-     * bo'lsa (lokal run) jim o'tadi — Docker image ichida o'rnatilgan.
-     */
-    private void ocrCardCapture(Message m) {
-        if (!jobs.clickChatIds().contains(m.getChatId())) {
-            log.info("OCR: chat {} Click guruhlari ro'yxatida yo'q — o'tkazildi", m.getChatId());
-            return;
-        }
-        String fileId = null;
-        if (m.hasPhoto()) {
-            var sizes = m.getPhoto();
-            fileId = sizes.get(sizes.size() - 1).getFileId();   // eng katta (aniq) o'lcham
-        } else if (m.hasDocument() && m.getDocument().getMimeType() != null
-                && m.getDocument().getMimeType().startsWith("image/")) {
-            fileId = m.getDocument().getFileId();
-        }
-        if (fileId == null) return;
-        final String fid = fileId;
-        new Thread(() -> {
-            java.io.File img = null;
-            try {
-                long t0 = System.currentTimeMillis();
-                img = sender.downloadTgFile(fid);
-                if (img == null) {
-                    log.info("OCR: rasm yuklab olinmadi (chat {})", m.getChatId());
-                    sender.reply(m.getChatId(), m.getMessageId(),
-                            "🖼 Rasmni yuklab bo'lmadi — qayta yuboring yoki summani yozing "
-                            + "(masalan: <code>Samoyiddin 250000</code>).", null);
-                    return;
-                }
-                long t1 = System.currentTimeMillis();
-                keepOcrSample(img, m.getMessageId());   // diagnostika: oxirgi 30 ta rasm saqlanadi
-                String text = ocrMultiPass(img);
-                long t2 = System.currentTimeMillis();
-                log.info("OCR o'qildi ({} belgi, yuklash {}ms, ocr {}ms): {}", text.length(), t1 - t0, t2 - t1,
-                        text.substring(0, Math.min(150, text.length())).replaceAll("\\s+", " "));
-                if (!text.isBlank()) tryGroupCardCapture(m, "[OCR] " + text);
-                else sender.reply(m.getChatId(), m.getMessageId(),
-                        "🖼 Skrinshotdan matn o'qilmadi. Summani yozing: "
-                        + "<code>KARTA_NOMI SUMMA</code> (masalan <code>Samoyiddin 250000</code>).", null);
-            } catch (java.io.IOException e) {
-                log.info("Tesseract yo'q/ishlamadi: {}", e.getMessage());
-            } catch (Exception e) {
-                log.info("OCR capture xatosi: {}", e.getMessage());
-            } finally {
-                if (img != null) img.delete();
-            }
-        }, "ocr-capture").start();
-    }
-
-    /**
-     * KO'P O'TISHLI OCR: Tesseract katta qalin oq raqamni gradient fonda ba'zan
-     * yo'qotadi («250 000.00» → «ae»). Shuning uchun rasm bir necha ko'rinishda
-     * o'qiladi va summa (≥10 000) topilgan BIRINCHI natija olinadi:
-     *   1) asl rasm, psm 6;
-     *   2) oq matn → qora-oq (yorug' piksel = siyoh), psm 6;
-     *   3) qora matn → qora-oq (qorong'i piksel = siyoh), psm 6;
-     *   4) 50% kichraytirilgan asl rasm, psm 6 (juda katta shrift uchun);
-     *   5) asl rasm, psm 11 (siyrak matn).
-     * Hech birida summa chiqmasa — eng uzun matn qaytariladi.
-     */
-    private String ocrMultiPass(java.io.File img) throws Exception {
-        java.util.List<java.io.File> tmp = new java.util.ArrayList<>();
-        String best = "";
-        try {
-            java.awt.image.BufferedImage src = null;
-            try { src = javax.imageio.ImageIO.read(img); } catch (Exception ignore) { }
-
-            record Pass(java.io.File f, String psm) {}
-            java.util.List<Pass> passes = new java.util.ArrayList<>();
-            passes.add(new Pass(img, "6"));
-            if (src != null) {
-                // Tartib — real skrinshotlarda qaysi o'tish ishlaganiga qarab:
-                // katta qalin raqam (Click ilovasi) 33% kichraytirilganda o'qildi.
-                java.io.File third = scale(src, 3);            tmp.add(third);     passes.add(new Pass(third, "6"));
-                java.io.File half = scale(src, 2);             tmp.add(half);      passes.add(new Pass(half, "6"));
-                java.io.File brightInk = binarize(src, true);  tmp.add(brightInk); passes.add(new Pass(brightInk, "6"));
-                java.io.File darkInk = binarize(src, false);   tmp.add(darkInk);   passes.add(new Pass(darkInk, "6"));
-                try {
-                    java.io.File brightHalf = scale(javax.imageio.ImageIO.read(brightInk), 2);
-                    tmp.add(brightHalf);                                           passes.add(new Pass(brightHalf, "6"));
-                } catch (Exception ignore) { }
-            }
-            passes.add(new Pass(img, "11"));
-
-            StringBuilder diag = new StringBuilder();
-            int n = 0;
-            for (Pass ps : passes) {
-                String text = tesseract(ps.f(), ps.psm());
-                if (text.length() > best.length()) best = text;
-                String cleaned = text
-                        .replaceAll("\\b\\d{1,2}[.,/]\\d{1,2}[.,/]\\d{2,4}\\b", " ")
-                        .replaceAll("\\b\\d{1,2}:\\d{2}\\b", " ");
-                var sums = extractSums(cleaned);
-                diag.append(" #").append(++n).append("(psm").append(ps.psm()).append(")=")
-                    .append(sums.isEmpty() ? "-" : sums.toString());
-                if (!sums.isEmpty()) {
-                    log.info("OCR o'tishlar:{}", diag);
-                    return text;
-                }
-            }
-            log.info("OCR o'tishlar (summa yo'q):{}", diag);
-            return best;
-        } finally {
-            for (java.io.File f : tmp) f.delete();
-        }
-    }
-
-    private String tesseract(java.io.File f, String psm) throws Exception {
-        Process p = new ProcessBuilder("tesseract", f.getAbsolutePath(), "stdout", "--psm", psm, "-l", "eng")
-                .redirectError(ProcessBuilder.Redirect.DISCARD).start();
-        String text = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-        p.waitFor();
-        return text;
-    }
-
-    /** Qora-oq: brightInk=true — yorug' (oq) matn siyoh bo'ladi (qorong'i/rangli fon uchun). */
-    private java.io.File binarize(java.awt.image.BufferedImage src, boolean brightInk) throws Exception {
-        int w = src.getWidth(), h = src.getHeight();
-        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h,
-                java.awt.image.BufferedImage.TYPE_BYTE_GRAY);
-        var r = out.getRaster();
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                int p = src.getRGB(x, y);
-                int l = (((p >> 16) & 255) * 299 + ((p >> 8) & 255) * 587 + (p & 255) * 114) / 1000;
-                boolean ink = brightInk ? l > 190 : l < 90;
-                r.setSample(x, y, 0, ink ? 0 : 255);
-            }
-        java.io.File f = java.io.File.createTempFile("tgocr-bw-", ".png");
-        javax.imageio.ImageIO.write(out, "png", f);
-        return f;
-    }
-
-    /** Diagnostika: yuklab olingan skrinshotning FAQAT OXIRGISI logs/ocr/ da turadi —
-     *  yangisi kelganda avvalgisi o'chiriladi (foydalanuvchi qarori: rasmlar yig'ilmasin,
-     *  faqat ma'lumot olinsin). OCR o'qimagan oxirgi rasmni qo'lda tekshirish uchun. */
-    private void keepOcrSample(java.io.File img, Integer msgId) {
-        try {
-            java.io.File dir = new java.io.File("logs/ocr");
-            if (!dir.isDirectory() && !dir.mkdirs()) return;
-            java.io.File[] old = dir.listFiles();
-            if (old != null) for (java.io.File f : old) f.delete();
-            java.nio.file.Files.copy(img.toPath(), new java.io.File(dir,
-                    System.currentTimeMillis() / 1000 + "-msg" + msgId + ".jpg").toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } catch (Exception e) {
-            log.debug("OCR nusxa saqlanmadi: {}", e.getMessage());
-        }
-    }
-
-    private java.io.File halfScale(java.awt.image.BufferedImage src) throws Exception {
-        return scale(src, 2);
-    }
-
-    private java.io.File scale(java.awt.image.BufferedImage src, int div) throws Exception {
-        int w = Math.max(1, src.getWidth() / div), h = Math.max(1, src.getHeight() / div);
-        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h,
-                java.awt.image.BufferedImage.TYPE_INT_RGB);
-        java.awt.Graphics2D g = out.createGraphics();
-        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
-                java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g.drawImage(src, 0, 0, w, h, null);
-        g.dispose();
-        java.io.File f = java.io.File.createTempFile("tgocr-s" + div + "-", ".png");
-        javax.imageio.ImageIO.write(out, "png", f);
-        return f;
-    }
-
-    /**
-     * Guruhga tashlangan SKRINSHOT IZOHI, ODDIY MATN yoki OCR natijasidan karta
-     * qoldig'ini avtomatik ushlash. Qoidalar (xato pul yozmaslik uchun qat'iy):
-     *  - faqat Click hisobot guruhlarida ishlaydi;
-     *  - sana (01.09.2026), vaqt (10:00) va 17-22 kabi oraliqlar summa emas;
-     *  - 💰/«qoldiq/остаток/balans» belgili QATORDAGI summa — balans deb olinadi
-     *    (➕ to'ldirish/oplata summalari chalg'itmaydi);
-     *  - karta: (a) matnda hisob nomi to'liq kelsa, (b) nomdagi raqam-token
-     *    (masalan «5344») kelsa, (c) yuboruvchi /kartamas bilan biriktirilgan
-     *    YAGONA kartaning mas'uli bo'lsa; aniqlanmasa — JIM;
-     *  - bitta summa — qabul; bir nechta — taxmin qilinmaydi, /karta so'raladi.
-     */
-    private void tryGroupCardCapture(Message m, String rawText) {
-        try {
-            if (rawText == null || rawText.isBlank()) return;
-            boolean fromOcr = rawText.startsWith("[OCR] ");
-            String text = fromOcr ? rawText.substring(6) : rawText;
-            long chatId = m.getChatId();
-            if (!jobs.clickChatIds().contains(chatId)) return;
-            var from = m.getFrom();
-            if (from == null) return;
-            java.util.List<ClickAccount> cards = clickRepo.findByActiveTrueOrderByIdAsc();
-            if (cards.isEmpty()) return;
-
-            // 1) Sana/vaqt/oraliqlar tozalanadi, so'ng summalar ajratiladi
-            String cleaned = text
-                    .replaceAll("\\b\\d{1,2}[.,/]\\d{1,2}[.,/]\\d{2,4}\\b", " ")
-                    .replaceAll("\\b\\d{1,2}:\\d{2}\\b", " ")
-                    .replaceAll("\\b\\d{1,2}-\\d{1,2}\\b", " ");
-
-            // Avval 💰/qoldiq belgili qatorlar — balans o'sha yerda
-            java.util.LinkedHashSet<Long> balSums = new java.util.LinkedHashSet<>();
-            String[] lines = cleaned.split("\\r?\\n");
-            for (int li = 0; li < lines.length; li++) {
-                String line = lines[li];
-                String ll = line.toLowerCase();
-                if (line.contains("💰") || ll.contains("баланс") || ll.contains("balans")
-                        || ll.contains("остат") || ll.contains("qoldi") || ll.contains("qoldig")
-                        || ll.contains("колдиг") || ll.contains("қолдиғ")) {
-                    var here = extractSumsTiyin(line);
-                    // Ilovalarda yorliq («Umumiy balans») raqamdan BIR QATOR YUQORIDA
-                    // turadi — belgili qatorda raqam bo'lmasa keyingi qator olinadi.
-                    if (here.isEmpty())
-                        for (int k = li + 1; k < lines.length && k <= li + 2; k++) {
-                            here = extractSumsTiyin(lines[k]);
-                            if (!here.isEmpty() || !lines[k].isBlank()) break;
-                        }
-                    balSums.addAll(here);
-                }
-            }
-            java.util.LinkedHashSet<Long> allSums = extractSumsTiyin(cleaned);
-            java.util.List<Long> sums = new java.util.ArrayList<>(
-                    balSums.size() == 1 ? balSums : allSums);
-            if (sums.isEmpty()) {
-                log.info("Karta capture: summa topilmadi (chat {}, ocr={})", chatId, fromOcr);
-                if (fromOcr)
-                    sender.reply(chatId, m.getMessageId(),
-                            "🖼 Skrinshotdan summa o'qilmadi. Summani yozib yuboring: "
-                            + "<code>KARTA_NOMI SUMMA</code> (masalan <code>Samoyiddin 250000</code>).", null);
-                return;
-            }
-
-            // E'TIBORLILIK FILTRLARI (foydalanuvchi talabi):
-            // 1) CHEK/tranzaksiya xabari (to'ldirish, o'tkazma, oplata...) — bu QOLDIQ
-            //    emas; faqat ichida balans belgisi (💰/qoldiq/остаток) bo'lsa qabul.
-            String lowAll = text.toLowerCase();
-            boolean balanceMarked = !balSums.isEmpty();
-            // Chek belgisi faqat SUMMA bilan bir qatorda kelsa hisobga olinadi —
-            // bank ilovasining «Kartani to'ldirish» / «Kartadan o'tkazish» kabi
-            // TUGMA yozuvlari (raqamsiz qator) chek emas.
-            boolean receipt = text.contains("➕") || text.contains("➖");
-            if (!receipt)
-                for (String line : cleaned.split("\\r?\\n")) {
-                    String ll = line.toLowerCase();
-                    boolean kw = ll.matches(".*(to['’`‘]?ldirish|пополнен|перевод|оплат|o['’`‘]?tkazma"
-                            + "|humo to|p2p|muvaffaqiyatli|успешн|перечисл|miqdor|сумма|списан|зачислен).*");
-                    if (kw && !extractSums(line).isEmpty()) { receipt = true; break; }
-                }
-            if (receipt && !balanceMarked) {
-                log.info("Karta capture: chek/tranzaksiya deb topildi — IGNOR (chat {})", chatId);
-                if (fromOcr)
-                    sender.reply(chatId, m.getMessageId(),
-                            "🧾 Bu chek/tranzaksiya ko'rinishida — qoldiq sifatida olinmadi. "
-                            + "Karta QOLDIG'I ekranini yuboring yoki yozing: "
-                            + "<code>KARTA_NOMI SUMMA</code>.", null);
-                return;
-            }
-            // 2) Oddiy yozilgan matn (OCR emas) balans belgisisiz UZUN GAP bo'lsa —
-            //    bu guruh suhbati, aralashmaymiz (faqat «toza summa» qabul qilinadi).
-            if (!fromOcr && !balanceMarked) {
-                String leftover = lowAll
-                        .replaceAll("so['’`]?m|сум|uzs", " ")
-                        .replaceAll("[\\d ,.'’`\\u00A0:+-]+", " ").trim();
-                if (leftover.length() > 15) {
-                    log.info("Karta capture: balans belgisisiz erkin matn — IGNOR ({} harf qoldiq)",
-                            leftover.length());
-                    return;
-                }
-            }
-
-            // 2) Kartani aniqlash: to'liq nom -> nom SO'ZLARI (Samoyiddin, Zufar...)
-            //    -> nomdagi raqam-token (5344) -> mas'ul. Shablon talab qilinmaydi —
-            //    skrinshot/matn qanday ko'rinishda bo'lsa ham nomdagi o'ziga xos so'z
-            //    uchrasa taniladi (faqat BITTA kartaga mos kelgandagina — adashmaslik uchun).
-            ClickAccount card = null;
-            String low = text.toLowerCase();
-            for (ClickAccount c : cards)
-                if (low.contains(c.getName().toLowerCase())) { card = c; break; }
-            if (card == null) {
-                java.util.Set<String> generic = java.util.Set.of(
-                        "nsb", "click", "klik", "клик", "karta", "карта", "card", "bank");
-                java.util.List<ClickAccount> byWord = new java.util.ArrayList<>();
-                for (ClickAccount c : cards) {
-                    for (String w : c.getName().toLowerCase().split("[^\\p{L}\\p{N}]+")) {
-                        if (w.length() < 4 || generic.contains(w)) continue;
-                        boolean hit = w.matches("\\d+") ? text.contains(w) : low.contains(w);
-                        if (hit) { byWord.add(c); break; }
-                    }
-                }
-                if (byWord.size() == 1) card = byWord.get(0);
-            }
-            boolean byName = card != null;   // rasm/matnning o'zida karta nomi bor
-            if (card == null) {
-                java.util.List<ClickAccount> mine = new java.util.ArrayList<>();
-                String uname = from.getUserName() == null ? "" : from.getUserName().toLowerCase();
-                for (ClickAccount c : cards) {
-                    String r = c.getCardResponsible() == null ? "" : c.getCardResponsible().toLowerCase();
-                    if (r.isBlank()) continue;
-                    if ((!uname.isEmpty() && r.contains("@" + uname))
-                            || r.contains("id=" + from.getId())) mine.add(c);
-                }
-                if (mine.size() == 1) card = mine.get(0);
-            }
-            if (card == null) {
-                log.info("Karta capture: karta aniqlanmadi (sums={}, from={} @{})",
-                        sums, from.getId(), from.getUserName());
-                // SHABLONSIZ oqim: karta noma'lum — TUGMALAR chiqadi, yuborgan odam
-                // bir marta bosadi, bot o'sha zahoti O'RGANIB oladi (keyingi safar avtomatik).
-                String who = displayName(from);
-                if (sums.size() == 1) {
-                    sender.send(chatId, "💳 " + esc(who) + " summa yubordi: <code>"
-                            + fmtT(sums.get(0)) + "</code> so'm\n"
-                            + "QAYSI kartaning qoldig'i? (yuborgan odam tanlasin — bir marta "
-                            + "tanlagach bot eslab qoladi, keyingi safar avtomatik)",
-                            cardPickKb(sums.get(0), from.getId()));
-                } else {
-                    java.util.List<java.util.List<
-                            org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>>
-                            rows = new java.util.ArrayList<>();
-                    int shown = 0;
-                    for (long v : sums) {
-                        if (shown++ >= 4) break;
-                        rows.add(Keyboards.irow(Keyboards.btn(fmtT(v) + " so'm",
-                                "ku:" + v + ":" + from.getId())));
-                    }
-                    rows.add(Keyboards.irow(Keyboards.btn("❌ Bekor", "kx:" + from.getId())));
-                    sender.send(chatId, "💳 " + esc(who) + " yubordi — bir nechta summa ko'rindi.\n"
-                            + "QAYSI BIRI karta qoldig'i? (yuborgan odam tanlasin)",
-                            Keyboards.inline(rows));
-                }
-                return;
-            }
-
-            if (sums.size() > 1) {
-                // Karta ma'lum, summa bir nechta — tugma bilan tanlanadi (shablonsiz)
-                java.util.List<java.util.List<
-                        org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>>
-                        rows = new java.util.ArrayList<>();
-                int shown = 0;
-                for (long v : sums) {
-                    if (shown++ >= 4) break;
-                    rows.add(Keyboards.irow(Keyboards.btn(fmtT(v) + " so'm",
-                            "ks:" + card.getId() + ":" + v + ":" + from.getId())));
-                }
-                rows.add(Keyboards.irow(Keyboards.btn("❌ Bekor", "kx:" + from.getId())));
-                sender.send(chatId, "💳 <b>" + esc(card.getName()) + "</b> — bir nechta summa "
-                        + "ko'rindi. QAYSI BIRI qoldiq? (yuborgan odam tanlasin)",
-                        Keyboards.inline(rows));
-                return;
-            }
-
-            long sum = sums.get(0);
-            String who = displayName(from);
-
-            if (fromOcr && byName) {
-                // ISHONCHLI o'qish: rasmda BITTA summa (shu yergacha kelgan bo'lsa
-                // sums.size()==1) va kartaning nomi rasmning o'zida bor — DARHOL
-                // saqlanadi (foydalanuvchi qarori: rasm necha marta yuborilsa, qoldiq
-                // shuncha marta yangilanadi, ✅ so'ralmaydi).
-                // Xato bo'lsa ✏️ Tuzatish tugmasi bilan boshqa kartaga ko'chiriladi.
-                saveCardBalance(card, sum, who + " (skrinshot)", from.getId(), chatId, 0, false);
-                return;
-            }
-            if (fromOcr) {
-                // OCR — mashina o'qigan raqam: DARHOL SAQLANMAYDI. Summa matn
-                // ko'rinishida chiqadi, YUBORGAN ODAM ✅ bosgandagina yoziladi.
-                sender.send(chatId, "🖼 <b>Skrinshotdan o'qildi</b> — tasdiqlang:\n"
-                        + "💳 <b>" + esc(card.getName()) + "</b>\n"
-                        + "Summa: <code>" + fmtT(sum) + "</code> so'm\n"
-                        + "Yuborgan: " + esc(who) + "\n\n"
-                        + "To'g'ri bo'lsa YUBORGAN ODAM ✅ ni bossin; noto'g'ri bo'lsa "
-                        + "<code>/karta " + card.getId() + " СУММА</code> deb yozing.",
-                        Keyboards.inline(java.util.List.of(Keyboards.irow(
-                                Keyboards.btn("✅ To'g'ri",
-                                        "kc:y:" + card.getId() + ":" + sum + ":" + from.getId()),
-                                Keyboards.btn("❌ Noto'g'ri",
-                                        "kc:n:" + card.getId() + ":" + sum + ":" + from.getId())))));
-                return;
-            }
-
-            // Qo'lda yozilgan matn — odam ataylab yozdi, darhol saqlanadi
-            saveCardBalance(card, sum, who, from.getId(), chatId, 0, false);
-        } catch (Exception e) {
-            log.debug("Guruh karta capture xatosi: {}", e.getMessage());
-        }
-    }
-
-    /** Tiyindagi summa ko'rinishi (karta qoldig'i oqimi). */
-    private static String fmtT(long tiyin) { return uz.kassa.bot.TextUtil.fmtTiyin(tiyin); }
-
-    /** Telegram profilidan ko'rinadigan ism: "Ism Familiya @username". */
-    private String displayName(org.telegram.telegrambots.meta.api.objects.User from) {
-        String who = ((from.getFirstName() == null ? "" : from.getFirstName())
-                + (from.getLastName() == null ? "" : " " + from.getLastName())).trim();
-        if (from.getUserName() != null && !from.getUserName().isBlank())
-            who = (who.isBlank() ? "" : who + " ") + "@" + from.getUserName();
-        return who.isBlank() ? ("id " + from.getId()) : who;
-    }
-
-    /** Karta qoldig'ini YAKUNIY saqlash + guruhga tasdiq xabari (matn yoki OCR-tasdiq).
-     *  sum — TIYINDA. */
-    private void saveCardBalance(ClickAccount card, long sum, String who, long fromTgId,
-                                 long chatId, int editMsgId, boolean ocrConfirmed) {
-        card.setCardBalance(sum);
-        card.setCardBalanceAt(java.time.Instant.now());
-        card.setCardBalanceBy(ocrConfirmed ? who + " (tasdiqlangan)" : who);
-
-        // AVTO-O'RGANISH: karta hali hech kimga biriktirilmagan bo'lsa, yuborgan
-        // odam avtomatik mas'ul bo'lib olinadi — hech qanday buyruq shart emas.
-        boolean learned = false;
-        if (card.getCardResponsible() == null || card.getCardResponsible().isBlank()) {
-            String nm = who.replaceAll(" ?\\(.*$", "").trim();
-            card.setCardResponsible("{id=" + fromTgId + ";" + (nm.isBlank() ? "mas'ul" : nm) + "}");
-            learned = true;
-        }
-        clickRepo.save(card);
-        Long uid = userRepo.findByTelegramId(fromTgId).map(AppUser::getId).orElse(null);
-        audit.log(uid, "KARTA_QOLDIQ", "click", card.getId(),
-                card.getName() + " = " + sum + " (guruhdan: " + card.getCardBalanceBy() + ")"
-                        + (learned ? " [mas'ul avto-biriktirildi]" : ""));
-        String text = "✅ <b>" + esc(card.getName()) + "</b> карта қолдиғи қабул қилинди: <b>"
-                + fmtT(sum) + "</b> so'm — " + esc(card.getCardBalanceBy())
-                + (learned ? "\n🔗 Bu karta endi sizga biriktirildi — keyingi safar shunchaki "
-                    + "summa yoki skrinshot yuboring, bot o'zi taniydi." : "")
-                + "\nKeyingi hisobotda MoySklad bilan solishtiriladi.";
-        // Adashib noto'g'ri otdel/karta tanlangan bo'lsa — orqaga yo'l: ✏️ Tuzatish
-        // (yuborgan odam yoki SuperAdmin bosadi, to'g'ri kartaga ko'chiradi)
-        var fixKb = Keyboards.inline(java.util.List.of(Keyboards.irow(
-                Keyboards.btn("✏️ Tuzatish", "kf:" + card.getId() + ":" + sum + ":" + fromTgId))));
-        Integer mid;
-        if (editMsgId > 0) { sender.edit(chatId, editMsgId, text, fixKb); mid = editMsgId; }
-        else mid = sender.sendId(chatId, text, fixKb);
-        // 🔔 Tasdiq xabari N daqiqadan keyin o'chiriladi (sozlama: Билдиришномалар).
-        // Tuzatishdan keyin qayta saqlanganda taymer 0 dan boshlanadi.
-        notifySvc.scheduleDelete(chatId, mid, notifySvc.confirmDeleteMin());
-    }
-
-    /** Tuzatish klaviaturasi: eski (adashilgan) kartadan BOSHQA barcha kartalar. */
-    private org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
-            movePickKb(long oldId, long sum, long senderTg) {
-        var cards = clickRepo.findByActiveTrueOrderByIdAsc().stream()
-                .filter(c -> c.getId() != oldId).toList();
-        java.util.List<java.util.List<
-                org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>>
-                rows = new java.util.ArrayList<>();
-        for (int i = 0; i < cards.size(); i += 2) {
-            if (i + 1 < cards.size())
-                rows.add(Keyboards.irow(
-                        Keyboards.btn(cards.get(i).getName(),
-                                "km:" + cards.get(i).getId() + ":" + oldId + ":" + sum + ":" + senderTg),
-                        Keyboards.btn(cards.get(i + 1).getName(),
-                                "km:" + cards.get(i + 1).getId() + ":" + oldId + ":" + sum + ":" + senderTg)));
-            else rows.add(Keyboards.irow(
-                    Keyboards.btn(cards.get(i).getName(),
-                            "km:" + cards.get(i).getId() + ":" + oldId + ":" + sum + ":" + senderTg)));
-        }
-        rows.add(Keyboards.irow(Keyboards.btn("⬅️ O'zgarishsiz qoldirish", "kq:" + senderTg)));
-        return Keyboards.inline(rows);
-    }
-
-    /** Adashib tanlangan kartadan TO'G'RI kartaga ko'chirish: eski kartadagi xato
-     *  yozuv (va o'sha yuboruvchiga adashib bog'langan mas'ullik) tozalanadi. */
-    private void moveCardBalance(long oldId, long newId, long sum, long senderTg,
-                                 org.telegram.telegrambots.meta.api.objects.User presser,
-                                 long chatId, int msgId) {
-        var newCo = clickRepo.findById(newId);
-        if (newCo.isEmpty()) { sender.edit(chatId, msgId, "⚠️ Hisob topilmadi"); return; }
-        clickRepo.findById(oldId).ifPresent(oldC -> {
-            if (oldC.getCardBalance() != null && oldC.getCardBalance() == sum) {
-                oldC.setCardBalance(null);
-                oldC.setCardBalanceAt(null);
-                oldC.setCardBalanceBy(null);
-            }
-            String r = oldC.getCardResponsible();
-            if (r != null && r.contains("id=" + senderTg)) oldC.setCardResponsible(null);
-            clickRepo.save(oldC);
-            Long uid0 = userRepo.findByTelegramId(presser.getId()).map(AppUser::getId).orElse(null);
-            audit.log(uid0, "KARTA_TUZATISH", "click", oldId,
-                    oldC.getName() + " dan olib tashlandi (adashib tanlangan edi, summa=" + sum + ")");
-        });
-        saveCardBalance(newCo.get(), sum, displayName(presser), presser.getId(), chatId, msgId, true);
-    }
-
-    /** Karta tanlash klaviaturasi (2 tadan qator) — «kb:&lt;cardId&gt;:&lt;sum&gt;:&lt;sender&gt;». */
-    private org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
-            cardPickKb(long sum, long senderTg) {
-        var cards = clickRepo.findByActiveTrueOrderByIdAsc();
-        java.util.List<java.util.List<
-                org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>>
-                rows = new java.util.ArrayList<>();
-        for (int i = 0; i < cards.size(); i += 2) {
-            if (i + 1 < cards.size())
-                rows.add(Keyboards.irow(
-                        Keyboards.btn(cards.get(i).getName(),
-                                "kb:" + cards.get(i).getId() + ":" + sum + ":" + senderTg),
-                        Keyboards.btn(cards.get(i + 1).getName(),
-                                "kb:" + cards.get(i + 1).getId() + ":" + sum + ":" + senderTg)));
-            else rows.add(Keyboards.irow(
-                    Keyboards.btn(cards.get(i).getName(),
-                            "kb:" + cards.get(i).getId() + ":" + sum + ":" + senderTg)));
-        }
-        rows.add(Keyboards.irow(Keyboards.btn("❌ Bekor", "kx:" + senderTg)));
-        return Keyboards.inline(rows);
-    }
-
-    /**
-     * Karta/summa tanlash tugmalari: kb (karta tanlandi), ks (summa tanlandi),
-     * ku (summa tanlandi, endi karta so'raladi), kx (bekor). Oxirgi bo'lak — yuborgan
-     * odamning tgId'si: faqat o'sha odam (yoki SuperAdmin) bosa oladi.
-     */
-    private void kartaPickDecision(CallbackQuery cb, String data, long chatId, int msgId) {
-        try {
-            String[] p = data.split(":");
-            long presser = cb.getFrom().getId();
-            long senderTg = Long.parseLong(p[p.length - 1]);
-            boolean superadmin = userRepo.findByTelegramId(presser)
-                    .filter(AppUser::isActive)
-                    .map(x -> x.getRole() == Role.SUPERADMIN).orElse(false);
-            if (presser != senderTg && !superadmin) {
-                // FAQAT yuborgan odam yoki SuperAdmin — begona bosganda pop-up bilan
-                // tushuntiriladi va logga yoziladi (avval jim edi, kim bosgani bilinmasdi)
-                log.info("Karta tugmasi RAD: {} ({}) bosdi, ruxsat faqat {} yoki SuperAdmin — data {}",
-                        presser, displayName(cb.getFrom()), senderTg, data);
-                sender.answerAlert(cb.getId(), "⛔ Bu tugmani faqat rasmni/summani yuborgan odam "
-                        + "yoki SuperAdmin bosa oladi.");
-                return;
-            }
-            log.info("Karta tugmasi: {} ({}) bosdi{} — data {}", presser, displayName(cb.getFrom()),
-                    superadmin && presser != senderTg ? " [SuperAdmin]" : "", data);
-            switch (p[0]) {
-                case "kx" -> sender.edit(chatId, msgId, "❌ Bekor qilindi");
-                case "kq" -> {
-                    sender.edit(chatId, msgId,
-                            "✅ O'zgarishsiz qoldirildi — avvalgi saqlash kuchda.");
-                    // Tuzatish yakunlandi — o'chirish taymeri 0 dan qayta
-                    notifySvc.scheduleDelete(chatId, msgId, notifySvc.confirmDeleteMin());
-                }
-                case "kf" -> {   // ✏️ Tuzatish: to'g'ri kartani tanlash oynasi
-                    long cardId = Long.parseLong(p[1]);
-                    long sum = Long.parseLong(p[2]);
-                    notifySvc.cancelDelete(chatId, msgId);   // odam tanlayotganda o'chib ketmasin
-                    sender.edit(chatId, msgId, "✏️ <b>Tuzatish</b> — summa: <code>" + fmtT(sum)
-                            + "</code> so'm\nTO'G'RI kartani tanlang:",
-                            movePickKb(cardId, sum, senderTg));
-                }
-                case "km" -> {   // to'g'ri karta tanlandi — ko'chirish
-                    long newId = Long.parseLong(p[1]);
-                    long oldId = Long.parseLong(p[2]);
-                    long sum = Long.parseLong(p[3]);
-                    moveCardBalance(oldId, newId, sum, senderTg, cb.getFrom(), chatId, msgId);
-                }
-                case "ku", "kp" -> {   // summa tanlandi / ⬅️ boshqa karta — karta ro'yxati
-                    long sum = Long.parseLong(p[1]);
-                    sender.edit(chatId, msgId, "Summa: <code>" + fmtT(sum)
-                            + "</code> so'm\nQAYSI kartaning qoldig'i?", cardPickKb(sum, senderTg));
-                }
-                case "kb" -> {   // karta tanlandi — DARHOL SAQLANMAYDI: avval tasdiq,
-                                 // adashgan bo'lsa ⬅️ bilan orqaga qaytadi (foydalanuvchi talabi)
-                    long cardId = Long.parseLong(p[1]);
-                    long sum = Long.parseLong(p[2]);
-                    var co = clickRepo.findById(cardId);
-                    if (co.isEmpty()) { sender.edit(chatId, msgId, "⚠️ Hisob topilmadi"); return; }
-                    sender.edit(chatId, msgId, "💳 <b>" + esc(co.get().getName()) + "</b>\n"
-                            + "Summa: <code>" + fmtT(sum) + "</code> so'm\n\nTo'g'rimi?",
-                            Keyboards.inline(java.util.List.of(Keyboards.irow(
-                                    Keyboards.btn("✅ Ha, saqlansin",
-                                            "kv:" + cardId + ":" + sum + ":" + senderTg),
-                                    Keyboards.btn("⬅️ Boshqa karta",
-                                            "kp:" + sum + ":" + senderTg)))));
-                }
-                case "kv", "ks" -> {   // yakuniy tasdiq (kv) / karta ma'lum, summa tanlandi (ks)
-                    long cardId = Long.parseLong(p[1]);
-                    long sum = Long.parseLong(p[2]);
-                    var co = clickRepo.findById(cardId);
-                    if (co.isEmpty()) { sender.edit(chatId, msgId, "⚠️ Hisob topilmadi"); return; }
-                    saveCardBalance(co.get(), sum, displayName(cb.getFrom()), presser,
-                            chatId, msgId, true);
-                }
-                default -> { }
-            }
-        } catch (Exception e) {
-            log.debug("karta pick callback: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * kc:y|n:&lt;cardId&gt;:&lt;sum&gt;:&lt;senderTgId&gt; — skrinshot (OCR) natijasini
-     * tasdiqlash/rad etish. Faqat YUBORGAN ODAM (yoki SuperAdmin) bosa oladi —
-     * begonalar bosishi jim e'tiborsiz qoldiriladi.
-     */
-    private void kartaOcrDecision(CallbackQuery cb, String data, long chatId, int msgId) {
-        try {
-            String[] p = data.split(":");
-            boolean yes = p[1].equals("y");
-            long cardId = Long.parseLong(p[2]);
-            long sum = Long.parseLong(p[3]);
-            long senderTg = Long.parseLong(p[4]);
-            long presser = cb.getFrom().getId();
-            boolean superadmin = userRepo.findByTelegramId(presser)
-                    .filter(AppUser::isActive)
-                    .map(x -> x.getRole() == Role.SUPERADMIN).orElse(false);
-            if (presser != senderTg && !superadmin) {
-                log.info("OCR tasdiq tugmasi RAD: {} ({}) bosdi, ruxsat faqat {} yoki SuperAdmin",
-                        presser, displayName(cb.getFrom()), senderTg);
-                sender.answerAlert(cb.getId(), "⛔ Bu tugmani faqat skrinshotni yuborgan odam "
-                        + "yoki SuperAdmin bosa oladi.");
-                return;
-            }
-            log.info("OCR tasdiq tugmasi: {} ({}) bosdi{} — {}", presser, displayName(cb.getFrom()),
-                    superadmin && presser != senderTg ? " [SuperAdmin]" : "", data);
-            var co = clickRepo.findById(cardId);
-            if (co.isEmpty()) { sender.edit(chatId, msgId, "⚠️ Hisob topilmadi"); return; }
-            if (!yes) {
-                sender.edit(chatId, msgId, "❌ <b>" + esc(co.get().getName())
-                        + "</b> — skrinshotdagi summa RAD etildi.\nTo'g'ri summani yozing: "
-                        + "<code>/karta " + cardId + " СУММА</code>");
-                return;
-            }
-            saveCardBalance(co.get(), sum, displayName(cb.getFrom()), presser, chatId, msgId, true);
-        } catch (Exception e) {
-            log.debug("kc callback: {}", e.getMessage());
-        }
-    }
-
-    /** Matndan pul summalarini ajratish: «2.030.000,00», «24 936 377.74», «12804310»,
-     *  hatto OCR ning «1382 270.25» kabi notekis guruhlashi ham. Usul: avval raqam
-     *  bo'laklari orasidagi minglik ajratkichlar (bo'sh joy/nuqta + roppa-rosa 3 raqam)
-     *  YOPISHTIRILADI, keyin yaxlit son o'qiladi. Tiyin tashlanadi; 10 000 so'mdan
-     *  kichigi e'tiborsiz (karta raqami bo'laklari 9860/1947 ham shu filtrda qoladi). */
-    /** extractSums bilan bir xil, lekin TIYINDA qaytaradi («12 235.45» → 1223545;
-     *  «250 000.00» → 25000000). 10 000 so'mdan kichigi e'tiborsiz. */
-    private java.util.LinkedHashSet<Long> extractSumsTiyin(String s) {
-        java.util.LinkedHashSet<Long> out = new java.util.LinkedHashSet<>();
-        String joined = s, prev;
-        do {
-            prev = joined;
-            joined = joined.replaceAll("(?<=\\d)[ \\u00A0.](?=\\d{3}(?!\\d))", "");
-        } while (!joined.equals(prev));
-        var matcher = java.util.regex.Pattern
-                .compile("(\\d{4,})(?:[.,](\\d{1,2}))?")
-                .matcher(joined);
-        while (matcher.find()) {
-            try {
-                long v = Long.parseLong(matcher.group(1));
-                String f = matcher.group(2) == null ? "0" : (matcher.group(2).length() == 1 ? matcher.group(2) + "0" : matcher.group(2));
-                long t = v * 100 + Long.parseLong(f);
-                if (v >= 10_000) out.add(t);
-            } catch (NumberFormatException ignored) { }
-        }
-        return out;
-    }
-
-    private java.util.LinkedHashSet<Long> extractSums(String s) {
-        java.util.LinkedHashSet<Long> out = new java.util.LinkedHashSet<>();
-        String joined = s, prev;
-        do {
-            prev = joined;
-            joined = joined.replaceAll("(?<=\\d)[ \\u00A0.](?=\\d{3}(?!\\d))", "");
-        } while (!joined.equals(prev));
-        var matcher = java.util.regex.Pattern
-                .compile("\\d{4,}(?:[.,]\\d{1,2})?")
-                .matcher(joined);
-        while (matcher.find()) {
-            String t = matcher.group().replaceAll("[.,]\\d{1,2}$", "");   // tiyin tashlanadi
-            try {
-                long v = Long.parseLong(t);
-                if (v >= 10_000) out.add(v);
-            } catch (NumberFormatException ignored) { }
-        }
-        return out;
-    }
-
-    /** 💳 /karta — hisoblar ro'yxati; /karta <id> <summa> — karta HAQIQIY qoldig'ini
-     *  qayd etish (MoySklad'da bu raqam yo'q — faqat mas'ul kiritadi). */
-    private void handleKarta(AppUser user, String text, long chatId) {
-        String[] p = text.trim().split("\\s+");
-        var list = clickRepo.findByActiveTrueOrderByIdAsc();
-        if (p.length < 3) {
-            StringBuilder b = new StringBuilder("💳 <b>Karta qoldig'ini kiritish</b>\n"
-                    + "Format: <code>/karta ID SUMMA</code> — masalan <code>/karta 2 12804310.45</code> (tiyin ham bo'ladi)\n\n");
-            for (var c : list)
-                b.append(c.getId()).append(". ").append(esc(c.getName()))
-                 .append(c.getCardBalance() == null ? " — <i>kiritilmagan</i>"
-                        : " — " + uz.kassa.bot.TextUtil.fmtTiyin(c.getCardBalance()) + " so'm")
-                 .append("\n");
-            sender.send(chatId, b.toString());
-            return;
-        }
-        long id;
-        try { id = Long.parseLong(p[1]); }
-        catch (NumberFormatException e) {
-            sender.send(chatId, "⚠️ ID raqam bo'lishi kerak. <code>/karta</code> deb yozib "
-                    + "ro'yxatni ko'ring.");
-            return;
-        }
-        var co = clickRepo.findById(id).filter(uz.kassa.domain.ClickAccount::isActive);
-        if (co.isEmpty()) {
-            sender.send(chatId, "⚠️ Bunday hisob topilmadi. <code>/karta</code> — ro'yxat.");
-            return;
-        }
-        String sumS = String.join(" ", java.util.Arrays.copyOfRange(p, 2, p.length));
-        long sum = uz.kassa.bot.TextUtil.parseAmountTiyin(sumS);   // TIYIN
-        if (sum < 0) {
-            sender.send(chatId, "⚠️ Summani so'mda kiriting, tiyin bo'lsa nuqta/vergul bilan: "
-                    + "<code>12804310</code> yoki <code>12804310.45</code>");
-            return;
-        }
-        var c = co.get();
-        c.setCardBalance(sum);
-        c.setCardBalanceAt(java.time.Instant.now());
-        c.setCardBalanceBy(user.getFullName());
-        clickRepo.save(c);
-        audit.log(user.getId(), "KARTA_QOLDIQ", "click", id,
-                user.getFullName() + ": " + c.getName() + " = " + sum);
-        sender.send(chatId, "✅ <b>" + esc(c.getName()) + "</b> karta qoldig'i qayd etildi: <b>"
-                + uz.kassa.bot.TextUtil.fmtTiyin(sum) + "</b> so'm\n"
-                + "Keyingi hisobotda MoySklad bilan solishtirilib chiqadi.");
-    }
-
-    /** /kartamas <id> <matn> — hisob uchun mas'ulni o'rnatish ("@username" yoki
-     *  "{id=123456;Ism}"); «-» — olib tashlash. Faqat SuperAdmin. */
-    private void handleKartaMas(AppUser user, String text, long chatId) {
-        String[] p = text.trim().split("\\s+", 3);
-        if (p.length < 3) {
-            sender.send(chatId, "Format: <code>/kartamas ID @username</code> yoki "
-                    + "<code>/kartamas ID {id=123456;Ism}</code>\n«-» — mas'ulni olib tashlash.");
-            return;
-        }
-        long id;
-        try { id = Long.parseLong(p[1]); }
-        catch (NumberFormatException e) { sender.send(chatId, "⚠️ ID raqam bo'lishi kerak"); return; }
-        var co = clickRepo.findById(id);
-        if (co.isEmpty()) { sender.send(chatId, "⚠️ Hisob topilmadi"); return; }
-        var c = co.get();
-        c.setCardResponsible("-".equals(p[2].trim()) ? null : p[2].trim());
-        clickRepo.save(c);
-        audit.log(user.getId(), "KARTA_MASUL", "click", id,
-                c.getName() + " -> " + p[2].trim());
-        sender.send(chatId, "✅ <b>" + esc(c.getName()) + "</b> uchun mas'ul: "
-                + (c.getCardResponsible() == null ? "<i>olib tashlandi</i>" : esc(c.getCardResponsible())));
-    }
 
     /* ============================ MATN ============================ */
 
@@ -969,7 +113,7 @@ public class Router {
             if (!cfgCmd && !kartaCmd && !kunlikCmd) {
                 // Buyruq emas — lekin karta qoldig'i yozilgan oddiy xabar bo'lishi
                 // mumkin (mas'ullar skrinshot + matn tashlab boradi): ushlab ko'riladi
-                tryGroupCardCapture(m, text);
+                cardCapture.tryGroupCardCapture(m, text);
                 return;
             }
             if (cfgCmd) {
@@ -989,7 +133,7 @@ public class Router {
 
         Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
         if (uo.isEmpty() || !uo.get().isActive()) {
-            rememberGuest(m);
+            members.rememberGuest(m);
             var shareBtn = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton(
                     "📱 Telefon raqamni yuborish");
             shareBtn.setRequestContact(true);
@@ -1006,6 +150,21 @@ public class Router {
         }
         AppUser user = uo.get();
         Session s = sessions.get(tgId);
+
+        // 🔘 Shablon tugmasi (admin 🔔 Билдиришномалар'da sozlagan): foydalanuvchi kontekstida
+        // jonli render qilinadi. Mavjud bo'limlardan OLDIN tekshiriladi, lekin matn mavjud
+        // menyu tugmasiga teng bo'lolmaydi (saqlashda taqiqlanadi) — hech narsa buzilmaydi.
+        var tplBtn = notifySvc.buttonByLabel(user.getRole(), text);
+        if (tplBtn.isPresent()) {
+            s.reset();
+            sender.deleteMessage(chatId, m.getMessageId());
+            var r = notifySvc.renderForUser(tplBtn.get(), user);
+            Integer sentId = sender.sendId(chatId, r.text().isBlank() ? "<i>(shablon bo'sh)</i>" : r.text(),
+                    menus.menuFor(user));
+            if (tplBtn.get().getAutoDeleteMin() > 0)
+                notifySvc.scheduleDelete(chatId, sentId, tplBtn.get().getAutoDeleteMin());
+            return;
+        }
 
         // Menyu tugmasi bosilsa — tugallanmagan dialog (FSM) bekor qilinadi
         if (Keyboards.isMenuLabel(text)) s.reset();
@@ -1059,7 +218,7 @@ public class Router {
         // 💳 Karta (Click ilovasidagi haqiqiy) qoldig'i: /karta — ro'yxat,
         // /karta <ID> <summa> — kiritish. Guruhda ham, shaxsiyda ham ishlaydi.
         if (text.equals("/karta") || text.startsWith("/karta ")) {
-            handleKarta(user, text, chatId);
+            cardCmd.handleKarta(user, text, chatId);
             return;
         }
         if (text.startsWith("/kartamas")) {
@@ -1067,7 +226,7 @@ public class Router {
                 sender.send(chatId, "⚠️ Bu buyruq faqat SuperAdmin uchun");
                 return;
             }
-            handleKartaMas(user, text, chatId);
+            cardCmd.handleKartaMas(user, text, chatId);
             return;
         }
 
@@ -1141,8 +300,8 @@ public class Router {
                     + "(butun tarix — bir necha o'n soniya davom etishi mumkin)...");
             new Thread(() -> {
                 try {
-                    syncService.auditClickAccounts();
-                    syncService.auditNaqd();
+                    auditSvc.auditClickAccounts();
+                    auditSvc.auditNaqd();
                     sender.send(chatId, "✅ Audit tugadi. Farq topilgan Click hisoblari va naqd "
                             + "farqi haqida buxgalteriyaga alohida xabar keladi (agar bo'lsa).");
                 } catch (Exception ex) {
@@ -1155,17 +314,14 @@ public class Router {
         if (text.equals("/start") || text.equals("/menu")) {
             s.reset();
             sender.send(chatId, "Assalomu alaykum, <b>" + esc(user.getFullName()) + "</b>!\n"
-                    + otdelLabel(user), menuFor(user));
+                    + menus.otdelLabel(user), menus.menuFor(user));
+            // 🌐 Админ панел (Mini App): chat menyu tugmasi (≡) + inline tugma. Reply-klaviatura
+            // tugmasi ishlatilmaydi — u orqali ochilganda Telegram initData bermaydi (2026-09-04 test).
             String wa = props.getWebappUrl();
-            if (wa != null && !wa.isBlank()) {
-                var btn = org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
-                        .builder().text("📱 Mini App — barcha bo'limlar")
-                        .webApp(org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo
-                                .builder().url(wa).build())
-                        .build();
-                sender.send(chatId, "Ilovada: balanslar, tranzaksiyalar tarixi (sana bo'yicha) "
-                        + "va kutilayotgan qarorlar 👇",
-                        Keyboards.inline(java.util.List.of(Keyboards.irow(btn))));
+            if (wa != null && !wa.isBlank() && user.getRole() != Role.KASSIR) {
+                sender.setMenuButton(chatId, "🌐 Админ панел", wa);
+                sender.sendWebAppButton(chatId, "🌐 <b>Админ панел</b> — веб кўриниш: бугун, кассалар, "
+                        + "ҳисоботлар, созламалар. Пастдаги ≡ тугмаси орқали ҳам очилади.", "🌐 Админ панелни очиш", wa);
             }
             return;
         }
@@ -1174,7 +330,7 @@ public class Router {
         // kira olmaydi (eski klaviaturada tugma qolib ketgan bo'lishi mumkin)
         if (LabelService.RENAMABLE.contains(text) && !permSvc.visible(user, text)) {
             sender.send(chatId, "⚠️ Bu bo'lim siz uchun ochiq emas (SuperAdmin sozlagan)",
-                    menuFor(user));
+                    menus.menuFor(user));
             return;
         }
 
@@ -1192,30 +348,12 @@ public class Router {
             };
         } catch (BusinessException e) {
             s.reset();
-            sender.send(chatId, "⚠️ " + esc(e.getMessage()), menuFor(user));
+            sender.send(chatId, "⚠️ " + esc(e.getMessage()), menus.menuFor(user));
             return;
         }
-        if (!handled) sender.send(chatId, "Quyidagi menyudan bo'limni tanlang 👇", menuFor(user));
+        if (!handled) sender.send(chatId, "Quyidagi menyudan bo'limni tanlang 👇", menus.menuFor(user));
     }
 
-    /** Notanish foydalanuvchini eslab qolish — admin keyin ro'yxatdan tanlab qo'shadi. */
-    private void rememberGuest(Message m) {
-        try {
-            long tgId = m.getFrom().getId();
-            String fn = m.getFrom().getFirstName() == null ? "" : m.getFrom().getFirstName();
-            String ln = m.getFrom().getLastName() == null ? "" : m.getFrom().getLastName();
-            String name = (fn + " " + ln).trim();
-            if (name.length() > 150) name = name.substring(0, 150);
-            Guest g = guestRepo.findById(tgId).orElseGet(() ->
-                    Guest.builder().telegramId(tgId).build());
-            g.setName(name.isEmpty() ? null : name);
-            g.setUsername(m.getFrom().getUserName());
-            g.setLastSeen(java.time.Instant.now());
-            guestRepo.save(g);
-        } catch (Exception e) {
-            log.warn("Guest yozishda xato: {}", e.getMessage());
-        }
-    }
 
     /* ============================ CALLBACK ============================ */
 
@@ -1229,7 +367,7 @@ public class Router {
         // 💳 Skrinshot (OCR) tasdiqlash tugmalari — GURUHDA bosiladi va yuboruvchi
         // botda ro'yxatdan o'tmagan bo'lishi ham mumkin, shuning uchun umumiy
         // to'siqlardan OLDIN qayta ishlanadi (ichida o'z himoyasi bor).
-        if (data.startsWith("kc:")) { kartaOcrDecision(cb, data, chatId, msgId); return; }
+        if (data.startsWith("kc:")) { cardCmd.kartaOcrDecision(cb, data, chatId, msgId); return; }
         if (data.startsWith("dr:ok:")) {   // 📋 kunlik hisobot — moliya menejeri tasdig'i
             try {
                 var uo = userRepo.findByTelegramId(cb.getFrom().getId()).filter(AppUser::isActive);
@@ -1253,7 +391,7 @@ public class Router {
                 || data.startsWith("kf:") || data.startsWith("km:")
                 || data.startsWith("kq:") || data.startsWith("kv:")
                 || data.startsWith("kp:")) {
-            kartaPickDecision(cb, data, chatId, msgId);
+            cardCmd.kartaPickDecision(cb, data, chatId, msgId);
             return;
         }
 
@@ -1289,6 +427,7 @@ public class Router {
             sender.send(chatId, "⚠️ " + esc(e.getMessage()));
         }
     }
+
 
     /* -------- O'tkazma qarori: faqat QABUL QILUVCHI tomon (TZ 5) -------- */
 
@@ -1332,10 +471,12 @@ public class Router {
         }
     }
 
+
     private void notifySenderSide(Operation op, String text) {
         if (op.getFromOwnerType() == OwnerType.KASSA) notify.toKassa(op.getFromOwnerId(), text, null);
         else notify.toBuxgalteriya(text, null);
     }
+
 
     /* -------- Hisobot qarori: Buxgalter/SuperAdmin (TZ 7.5/7.6) -------- */
 
@@ -1387,21 +528,4 @@ public class Router {
         }
     }
 
-    /* ============================ Yordamchi ============================ */
-
-    public ReplyKeyboardMarkup menuFor(AppUser user) {
-        java.util.function.Predicate<String> vis = c -> permSvc.visible(user, c);
-        return switch (user.getRole()) {
-            case KASSIR -> Keyboards.kassirMenu(vis);
-            case BUXGALTER, SUPERADMIN -> Keyboards.buxMenu(vis);
-        };
-    }
-
-    private String roleLabel(Role r) {
-        return switch (r) {
-            case KASSIR -> "Kassir";
-            case BUXGALTER -> "Buxgalter";
-            case SUPERADMIN -> "SuperAdmin";
-        };
-    }
 }

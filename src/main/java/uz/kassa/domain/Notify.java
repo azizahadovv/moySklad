@@ -50,6 +50,16 @@ public class Notify {
     @Column(nullable = false)
     private boolean active = true;
 
+    /** 🔘 Asosiy menyudagi tugma matni (bo'sh — tugma yo'q). */
+    @Builder.Default
+    @Column(name = "button_label", nullable = false)
+    private String buttonLabel = "";
+
+    /** Tugma ko'rinadigan rollar, CSV: KASSIR,BUXGALTER,SUPERADMIN. */
+    @Builder.Default
+    @Column(name = "button_roles", nullable = false)
+    private String buttonRoles = "";
+
     @Column(name = "last_sent")
     private String lastSent;
 
@@ -71,6 +81,26 @@ public class Notify {
 
     public void setRecipientSet(Set<String> set) {
         recipients = String.join(",", set);
+    }
+
+    public Set<Role> buttonRoleSet() {
+        Set<Role> out = new LinkedHashSet<>();
+        for (String p : buttonRoles.split(",")) {
+            try { if (!p.trim().isEmpty()) out.add(Role.valueOf(p.trim().toUpperCase())); }
+            catch (IllegalArgumentException ignored) { }
+        }
+        return out;
+    }
+
+    public void setButtonRoleSet(Set<Role> set) {
+        List<String> l = new ArrayList<>();
+        for (Role r : Role.values()) if (set.contains(r)) l.add(r.name());
+        buttonRoles = String.join(",", l);
+    }
+
+    /** Tugma sifatida ko'rinadimi: faol, matni bor va shu rolga ruxsat. */
+    public boolean isButtonFor(Role role) {
+        return active && buttonLabel != null && !buttonLabel.isBlank() && buttonRoleSet().contains(role);
     }
 
     public Set<Integer> weekdaySet() {

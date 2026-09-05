@@ -24,6 +24,7 @@ import java.util.List;
 public class Jobs {
 
     private final MoySkladSyncService syncService;
+    private final uz.kassa.service.moysklad.MoySkladAuditService auditSvc;
     private final uz.kassa.service.ReminderService reminderService;
     private final uz.kassa.gsheets.SheetsSyncService sheetsSync;
     private final DayService dayService;
@@ -464,12 +465,12 @@ public class Jobs {
     @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT5M")
     public void clickAccountAudit() {
         try {
-            syncService.auditClickAccounts();
+            auditSvc.auditClickAccounts();
         } catch (Exception e) {
             log.warn("Click balans auditi xatosi: {}", e.getMessage());
         }
         try {
-            syncService.auditNaqd();   // faqat xabar: sabab + summa + tuzatish yo'li
+            auditSvc.auditNaqd();   // faqat xabar: sabab + summa + tuzatish yo'li
         } catch (Exception e) {
             log.warn("Naqd tekshiruvi xatosi: {}", e.getMessage());
         }

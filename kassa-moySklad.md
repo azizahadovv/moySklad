@@ -130,12 +130,33 @@ DB_PASSWORD=data
 
 ```
 src/main/java/uz/kassa/
-  bot/        — Router, KassaBot (8-worker), Keyboards, LabelService (nom/bo'lim), PermService (huquqlar)
-  bot/handlers/ — AdminHandler (panel/sozlamalar), KassirHandler, BuxgalterHandler, KontragentHandler (qarz daftari)
+  bot/        — Router (faqat dispetcher: route/onMessage/onCallback/qarorlar), KassaBot (8-worker), Keyboards,
+                LabelService (nom/bo'lim), PermService (huquqlar), MenuSchemaService (🧩 tugma tartibi/ustun — settings menu.order.*),
+                MenuSupport (rol menyusi),
+                MembershipTracker (guruh a'zolari, mehmonlar, kontakt), OcrEngine (Tesseract ko'p bosqichli OCR),
+                CardCaptureHandler (guruhda karta qoldig'i: skrinshot/matn, saqlash/ko'chirish),
+                CardCommandHandler (karta tugmalari, /karta, /kartamas)
+  bot/handlers/ — AdminHandler (faqat dispetcher: onText/onCallback/handleNav/panel) + bo'laklar:
+                  AdminSupport (umumiy yordamchilar, menyu konstantalari), OtdelHandler (kassa kartasi, pul qabul),
+                  StatsHandler (statistika, Свод, audit), CalendarHandler, KassaAdminHandler (kassa/otdel/click/nol),
+                  BalanceAdminHandler (boshlang'ich qoldiq, korrektirovka), UsersAdminHandler, PermAdminHandler,
+                  SettingsAdminHandler (tugma nomlari, karta mas'ullari, guruhlar), MoySkladAdminHandler (token,
+                  ledger sana, diagnostika, qayta yuklash), MoySkladNamesHandler (🔄 nomlar),
+                  NotifyAdminHandler (🔔 bildirishnomalar), NotifyPresetHandler (📚 namunalar), MenuSchemaHandler (🧩 menyu tartibi), KassirHandler, BuxgalterHandler,
+                  KontragentHandler (dispetcher) + KontragentSupport, ReminderViewHandler (ro'yxat/karta/to'lov),
+                  ReminderWizardHandler (yangi eslatma ustasi), KontragentStaffHandler (Отдел Али xodimlari)
   service/    — LedgerService (yadro), TransferService, SubmissionService, ReminderService
-  service/moysklad/ — MoySkladClient, MoySkladSyncService (sync + reconcile + avtokorreksiya)
-  gsheets/    — GoogleSheetsClient, SheetsSyncService (snapshot, DB-ustuvor)
+  service/notify/ — NotifyPresets (tayyor shablonlar), TemplateService (shablon dvigateli: parsing, bloklar, mention), TemplateData (o'rinbosar
+                    ma'lumotlari: kassa/karta/jami/davr, MoySklad keshi), NotifyService (jadval, yuborish, avto-o'chirish)
+  service/moysklad/ — MoySkladClient (fetch* API, recordlar) + MoySkladHttp (token, HTTP, sahifalash, 403),
+                      MoySkladSyncService (sync/reconcile/fullReload — synchronized yadro) + SyncSupport (Ctx, epoch,
+                      STORNO, valyuta, xabar toshqini) + MoySkladDocApplier (hujjatlarni ledger'ga qo'llash)
+                      + MoySkladAuditService (Click tenglashtiruv, naqd tekshiruvi, kunlik savdo)
+  gsheets/    — GoogleSheetsClient, SheetsSyncService (sikl) + SheetsState (snapshot/holat) + SheetsPullService
+                (SHEETS→BOT) + SheetsPushService (BOT→SHEETS)
   webapp/     — Mini App REST + ExcelReportService
+                WebAdminController (/api/admin/*: dashboard, kassa, pending, cards — faqat bux/admin) + AdminApiService (ma'lumot yig'ish, MoySklad kesh);
+                static/index.html+app.css+app.js — 🌐 Админ панел Mini App (kirill, 4 tab, hash router; spec docs/WEB-ADMIN.md)
   scheduler/  — Jobs (sync 30s, reconcile 10m, sheets 1m/5m, eslatma, 00:00 kun yopish, 21:00 eslatma)
 src/main/resources/db/migration/ — V1..V8 (V8 — joriy otdel/user seed)
 docs/apps-script.gs — Google Sheets tomonidagi web-app kodi

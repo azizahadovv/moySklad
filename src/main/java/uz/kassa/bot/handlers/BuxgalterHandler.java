@@ -156,10 +156,15 @@ public class BuxgalterHandler {
 
     /* ============================ 📥 KUTILAYOTGANLAR ============================ */
 
-    public void pendingList(long chatId) {
+    public void pendingList(long chatId) { pendingList(chatId, null); }
+
+    /** kassaId != null — faqat shu kassaning kutilayotgan hisobotlari (o'tkazmalarsiz). */
+    public void pendingList(long chatId, Long kassaId) {
         int shown = 0;
 
-        List<Submission> subs = subRepo.findByStatusOrderByIdAsc(SubmissionStatus.KUTILMOQDA);
+        List<Submission> subs = kassaId == null
+                ? subRepo.findByStatusOrderByIdAsc(SubmissionStatus.KUTILMOQDA)
+                : subRepo.findByKassaIdAndStatusOrderByIdAsc(kassaId, SubmissionStatus.KUTILMOQDA);
         for (Submission sub : subs.stream().limit(10).toList()) {
             StringBuilder detail = new StringBuilder();
             dayRepo.findAllById(sub.getDayIds()).stream()
@@ -185,7 +190,9 @@ public class BuxgalterHandler {
             shown++;
         }
 
-        List<Operation> transfers = opRepo.incomingTransfers(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID);
+        List<Operation> transfers = kassaId == null
+                ? opRepo.incomingTransfers(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID)
+                : List.of();
         for (Operation op : transfers.stream().limit(10).toList()) {
             sender.send(chatId, "🔁 <b>Kiruvchi o'tkazma</b> #" + op.getId() + "\n"
                     + "Kimdan: <b>" + esc(names.owner(op.getFromOwnerType(), op.getFromOwnerId())) + "</b>\n"

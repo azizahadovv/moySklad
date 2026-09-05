@@ -34,7 +34,7 @@ public class Session {
         // Ledger boshlanish sanasini kiritish
         ADM_LS_DATE,
         // 🔔 Bildirishnomalar: nom, shablon matni, aniq vaqtlar, guruh ID, tasdiq-o'chirish daqiqasi
-        ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE,
+        ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN,
         // 🤝 Kontragent (qarz daftari) oqimlari
         KG_SEARCH, KG_MN_NAME, KG_MN_INFO, KG_SUM, KG_IZOH,
         KG_AU_TGID, KG_AU_NAME, KG_RN_NAME, KG_PAY_AMOUNT

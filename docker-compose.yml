@@ -28,6 +28,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # TEST tunnel: Mini App uchun vaqtinchalik ommaviy HTTPS (trycloudflare.com, har startda yangi URL).
+  # URL: `docker compose logs tunnel | grep trycloudflare` → .env WEBAPP_URL → `docker compose up -d app`.
+  # Ishlab chiqarishda o'rniga server + buxgalteriya.nsb.uz (Caddy/nginx reverse proxy → app:8080).
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --url http://app:8080
+    depends_on:
+      - app
+    restart: unless-stopped
+
 volumes:
   pgdata:
   applogs:

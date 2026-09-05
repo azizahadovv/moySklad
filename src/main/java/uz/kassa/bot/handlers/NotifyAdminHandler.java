@@ -9,6 +9,7 @@ import uz.kassa.bot.Session;
 import uz.kassa.domain.AppUser;
 import uz.kassa.domain.Kassa;
 import uz.kassa.domain.Notify;
+import uz.kassa.domain.Role;
 import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.KassaRepo;
 import uz.kassa.service.AuditService;
@@ -37,6 +38,7 @@ public class NotifyAdminHandler {
     private final KassaRepo kassaRepo;
     private final SettingsService settings;
     private final AuditService audit;
+    private final NotifyPresetHandler presetH;
 
     private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("dd.MM HH:mm");
     private static final String[] DAY_NAMES = {"Dush", "Sesh", "Chor", "Pay", "Juma", "Shan", "Yak"};
@@ -159,6 +161,25 @@ public class NotifyAdminHandler {
                 recipientsMenu(n.getId(), chatId, 0);
                 return true;
             }
+            case ADM_NF_BTN -> {   // 🔘 menyu tugmasi matni
+                Notify n = current(s);
+                if (n == null) { menu(s, chatId, 0); return true; }
+                if (v.equals("-")) { buttonMenu(n.getId(), chatId, 0); return true; }
+                String problem = NotifyService.buttonLabelProblem(v);
+                if (problem != null) {
+                    s.state = st;
+                    sender.send(chatId, "⚠️ Tugma matni yaroqsiz: " + esc(problem) + ". Boshqa matn yuboring yoki «-»:");
+                    return true;
+                }
+                n.setButtonLabel(v);
+                if (n.buttonRoleSet().isEmpty()) n.setButtonRoleSet(java.util.EnumSet.of(Role.SUPERADMIN));
+                svc.save(n);
+                audit.log(u.getId(), "NOTIFY_TUGMA", "notify", n.getId(), u.getFullName() + " tugma: " + v);
+                sender.send(chatId, "✅ Tugma saqlandi: <b>" + esc(v) + "</b>. Endi qaysi rollarga ko'rinishini belgilang. "
+                        + "Foydalanuvchi /start bosganda yoki menyu yangilanganda tugma paydo bo'ladi.");
+                buttonMenu(n.getId(), chatId, 0);
+                return true;
+            }
             case ADM_NF_ONCE -> {
                 Notify n = current(s);
                 if (n == null) { menu(s, chatId, 0); return true; }
@@ -215,6 +236,11 @@ public class NotifyAdminHandler {
 
     /** cmd — «nf…» (prefiks «a:» siz), arg — qolgan qism. */
     public boolean onCallback(AppUser u, Session s, String cmd, String arg, long chatId, int msgId) {
+        if (cmd.startsWith("nfp")) {   // 📚 Namunalar — alohida handler; yaratilsa kartasi ochiladi
+            Long created = presetH.onCallback(u, cmd, arg, chatId, msgId);
+            if (created != null) card(created, chatId, 0);
+            return true;
+        }
         String[] a = arg.isEmpty() ? new String[0] : arg.split(":");
         long id = a.length > 0 && a[0].matches("-?\\d+") ? Long.parseLong(a[0]) : 0;
         Notify n = id > 0 ? svc.find(id).orElse(null) : null;
@@ -322,6 +348,30 @@ public class NotifyAdminHandler {
                                 + "(kanalda ADMIN shart), so'ng chat ID sini yuboring (masalan -1001234567890).\n"
                                 + "Bekor qilish uchun «-»:");
                     }
+                    case "nfb" -> buttonMenu(id, chatId, msgId);
+                    case "nfbl" -> {   // tugma matni (matn)
+                        s.state = Session.State.ADM_NF_BTN;
+                        s.data.put("nfId", id);
+                        sender.edit(chatId, msgId, "🔘 <b>Menyu tugmasi matni</b>\n\nQisqa matn yuboring (40 belgigacha), "
+                                + "masalan <code>📈 Oylik savdo</code>. Mavjud menyu tugmalari bilan bir xil bo'lmasin.\n"
+                                + (n.getButtonLabel().isBlank() ? "" : "Hozir: <b>" + esc(n.getButtonLabel()) + "</b>\n")
+                                + "\nBekor qilish uchun «-»:");
+                    }
+                    case "nfbr" -> {   // rol toggle
+                        Role r = Role.valueOf(a[1]);
+                        Set<Role> set = n.buttonRoleSet();
+                        if (!set.remove(r)) set.add(r);
+                        n.setButtonRoleSet(set);
+                        svc.save(n);
+                        audit.log(u.getId(), "NOTIFY_TUGMA", "notify", id, u.getFullName() + " rollar: " + n.getButtonRoles());
+                        buttonMenu(id, chatId, msgId);
+                    }
+                    case "nfbx" -> {   // tugmani olib tashlash
+                        n.setButtonLabel("");
+                        svc.save(n);
+                        audit.log(u.getId(), "NOTIFY_TUGMA", "notify", id, u.getFullName() + " tugmani olib tashladi");
+                        card(id, chatId, msgId);
+                    }
                     case "nfa" -> {   // avto-o'chirish: 0 → 5 → 10 → 30 → 60 → 180 → 0
                         int[] cyc = {0, 5, 10, 30, 60, 180};
                         int cur = n.getAutoDeleteMin(), next = 0;
@@ -385,6 +435,7 @@ public class NotifyAdminHandler {
         sb.append("\n🗑 Tasdiq xabari («қабул қилинди») o'chirish: <b>")
           .append(svc.confirmDeleteMin() == 0 ? "o'chirilmaydi" : svc.confirmDeleteMin() + " min").append("</b>");
         rows.add(irow(btn("➕ Yangi", "a:nfn"), btn("📖 O'rinbosarlar", "a:nfh:1")));
+        rows.add(irow(btn("📚 Namunalar (tayyor hisobotlar)", "a:nfp")));
         rows.add(irow(btn("🗑 Tasdiq xabari o'chirish vaqti", "a:nfd")));
         rows.add(irow(btn("⬅️ Orqaga", "a:p:set")));
         show(chatId, msgId, sb.toString(), rows);
@@ -401,6 +452,8 @@ public class NotifyAdminHandler {
                 + (next == null ? "" : "▶️ Keyingi: <b>" + next.format(DTF) + "</b>\n")
                 + "👥 Kimga: " + svc.describeRecipients(n) + "\n"
                 + "🗑 Avto-o'chirish: <b>" + (n.getAutoDeleteMin() == 0 ? "yo'q" : n.getAutoDeleteMin() + " min") + "</b>\n"
+                + "🔘 Menyu tugmasi: " + (n.getButtonLabel().isBlank() ? "<i>yo'q</i>"
+                    : "<b>" + esc(n.getButtonLabel()) + "</b> — " + esc(NotifyService.rolesText(n))) + "\n"
                 + (n.getLastSent() == null ? "" : "📤 Oxirgi: " + esc(n.getLastSent().replace('T', ' ')) + "\n")
                 + (n.getLastError() == null ? "" : "⚠️ Xato: " + esc(n.getLastError()) + "\n")
                 + "\n✍️ Shablon:\n" + tpl;
@@ -408,6 +461,7 @@ public class NotifyAdminHandler {
         rows.add(irow(btn("✍️ Shablon", "a:nft:" + id), btn("⏰ Jadval", "a:nfs:" + id)));
         rows.add(irow(btn("👥 Kimga", "a:nfr:" + id),
                 btn("🗑 Avto-o'chirish: " + (n.getAutoDeleteMin() == 0 ? "yo'q" : n.getAutoDeleteMin() + " min"), "a:nfa:" + id)));
+        rows.add(irow(btn("🔘 Menyu tugmasi" + (n.getButtonLabel().isBlank() ? "" : ": " + n.getButtonLabel()), "a:nfb:" + id)));
         rows.add(irow(btn("🧪 Test (o'zimga)", "a:nfx:" + id), btn("🚀 Hozir yuborish", "a:nfy:" + id)));
         rows.add(irow(btn(n.isActive() ? "⏸ O'chirib turish" : "▶️ Yoqish", "a:nfo:" + id), btn("🗑 O'chirish", "a:nfz:" + id)));
         rows.add(irow(btn("⬅️ Ro'yxat", "a:nfm")));
@@ -451,6 +505,28 @@ public class NotifyAdminHandler {
         boolean work = days.equals(Set.of(1, 2, 3, 4, 5));
         rows.add(irow(ib(days.isEmpty(), "Har kuni", "a:nfsd:" + id + ":all"),
                 ib(work, "Ish kunlari (Du–Ju)", "a:nfsd:" + id + ":work")));
+        rows.add(irow(btn("⬅️ Orqaga", "a:nfc:" + id)));
+        show(chatId, msgId, text, rows);
+    }
+
+    /** 🔘 Menyu tugmasi sozlamasi: matn + rollar. Tugma tanlangan rollarning ASOSIY menyusi oxirida chiqadi. */
+    private void buttonMenu(long id, long chatId, int msgId) {
+        Notify n = svc.find(id).orElse(null);
+        if (n == null) return;
+        Set<Role> set = n.buttonRoleSet();
+        String text = "🔘 <b>" + esc(n.getName()) + " — menyu tugmasi</b>\n\n"
+                + "Shablon tanlangan rollarning asosiy menyusida tugma bo'lib chiqadi. Bosilganda shablon "
+                + "shu foydalanuvchi uchun jonli render qilinadi (kassirga <code>{kassa:mening.…}</code> — o'z otdeli).\n"
+                + "Mavjud bo'limlar o'zgarmaydi, tugma ular ostiga qo'shiladi.\n\n"
+                + "Matn: " + (n.getButtonLabel().isBlank() ? "<i>belgilanmagan</i>" : "<b>" + esc(n.getButtonLabel()) + "</b>") + "\n"
+                + "Kimga: <b>" + esc(NotifyService.rolesText(n)) + "</b>"
+                + (n.isActive() ? "" : "\n\n⚠️ Bildirishnoma o'chirib turilgan (⚪) — tugma ko'rinmaydi, ▶️ Yoqish kerak.");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("✍️ Tugma matni", "a:nfbl:" + id)));
+        rows.add(irow(ib(set.contains(Role.KASSIR), "Kassirlar", "a:nfbr:" + id + ":KASSIR"),
+                ib(set.contains(Role.BUXGALTER), "Buxgalterlar", "a:nfbr:" + id + ":BUXGALTER"),
+                ib(set.contains(Role.SUPERADMIN), "SuperAdminlar", "a:nfbr:" + id + ":SUPERADMIN")));
+        if (!n.getButtonLabel().isBlank()) rows.add(irow(btn("🗑 Tugmani olib tashlash", "a:nfbx:" + id)));
         rows.add(irow(btn("⬅️ Orqaga", "a:nfc:" + id)));
         show(chatId, msgId, text, rows);
     }

@@ -19,13 +19,15 @@ public class LabelService {
 
     /** Nomi o'zgartirilishi mumkin bo'lgan tugmalar (kanonik ro'yxat). */
     public static final List<String> RENAMABLE = List.of(
-            // Bosh menyu
-            "🏪 KASSA", "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ",
+            // Bosh menyu (Buxgalter/SuperAdmin: 🏪 Кассалар · 📥 · 📊 Ҳисоботлар · 🤝 · 💰 · ⚙️)
+            "🏪 Кассалар", "📊 Ҳисоботлар", "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ",
             "🔁 O'tkazma", "📤 Hisobot topshirish",
             "🤝 КОНТРАГЕНТ", "💰 Баланс",
             // Panel darajasi
             "🏬 Отдел", "⚙️ Настройка", "📈 Статистика", "💰 Бугунги тушум",
-            "🧾 Расходлар", "📆 Давр танлаш",
+            "🧾 Расходлар", "📥 Кутилаётганлар", "📆 Давр танлаш",
+            // ⚙️ Настройка guruhlari
+            "🏢 Ташкилот", "💼 Молия", "🔗 MoySklad", "🎛 Интерфейс",
             // Статистика bo'limi
             "🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
             "👥 Фойдаланувчилар умумий", "🏦 Бухгалтерия",
@@ -38,7 +40,7 @@ public class LabelService {
             "💵 Пул қолдиғи", "🏦 Ҳисобот");
 
     /** O'chirib bo'lmaydigan bo'lim — sozlamalarga kirish yo'li yopilib qolmasin. */
-    public static final String PROTECTED_LABEL = "🏪 KASSA";
+    public static final String PROTECTED_LABEL = "⚙️ Настройка";
 
     private final SettingsService settings;
     private volatile Map<String, String> toDisplay = Map.of();

@@ -27,6 +27,8 @@ public class PermService {
 
     private volatile Map<Long, Map<String, Boolean>> userOv = Map.of();
     private volatile Map<Long, Map<String, Boolean>> kassaOv = Map.of();
+    /** Rol kesimida: "perm.role.<ROL>" — qatorlar canonical=0|1 (web sxema muharriri). */
+    private volatile Map<Role, Map<String, Boolean>> roleOv = Map.of();
 
     public PermService(SettingsService settings, SettingRepo settingRepo, LabelService labelSvc) {
         this.settings = settings;
@@ -38,25 +40,63 @@ public class PermService {
     public void reload() {
         Map<Long, Map<String, Boolean>> u = new HashMap<>();
         Map<Long, Map<String, Boolean>> k = new HashMap<>();
+        Map<Role, Map<String, Boolean>> r = new HashMap<>();
         for (uz.kassa.domain.Setting st : settingRepo.findAll()) {
             String key = st.getKey();
             if (key.startsWith("perm.user.")) put(u, key.substring(10), st.getValue());
             else if (key.startsWith("perm.kassa.")) put(k, key.substring(11), st.getValue());
+            else if (key.startsWith("perm.role.")) {
+                try {
+                    Map<String, Boolean> m = parse(st.getValue());
+                    if (!m.isEmpty()) r.put(Role.valueOf(key.substring(10)), m);
+                } catch (IllegalArgumentException ignored) { /* noma'lum rol */ }
+            }
         }
         userOv = u;
         kassaOv = k;
+        roleOv = r;
     }
 
     private void put(Map<Long, Map<String, Boolean>> into, String idS, String value) {
         long id;
         try { id = Long.parseLong(idS); } catch (NumberFormatException e) { return; }
+        Map<String, Boolean> m = parse(value);
+        if (!m.isEmpty()) into.put(id, m);
+    }
+
+    private static Map<String, Boolean> parse(String value) {
         Map<String, Boolean> m = new HashMap<>();
         for (String line : (value == null ? "" : value).split("\n")) {
             int eq = line.lastIndexOf('=');
             if (eq <= 0) continue;
             m.put(line.substring(0, eq), line.substring(eq + 1).equals("1"));
         }
-        if (!m.isEmpty()) into.put(id, m);
+        return m;
+    }
+
+    /** Rol uchun belgilangan holat: null — belgilanmagan, true — ruxsat, false — taqiq. */
+    public Boolean roleOverride(Role role, String canonical) {
+        Map<String, Boolean> m = roleOv.get(role);
+        return m == null ? null : m.get(canonical);
+    }
+
+    /** Shu bo'lim uchun aniq belgilangan foydalanuvchilar soni (istisnolar). */
+    public int userExceptions(String canonical) {
+        int n = 0;
+        for (Map<String, Boolean> m : userOv.values()) if (m.containsKey(canonical)) n++;
+        return n;
+    }
+
+    /** Rol darajasida belgilash: state=null — olib tashlash. */
+    public void setRole(Role role, String canonical, Boolean state) {
+        Map<String, Boolean> m = new HashMap<>();
+        Map<String, Boolean> cur = roleOv.get(role);
+        if (cur != null) m.putAll(cur);
+        if (state == null) m.remove(canonical); else m.put(canonical, state);
+        StringBuilder sb = new StringBuilder();
+        m.forEach((c, v) -> sb.append(c).append('=').append(v ? "1" : "0").append('\n'));
+        settings.set("perm.role." + role.name(), sb.toString());
+        reload();
     }
 
     /** null — belgilanmagan (meros), true — ruxsat, false — taqiq. */
@@ -98,6 +138,9 @@ public class PermService {
                 return o != null && o;
             }
         }
+        // 3) rol darajasi (web sxema muharriri): faqat shu bo'lim uchun belgilangani
+        Boolean ro = roleOverride(u.getRole(), canonical);
+        if (ro != null) return ro;
         return !labelSvc.isHidden(canonical);
     }
 

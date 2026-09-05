@@ -296,4 +296,28 @@ public class Sender {
             log.debug("answerCallback: {}", e.getMessage());
         }
     }
+
+    /** Chat menyu tugmasi (≡, matn maydoni yonida) — Mini App'ni ochadi. Faqat shaxsiy chat. */
+    public void setMenuButton(long chatId, String text, String url) {
+        try {
+            bot().execute(org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton.builder()
+                    .chatId(String.valueOf(chatId))
+                    .menuButton(org.telegram.telegrambots.meta.api.objects.menubutton.MenuButtonWebApp.builder()
+                            .text(text)
+                            .webAppInfo(org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo.builder().url(url).build())
+                            .build())
+                    .build());
+        } catch (TelegramApiException e) {
+            log.debug("Menyu tugmasi qo'yilmadi ({}): {}", chatId, e.getMessage());
+        }
+    }
+
+    /** Inline tugma bilan Mini App — initData to'liq keladi (reply-klaviatura tugmasidan farqli). */
+    public void sendWebAppButton(long chatId, String text, String button, String url) {
+        var b = org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton.builder()
+                .text(button)
+                .webApp(org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo.builder().url(url).build())
+                .build();
+        send(chatId, text, Keyboards.inline(java.util.List.of(Keyboards.irow(b))));
+    }
 }

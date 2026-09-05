@@ -58,9 +58,11 @@ public class DailyReportService {
     private final DailyReportConfirmRepo confirmRepo;
     private final Sender sender;
     private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
+    private final uz.kassa.service.moysklad.MoySkladAuditService auditSvc;
 
     public record Row(String nuqta, String kassir, long msSavdo, boolean msKnown, long botSavdo,
-                      long naqdTopshirilgan, long p2pQoldiqTiyin, boolean p2pKnown, long farq) {}
+                      long naqdTopshirilgan, long p2pQoldiqTiyin, boolean p2pKnown, long farq,
+                      Long kassaId) {}
 
     public String time() { return settings.get(TIME_KEY).filter(v -> v.matches("\\d{2}:\\d{2}")).orElse("22:00"); }
 
@@ -69,7 +71,7 @@ public class DailyReportService {
     public List<Row> rows(LocalDate d) {
         Map<Long, Long> ms;
         boolean msKnown = true;
-        try { ms = syncService.moyskladDaySales(d); }
+        try { ms = auditSvc.moyskladDaySales(d); }
         catch (Exception e) { log.warn("Kunlik hisobot: MoySklad o'qilmadi: {}", e.getMessage()); ms = Map.of(); msKnown = false; }
 
         List<Row> out = new ArrayList<>();
@@ -95,7 +97,8 @@ public class DailyReportService {
                 if (c.getCardBalance() != null) { p2p += c.getCardBalance(); known = true; }
                 else p2p += ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount() * 100;
             }
-            out.add(new Row(nuqta, kb.toString(), msSavdo, msKnown, bot, top, any ? p2p : -1, known, msSavdo - bot));
+            out.add(new Row(nuqta, kb.toString(), msSavdo, msKnown, bot, top, any ? p2p : -1, known, msSavdo - bot,
+                    k.getId()));
         }
         return out;
     }

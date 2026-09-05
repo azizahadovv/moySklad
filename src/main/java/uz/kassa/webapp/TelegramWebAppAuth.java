@@ -22,6 +22,7 @@ import java.util.TreeMap;
  */
 @Component
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class TelegramWebAppAuth {
 
     private static final long MAX_AGE_SECONDS = 24 * 3600;
@@ -33,7 +34,7 @@ public class TelegramWebAppAuth {
     /** initData yaroqli bo'lsa faol AppUser, aks holda null. */
     public AppUser authenticate(String initData) {
         try {
-            if (initData == null || initData.isBlank()) return null;
+            if (initData == null || initData.isBlank()) { log.info("WebApp auth: initData bo'sh"); return null; }
 
             Map<String, String> params = new TreeMap<>();
             for (String pair : initData.split("&")) {
@@ -43,7 +44,7 @@ public class TelegramWebAppAuth {
                         URLDecoder.decode(pair.substring(i + 1), StandardCharsets.UTF_8));
             }
             String hash = params.remove("hash");
-            if (hash == null) return null;
+            if (hash == null) { log.info("WebApp auth: hash yo'q"); return null; }
 
             StringBuilder dcs = new StringBuilder();
             for (Map.Entry<String, String> e : params.entrySet()) {
@@ -54,19 +55,20 @@ public class TelegramWebAppAuth {
             byte[] secret = hmac("WebAppData".getBytes(StandardCharsets.UTF_8),
                     props.getBot().getToken().getBytes(StandardCharsets.UTF_8));
             byte[] check = hmac(secret, dcs.toString().getBytes(StandardCharsets.UTF_8));
-            if (!hex(check).equalsIgnoreCase(hash)) return null;
+            if (!hex(check).equalsIgnoreCase(hash)) { log.warn("WebApp auth: imzo mos emas (kalitlar: {})", params.keySet()); return null; }
 
             String authDate = params.get("auth_date");
             if (authDate != null
-                    && System.currentTimeMillis() / 1000 - Long.parseLong(authDate) > MAX_AGE_SECONDS)
-                return null;
+                    && System.currentTimeMillis() / 1000 - Long.parseLong(authDate) > MAX_AGE_SECONDS) {
+                log.info("WebApp auth: eskirgan auth_date={}", authDate); return null; }
 
             long tgId = om.readTree(params.get("user")).path("id").asLong(0);
-            if (tgId == 0) return null;
-            return userRepo.findByTelegramId(tgId)
-                    .filter(AppUser::isActive)
-                    .orElse(null);
+            if (tgId == 0) { log.info("WebApp auth: user.id yo'q"); return null; }
+            AppUser u = userRepo.findByTelegramId(tgId).filter(AppUser::isActive).orElse(null);
+            if (u == null) log.info("WebApp auth: tg {} tizimda yo'q yoki faol emas", tgId);
+            return u;
         } catch (Exception e) {
+            log.warn("WebApp auth xatosi: {}", e.toString());
             return null;
         }
     }
