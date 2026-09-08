@@ -33,7 +33,7 @@ public class LabelService {
             "👥 Фойдаланувчилар умумий", "🏦 Бухгалтерия",
             "💼 Салдо", "📲 Кликлар", "📊 Свод",
             // Kassir: 📊 КАССАМ paneli ichidagi bo'limlar
-            "💸 Расход", "🧾 Қарзларим", "📊 Excel",
+            "💸 Расход", "🧾 Қарзларим", "🏦 Топширганларим", "📊 Excel",
             // Kassa kartasi (buxgalter/superadmin — 🏬 Отдел ichida)
             "💵 Топширилмаган пул",
             // Отдел основной kartasi (buxgalteriya)

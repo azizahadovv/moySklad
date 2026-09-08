@@ -92,9 +92,27 @@ public class MoySkladHttp {
 
     /* -------------------- umumiy sahifalangan GET -------------------- */
 
+    /** MoySklad API vaqt zonasi: Moskva (UTC+3) — javobdagi va filtrdagi barcha vaqtlar shunda. */
+    public static final java.time.ZoneId MS_ZONE = java.time.ZoneId.of("Europe/Moscow");
+
+    /** Bot (Toshkent) vaqtini MoySklad (Moskva) vaqtiga o'giradi — filtrlar uchun. */
+    public LocalDateTime toMs(LocalDateTime local) {
+        return local.atZone(props.zoneId()).withZoneSameInstant(MS_ZONE).toLocalDateTime();
+    }
+
+    /** MoySklad (Moskva) vaqtini bot (Toshkent) vaqtiga o'giradi — javoblar uchun. */
+    public LocalDateTime fromMs(LocalDateTime ms) {
+        return ms.atZone(MS_ZONE).withZoneSameInstant(props.zoneId()).toLocalDateTime();
+    }
+
+    /**
+     * updated>=… bo'yicha sahifalab o'qish. updatedFrom — BOT (Toshkent) vaqti; MoySklad filtri
+     * Moskva vaqtida ishlaydi, shuning uchun 2 soat orqaga o'giriladi (aks holda yangi hujjatlar
+     * 2 soat ko'rinmaydi — 2026-09-08 gacha shunday edi, reconcile 10 daqiqada yopib turardi).
+     */
     List<JsonNode> rows(String entity, String extraQuery, LocalDateTime updatedFrom) {
         String filter = URLEncoder.encode(
-                "updated>=" + updatedFrom.format(FILTER_FMT), StandardCharsets.UTF_8);
+                "updated>=" + toMs(updatedFrom).format(FILTER_FMT), StandardCharsets.UTF_8);
         return rowsFiltered(entity, extraQuery, filter);
     }
 
@@ -149,14 +167,33 @@ public class MoySkladHttp {
      * aks holda o'qilmagan hujjatlar butunlay yo'qoladi.
      */
     JsonNode getJson(String url) {
+        return request(url, null, false);
+    }
+
+
+    /** GET; 404 (obyekt o'chirilgan) -> null. 401/403 -> null (last403 belgilanadi). Boshqa xato -> exception. */
+    JsonNode getJsonOr404(String url) {
+        return request(url, null, true);
+    }
+
+
+    /** POST JSON (masalan /report/counterparty ro'yxati). Xatoda exception. */
+    JsonNode postJson(String url, String jsonBody) {
+        return request(url, jsonBody, false);
+    }
+
+
+    private JsonNode request(String url, String postBody, boolean nullOn404) {
         try {
             // MoySklad API Accept-Encoding: gzip bo'lmasa 415 qaytaradi
-            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
                     .header("Authorization", "Bearer " + currentToken())
                     .header("Accept", "application/json;charset=utf-8")
-                    .header("Accept-Encoding", "gzip")
-                    .GET().build();
-            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+                    .header("Accept-Encoding", "gzip");
+            if (postBody == null) b.GET();
+            else b.header("Content-Type", "application/json")
+                  .POST(HttpRequest.BodyPublishers.ofString(postBody, StandardCharsets.UTF_8));
+            HttpResponse<byte[]> resp = http.send(b.build(), HttpResponse.BodyHandlers.ofByteArray());
             String body = decodeBody(resp);
             if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 log.warn("MoySklad ruxsat yo'q -> HTTP {} ({})", resp.statusCode(), url);
@@ -164,6 +201,7 @@ public class MoySkladHttp {
                 last403Url = url;
                 return null;
             }
+            if (nullOn404 && resp.statusCode() == 404) return null;
             if (resp.statusCode() != 200)
                 throw new IllegalStateException("MoySklad HTTP " + resp.statusCode() + ": "
                         + (body.length() > 200 ? body.substring(0, 200) : body));

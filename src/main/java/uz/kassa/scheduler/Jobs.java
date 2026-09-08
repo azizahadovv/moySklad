@@ -43,6 +43,11 @@ public class Jobs {
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
     private final uz.kassa.service.DailyReportService dailyReport;
     private final uz.kassa.service.notify.NotifyService notifySvc;
+    private final uz.kassa.service.control.AgentCheckService agentCheckSvc;
+    private final uz.kassa.service.control.ShipmentControlService shipmentSvc;
+    private final uz.kassa.service.control.ControlConfig controlCfg;
+    private final uz.kassa.service.control.EmployeeLinkService employeeLink;
+    private volatile long lastBalanceTick = 0;
 
     /**
      * Click qoldiqlari soatlik hisoboti yuboriladigan guruh/kanallar — vergul bilan
@@ -579,5 +584,48 @@ public class Jobs {
                 log.warn("Eslatma ({}): {}", k.getName(), e.getMessage());
             }
         }
+    }
+
+    /* ==================== 🕵️ КОНТРАГЕНТ НАЗОРАТИ ==================== */
+
+    /** A-modul: yangi/o'zgargan kontragentlar — qoidalar, xabar, eskalatsiya (har 2 daqiqa). */
+    @Scheduled(fixedDelayString = "PT2M", initialDelayString = "PT90S")
+    public void controlAgents() {
+        try { agentCheckSvc.tick(); }
+        catch (Exception e) { log.warn("Kontragent nazorati xatosi: {}", e.getMessage()); }
+    }
+
+    /** B-modul: otgruzkalar — 2 soat tekshiruvi, QARZ/YOPILDI/BEKOR (har 2 daqiqa). */
+    @Scheduled(fixedDelayString = "PT2M", initialDelayString = "PT100S")
+    public void controlShipments() {
+        try { shipmentSvc.tick(); }
+        catch (Exception e) { log.warn("Otgruzka nazorati xatosi: {}", e.getMessage()); }
+    }
+
+    /** Qarzdorlar balansi — control.check_min (standart 20) daqiqada bir. */
+    @Scheduled(fixedDelayString = "PT1M", initialDelayString = "PT3M")
+    public void controlBalances() {
+        long now = System.currentTimeMillis();
+        if (now - lastBalanceTick < controlCfg.checkMin() * 60_000L) return;
+        lastBalanceTick = now;
+        try { shipmentSvc.balanceTick(); }
+        catch (Exception e) { log.warn("Qarz balans tekshiruvi xatosi: {}", e.getMessage()); }
+    }
+
+    /** 👔 MoySklad xodimlari → bot: otdelga avtomatik bo'lish, yangi xodim, rahbar (soatda bir). */
+    @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT2M")
+    public void employeeSync() {
+        if (!controlCfg.enabled()) return;
+        try { employeeLink.syncEmployees(true, null); }
+        catch (Exception e) { log.warn("Xodimlar sinxroni xatosi: {}", e.getMessage()); }
+    }
+
+    /** Kunlik jamlamalar (daily_time dan keyin, kuniga bir marta). */
+    @Scheduled(fixedDelayString = "PT10M", initialDelayString = "PT4M")
+    public void controlDaily() {
+        try { shipmentSvc.dailyTick(); }
+        catch (Exception e) { log.warn("Qarz kunlik jamlama xatosi: {}", e.getMessage()); }
+        try { agentCheckSvc.dailyTick(); }
+        catch (Exception e) { log.warn("Kontragent kunlik jamlama xatosi: {}", e.getMessage()); }
     }
 }

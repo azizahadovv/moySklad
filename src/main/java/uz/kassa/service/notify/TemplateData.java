@@ -43,6 +43,8 @@ public class TemplateData {
     private final MoySkladClient msClient;
     private final AppProps props;
     private final uz.kassa.service.DailyReportService dailyReport;
+    private final ShipmentRepo shipmentRepo;
+    private final AgentCheckRepo agentCheckRepo;
 
     private final Map<String, PeriodData> periodCache = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -324,6 +326,21 @@ public class TemplateData {
             case "kassa_soni": return (long) kassas.size() * 100;
             case "xodim_soni": return userRepo.findByActiveTrueOrderByRoleAscIdAsc().size() * 100L;
             case "eslatma_faol": return reminderRepo.findByStatusOrderByDueDateAscIdAsc(Reminder.Status.FAOL).size() * 100L;
+            // 🕵️ Otgruzka nazorati (qarzdorlar) va kontragent xatolari
+            case "qarzdor_soni": return shipmentRepo.countByControlStatus(Shipment.Status.QARZ) * 100L;
+            case "qarzdor_summa": {
+                long s = 0;
+                for (Shipment x : shipmentRepo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ)) s += x.remain();
+                return som(s);
+            }
+            case "qarzdor_otgan": {
+                LocalDate today = LocalDate.now(props.zoneId());
+                return shipmentRepo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ).stream()
+                        .filter(x -> x.getDueAt() != null && x.getDueAt().isBefore(today)).count() * 100;
+            }
+            case "qarzdor_muddatsiz": return shipmentRepo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ).stream()
+                    .filter(x -> x.getDueAt() == null).count() * 100;
+            case "kg_xato_soni": return agentCheckRepo.countByStatus(AgentCheck.Status.OCHIQ) * 100L;
             case "eslatma_otgan": {
                 LocalDate today = LocalDate.now(props.zoneId());
                 return reminderRepo.findByStatusOrderByDueDateAscIdAsc(Reminder.Status.FAOL).stream()

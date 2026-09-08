@@ -101,7 +101,18 @@ public final class NotifyPresets {
             {#eslatmalar:otgan}
             • {agent} — <b>{qoldiq}</b> so'm, {holat}
             {/eslatmalar}
-            Faol eslatmalar: {jami.eslatma_faol} ta · qoldiq {jami.eslatma_qoldiq} so'm""")
+            Faol eslatmalar: {jami.eslatma_faol} ta · qoldiq {jami.eslatma_qoldiq} so'm"""),
+
+        new Preset("qarzdor", "🧾 Qarzdorlar (otgruzka nazorati)",
+            "Otgruzka nazorati: qarzdor otgruzkalar soni, qoldiq summasi, muddati o'tganlar va "
+            + "tuzatilmagan kontragentlar. Har kuni 18:00. Kimga: SuperAdmin, Buxgalter.",
+            "🧾 Qarzdorlar (namuna)", "times:18:00", "", "rol:SUPERADMIN,rol:BUXGALTER", 0,
+            """
+            🧾 <b>Qarzdorlar (otgruzka nazorati)</b> — {sana}
+            Jami: <b>{jami.qarzdor_soni}</b> ta otgruzka · qoldiq <b>{jami.qarzdor_summa}</b> so'm
+            ⚠️ Muddati o'tgan: {jami.qarzdor_otgan} ta · ❗ Muddatsiz: {jami.qarzdor_muddatsiz} ta
+            ⚠️ Tuzatilmagan kontragentlar: {jami.kg_xato_soni} ta
+            Batafsil: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар / ⚠️ Хатолар""")
     );
 
     public static Preset byKey(String key) {

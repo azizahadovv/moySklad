@@ -38,6 +38,7 @@ public class AdminHandler {
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
     private final NotifyAdminHandler notifyAdmin;
+    private final ControlAdminHandler controlAdmin;
     private final MenuSchemaHandler menuSchemaH;
     private final MenuSupport menus;
     private final MenuSchemaService schema;
@@ -81,6 +82,7 @@ public class AdminHandler {
             case ADM_CG_ID -> { settingsH.cgIdSave(u, s, text, chatId); return true; }
             case ADM_CG_FOOTER -> { settingsH.cgFooterSave(u, s, text, chatId); return true; }
             case ADM_LS_DATE -> { msH.lsSave(u, s, text, chatId); return true; }
+            case ADM_CT_VAL -> { controlAdmin.onText(u, s, text, chatId); return true; }
             case ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN -> {
                 if (notifyAdmin.onText(u, s, text, chatId)) return true;
             }
@@ -149,6 +151,9 @@ public class AdminHandler {
             sender.send(chatId, "⚠️ Ҳуқуқлар bo'limi faqat SuperAdmin uchun.");
             return true;
         }
+
+        // 🕵️ Назорат sozlamalari (a:ct*)
+        if (cmd.startsWith("ct")) return controlAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
 
         switch (cmd) {
             case "p" -> panel(u, s, arg, chatId, msgId);
@@ -413,6 +418,7 @@ public class AdminHandler {
                     case "🔄 Номлар (MoySklad)" -> namesH.msNamesMenu(chatId, 0);
                     case "📣 Гуруҳлар/Каналлар" -> settingsH.clickGroupMenu(s, chatId, 0);
                     case "🔔 Билдиришномалар" -> notifyAdmin.menu(s, chatId, 0);
+                    case "🕵️ Назорат" -> controlAdmin.menu(s, chatId, 0);
                     case "💳 Карта масъуллари" -> settingsH.kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> msH.ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> msH.diagMenu(s, chatId, 0);
@@ -635,6 +641,7 @@ public class AdminHandler {
         ACTIONS.put("🔄 Номлар (MoySklad)", (u, s, c) -> namesH.msNamesMenu(c, 0));
         ACTIONS.put("📣 Гуруҳлар/Каналлар", (u, s, c) -> settingsH.clickGroupMenu(s, c, 0));
         ACTIONS.put("🔔 Билдиришномалар", (u, s, c) -> notifyAdmin.menu(s, c, 0));
+        ACTIONS.put("🕵️ Назорат", (u, s, c) -> controlAdmin.menu(s, c, 0));
         ACTIONS.put("💳 Карта масъуллари", (u, s, c) -> settingsH.kartaMasList(c, 0));
         ACTIONS.put("📅 Ledger санаси", (u, s, c) -> msH.ledgerMenu(s, c, 0));
         ACTIONS.put("🩺 Диагностика", (u, s, c) -> msH.diagMenu(s, c, 0));

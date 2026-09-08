@@ -36,6 +36,7 @@ public class MembershipTracker {
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
     private final uz.kassa.service.DailyReportService dailyReport;
     private final MenuSupport menus;
+    private final uz.kassa.service.control.EmployeeLinkService employeeLink;
 
 
     /**
@@ -128,6 +129,8 @@ public class MembershipTracker {
                         && TextUtil.phoneEq(cand.getPhone(), contactPhone)) {
                     cand.setTelegramId(tgId);
                     userRepo.save(cand);
+                    // MoySklad xodimi bo'lsa — otdeli va rahbarligi darhol MoySklad bo'yicha
+                    try { employeeLink.applyDepartment(cand, null); } catch (Exception e) { log.warn("Otdel qo'llash: {}", e.getMessage()); }
                     sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(cand.getFullName())
                             + "</b>!\n" + menus.otdelLabel(cand), menus.menuFor(cand));
                     notify.toRole(Role.SUPERADMIN, "🔗 <b>" + esc(cand.getFullName())
@@ -137,9 +140,42 @@ public class MembershipTracker {
                 }
             }
         }
+        // 👔 MoySklad xodimlari ro'yxatida bor odam — avtomatik ro'yxatdan o'tadi (KASSIR, MoySklad otdeli, РОП → rahbar)
+        if (!TextUtil.normPhone(contactPhone).isEmpty()) {
+            try {
+                Optional<AppUser> reg = employeeLink.registerByPhone(contactPhone, null);
+                if (reg.isPresent()) {
+                    AppUser u = reg.get();
+                    if (!u.isActive()) {
+                        sender.send(chatId, "⚠️ Hisobingiz faolsizlantirilgan — SuperAdmin'ga murojaat qiling.");
+                        notify.toRole(Role.SUPERADMIN, "⚠️ Faolsizlantirilgan foydalanuvchi <b>" + esc(u.getFullName())
+                                + "</b> kontakt yubordi (MoySklad xodimi). Kerak bo'lsa qayta faollashtiring.", null);
+                        return;
+                    }
+                    if (u.getTelegramId() != null && !u.getTelegramId().equals(tgId)) {
+                        sender.send(chatId, "⚠️ Bu telefon raqami boshqa Telegram hisobiga ulangan — SuperAdmin'ga murojaat qiling.");
+                        notify.toRole(Role.SUPERADMIN, "⚠️ <b>" + esc(u.getFullName()) + "</b> raqami bilan boshqa Telegram (<code>"
+                                + tgId + "</code>) kontakt yubordi — tekshiring.", null);
+                        return;
+                    }
+                    u.setTelegramId(tgId);
+                    userRepo.save(u);
+                    sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(u.getFullName()) + "</b>!\n"
+                            + "Siz MoySklad xodimlari ro'yxatida borsiz — avtomatik ro'yxatdan o'tdingiz.\n"
+                            + menus.otdelLabel(u), menus.menuFor(u));
+                    notify.toRole(Role.SUPERADMIN, "✅ <b>" + esc(u.getFullName()) + "</b> MoySklad xodimi sifatida avtomatik "
+                            + "ro'yxatdan o'tdi · " + menus.otdelLabel(u) + "\nTelefon: <code>" + esc(contactPhone) + "</code>", null);
+                    return;
+                }
+            } catch (Exception e) {
+                log.warn("MoySklad bo'yicha avto-ro'yxat xatosi: {}", e.getMessage());
+            }
+        }
         sender.send(chatId, "✅ Telefon raqamingiz qabul qilindi: <b>"
                 + esc(m.getContact().getPhoneNumber()) + "</b>\n\n"
-                + "SuperAdmin sizni shu raqam orqali topib tizimga qo'shadi.");
+                + "SuperAdmin sizni shu raqam orqali topib tizimga qo'shadi.\n"
+                + "ℹ️ MoySklad xodimlari ro'yxatida bo'lganlar avtomatik ulanadi — buning uchun MoySklad'dagi telefon "
+                + "raqamingiz shu raqam bilan bir xil bo'lishi kerak.");
         String who = m.getFrom().getFirstName() == null ? "" : m.getFrom().getFirstName();
         if (m.getFrom().getLastName() != null) who += " " + m.getFrom().getLastName();
         notify.toRole(Role.SUPERADMIN, "📱 <b>Yangi kontakt:</b> " + esc(who.trim())

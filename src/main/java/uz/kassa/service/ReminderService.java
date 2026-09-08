@@ -115,6 +115,7 @@ public class ReminderService {
     @Transactional
     public void syncFromMoySklad() {
         for (Reminder r : activeAll()) {
+            if (r.isAuto()) continue;   // otgruzka nazorati o'zi yuritadi (ShipmentControlService)
             if (r.getAgentMsId() == null || r.getAgentMsId().isBlank()) continue;
             try {
                 Long bal = msClient.fetchAgentBalanceSom(r.getAgentMsId());
@@ -176,6 +177,7 @@ public class ReminderService {
         String dir = r.getDirection() == Reminder.Direction.BIZ_QARZDOR
                 ? "🔴 Biz to'lashimiz kerak" : "🟢 U bizga qaytarishi kerak";
         StringBuilder sb = new StringBuilder();
+        if (r.isAuto()) sb.append("📦 <i>otgruzka nazorati (avtomatik)</i>\n");
         sb.append("🤝 <b>").append(TextUtil.esc(r.getAgentName())).append("</b>");
         if (r.getAgentInfo() != null && !r.getAgentInfo().isBlank())
             sb.append(" · ").append(TextUtil.esc(r.getAgentInfo()));
@@ -213,6 +215,7 @@ public class ReminderService {
         if (LocalTime.now(props.zoneId()).isBefore(NOTIFY_AT)) return;
         for (Reminder r : activeAll()) {
             try {
+                if (r.isAuto()) continue;   // kunlik jamlama otgruzka nazoratida
                 if (today.equals(r.getLastNotified())) continue;
                 long left = ChronoUnit.DAYS.between(today, r.getDueDate());
                 boolean send = left <= 0 || r.remindDaySet().contains((int) left);

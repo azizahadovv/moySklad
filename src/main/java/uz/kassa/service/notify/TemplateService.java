@@ -99,7 +99,8 @@ public class TemplateService {
             <b>Yig'indi</b> <code>{jami.MAYDON}</code>: naqd · klik · terminal · hammasi · \
             prixod · prixod_naqd · prixod_beznaqd · vozvrat · rasxod · sof · karta_qoldiq · karta_ms · \
             karta_farq · karta_farq_soni · karta_kiritilmagan · karta_soni · kassa_soni · \
-            eslatma_faol · eslatma_otgan · eslatma_qoldiq · qarz_ochiq · topshirilmagan
+            eslatma_faol · eslatma_otgan · eslatma_qoldiq · qarz_ochiq · topshirilmagan · \
+            qarzdor_soni · qarzdor_summa · qarzdor_otgan · qarzdor_muddatsiz · kg_xato_soni (🕵️ nazorat)
             Tanlangan otdellar: <code>{jami.naqd:kassa=1,3}</code>
 
             <b>Davr</b> (prixod/vozvrat/rasxod/kirim/chiqim uchun, ":" bilan):

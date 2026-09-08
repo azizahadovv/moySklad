@@ -8,4 +8,5 @@ import java.util.List;
 public interface SubmissionRepo extends JpaRepository<Submission, Long> {
     List<Submission> findByStatusOrderByIdAsc(SubmissionStatus status);
     List<Submission> findByKassaIdAndStatusOrderByIdAsc(Long kassaId, SubmissionStatus status);
+    List<Submission> findTop200ByKassaIdOrderByIdDesc(Long kassaId);
 }

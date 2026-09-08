@@ -38,6 +38,9 @@ public class KassirHandler {
     private final uz.kassa.webapp.ExcelReportService excelReport;
     private final PermService permSvc;
     private final uz.kassa.service.BalansService balansSvc;
+    private final uz.kassa.repo.AppUserRepo userRepo;
+    private final uz.kassa.repo.SubmissionRepo subRepo;
+    private final uz.kassa.config.AppProps props;
 
     /* ============================ MATN ============================ */
 
@@ -122,6 +125,7 @@ public class KassirHandler {
             }
             case "sd" -> sbCreate(u, s, arg, chatId, msgId);
             case "hp" -> historyPeriod(u, arg, chatId, msgId);
+            case "tp" -> topshirganlarim(u, arg, chatId, msgId);
             case "bl" -> {   // 💰 Баланс ko'rinishini almashtirish
                 if (u.getKassaId() == null) return true;
                 sender.edit(chatId, msgId, balansSvc.buildKassa(u.getKassaId(),
@@ -397,7 +401,7 @@ public class KassirHandler {
 
     private static final List<String> KASSAM_MENU = List.of(
             "💰 Бугунги тушум", "💸 Расход", "📆 Давр танлаш",
-            "💼 Салдо", "🧾 Қарзларим", "📊 Excel");
+            "💼 Салдо", "🧾 Қарзларим", "🏦 Топширганларим", "📊 Excel");
     private static final List<String> KPERIODS = List.of(
             "📆 Bugun", "Kecha", "7 kun", "30 kun", "Shu oy");
 
@@ -439,6 +443,7 @@ public class KassirHandler {
                     }
                     case "💼 Салдо" -> balance(u, chatId);
                     case "🧾 Қарзларим" -> debts(u, chatId);
+                    case "🏦 Топширганларим" -> topshirganlarim(u, "30", chatId, 0);
                     case "📊 Excel" -> {
                         s.data.put("knav", "kexcel");
                         kSend(s, chatId, "📊 <b>Excel</b> — o'z kassangiz bo'yicha\n\n"
@@ -575,6 +580,84 @@ public class KassirHandler {
                     irow(btn("7 kun", "k:hp:7"), btn("30 kun", "k:hp:30"), btn("Shu oy", "k:hp:m")))));
         else sender.send(chatId, sb.toString());   // menu-rejim: inline tugmalarsiz
     }
+
+    /* ==================== 🏦 TOPSHIRGANLARIM ==================== */
+
+    /** Kassir topshirgan pullar: hisobotlar (holati, qabul summasi, kim/qachon) + to'g'ridan-to'g'ri qabullar. code: 7|30|m|all */
+    private void topshirganlarim(AppUser u, String code, long chatId, int msgId) {
+        Long kid = u.getKassaId();
+        if (kid == null) { sender.send(chatId, "⚠️ Siz kassaga biriktirilmagansiz."); return; }
+        java.time.LocalDate t = ledger.today();
+        java.time.LocalDate from = switch (code) {
+            case "7" -> t.minusDays(6);
+            case "m" -> t.withDayOfMonth(1);
+            case "all" -> java.time.LocalDate.of(2000, 1, 1);
+            default -> t.minusDays(29);
+        };
+        String label = switch (code) { case "7" -> "7 kun"; case "m" -> "shu oy"; case "all" -> "hammasi"; default -> "30 kun"; };
+        java.time.ZoneId z = props.zoneId();
+        DateTimeFormatter dtf = DateTimeFormatter.ofPattern("dd.MM HH:mm");
+        record Row(java.time.LocalDate date, java.time.Instant at, String text) {}
+        List<Row> rows = new ArrayList<>();
+        long accN = 0, accK = 0, pendN = 0, pendK = 0;
+        int pend = 0;
+        for (Submission sb : subRepo.findTop200ByKassaIdOrderByIdDesc(kid)) {
+            java.time.LocalDate d = sb.getCreatedAt().atZone(z).toLocalDate();
+            if (d.isBefore(from)) continue;
+            String who = sb.getDecidedBy() == null ? "" : userRepo.findById(sb.getDecidedBy()).map(AppUser::getFullName).orElse("");
+            String when = sb.getDecidedAt() == null ? "" : sb.getDecidedAt().atZone(z).format(dtf);
+            String sums = "Naqd " + fmt(sb.getNaqd()) + (sb.getKlik() > 0 ? " · Click " + fmt(sb.getKlik()) : "");
+            String st;
+            switch (sb.getStatus()) {
+                case KUTILMOQDA -> { pend++; pendN += sb.getNaqd(); pendK += sb.getKlik(); st = "⏳ kutilmoqda"; }
+                case QABUL -> { accN += nz(sb.getAcceptedNaqd()); accK += nz(sb.getAcceptedKlik()); st = "✅ qabul qilindi"; }
+                case QISMAN_QABUL -> {
+                    accN += nz(sb.getAcceptedNaqd()); accK += nz(sb.getAcceptedKlik());
+                    st = "🟡 qisman: Naqd " + fmt(nz(sb.getAcceptedNaqd()))
+                            + (nz(sb.getAcceptedKlik()) > 0 ? " · Click " + fmt(nz(sb.getAcceptedKlik())) : "");
+                }
+                default -> st = "❌ rad etildi";
+            }
+            String line = "• " + d.format(DF) + " Hisobot #" + sb.getId() + " · " + sums + " → " + st
+                    + (who.isEmpty() ? "" : " (" + esc(who) + (when.isEmpty() ? "" : ", " + when) + ")")
+                    + (sb.getComment() == null || sb.getComment().isBlank() ? "" : "\n   💬 " + esc(sb.getComment()));
+            rows.add(new Row(d, sb.getCreatedAt(), line));
+        }
+        // hisobotsiz, to'g'ridan-to'g'ri qabul (TOPSHIRIQ, submission_id yo'q)
+        for (Operation o : opRepo.findTop300ByTypeAndFromOwnerTypeAndFromOwnerIdOrderByIdDesc(OpType.TOPSHIRIQ, OwnerType.KASSA, kid)) {
+            if (o.getSubmissionId() != null || o.getStatus() != OpStatus.TASDIQLANGAN) continue;
+            if (o.getOpDate().isBefore(from)) continue;
+            if (o.getMoneyType() == MoneyType.NAQD) accN += o.getAmount(); else accK += o.getAmount();
+            String who = o.getDecidedBy() == null ? "" : userRepo.findById(o.getDecidedBy()).map(AppUser::getFullName).orElse("");
+            rows.add(new Row(o.getOpDate(), o.getCreatedAt(), "• " + o.getOpDate().format(DF) + " 💰 To'g'ridan-to'g'ri qabul · "
+                    + fmt(o.getAmount()) + " so'm (" + mtLabel(o.getMoneyType()) + ")" + (who.isEmpty() ? "" : " (" + esc(who) + ")")
+                    + (o.getComment() == null || o.getComment().isBlank() ? "" : "\n   💬 " + esc(o.getComment()))));
+        }
+        rows.sort(java.util.Comparator.comparing(Row::date).thenComparing(Row::at).reversed());
+        StringBuilder sb = new StringBuilder("🏦 <b>Topshirganlarim</b> — " + esc(names.owner(OwnerType.KASSA, kid)) + " · " + label + "\n\n");
+        sb.append("✅ Qabul qilingan: Naqd <b>").append(fmt(accN)).append("</b> · Click <b>").append(fmt(accK)).append("</b> so'm\n");
+        if (pend > 0)
+            sb.append("⏳ Kutilmoqda: <b>").append(pend).append("</b> ta · Naqd ").append(fmt(pendN)).append(" · Click ").append(fmt(pendK)).append("\n");
+        if (rows.isEmpty()) sb.append("\nBu davrda topshirilgan pul yo'q.");
+        else {
+            sb.append("\n");
+            int n = 0;
+            for (Row r : rows) {
+                if (++n > 20) { sb.append("\n<i>…yana ").append(rows.size() - 20).append(" ta (davrni qisqartiring)</i>"); break; }
+                sb.append(r.text()).append("\n");
+            }
+        }
+        var kb = inline(List.of(irow(
+                btn(code.equals("7") ? "✅ 7 kun" : "7 kun", "k:tp:7"),
+                btn(code.equals("30") ? "✅ 30 kun" : "30 kun", "k:tp:30"),
+                btn(code.equals("m") ? "✅ Shu oy" : "Shu oy", "k:tp:m"),
+                btn(code.equals("all") ? "✅ Hammasi" : "Hammasi", "k:tp:all"))));
+        if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), kb);
+        else sender.send(chatId, sb.toString(), kb);
+    }
+
+    private static long nz(Long v) { return v == null ? 0 : v; }
+
 
     private String opLine(Operation o, Long myKassaId) {
         boolean outgoing = o.getFromOwnerType() == OwnerType.KASSA

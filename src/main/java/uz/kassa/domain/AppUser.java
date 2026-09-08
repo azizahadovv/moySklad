@@ -29,6 +29,14 @@ public class AppUser {
     @Builder.Default
     private boolean active = true;
 
+    /** MoySklad xodimi (employee UUID) — otgruzka/kontragent egasini botdagi odamga bog'lash. */
+    @Column(name = "ms_employee_id")
+    private String msEmployeeId;
+
+    /** MoySklad login (audit uid), masalan zufar@newstarbukhara. */
+    @Column(name = "ms_uid")
+    private String msUid;
+
     @Builder.Default
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();

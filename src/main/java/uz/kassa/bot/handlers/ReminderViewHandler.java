@@ -48,7 +48,7 @@ public class ReminderViewHandler {
         int shown = 0;
         for (Reminder r : list) {
             if (shown++ >= 15) break;
-            rows.add(irow(btn("📄 #" + r.getId() + " · " + r.getAgentName() + " · "
+            rows.add(irow(btn((r.isAuto() ? "📦 #" : "📄 #") + r.getId() + " · " + r.getAgentName() + " · "
                     + fmt(r.remain()) + " · " + r.getDueDate().format(DF), "kg:v:" + r.getId())));
         }
         if (!list.isEmpty()) sb.append("\nBatafsil ko'rish uchun tanlang:");

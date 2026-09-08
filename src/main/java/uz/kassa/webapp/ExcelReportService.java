@@ -112,6 +112,104 @@ public class ExcelReportService {
         }
     }
 
+    /* ---------------- 🕵️ NAZORAT: qarzdorlar / kontragent xatolari ---------------- */
+
+    /** 🧾 Qarzdor otgruzkalar ro'yxati (docs/KONTRAGENT-NAZORAT.md). */
+    public byte[] buildDebts(List<uz.kassa.domain.Shipment> list,
+                             java.util.function.Function<Long, String> userName,
+                             java.util.function.Function<Long, String> kassaName,
+                             java.time.ZoneId zone) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            CellStyle head = wb.createCellStyle();
+            Font hf = wb.createFont(); hf.setBold(true); head.setFont(hf);
+            head.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            head.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            CellStyle money = wb.createCellStyle();
+            money.setDataFormat(wb.createDataFormat().getFormat("#,##0"));
+
+            Sheet sh = wb.createSheet("Qarzdorlar");
+            String[] cols = {"№ otgruzka", "Sana", "Otdel", "Xodim", "Klient", "Telefon", "Summa", "To'langan",
+                    "Qoldiq", "Kontragent balansi", "Status (MS)", "To'lov muddati", "Holat", "Масъул",
+                    "Qarzda (kun)", "Komentariya", "Kamchilik"};
+            Row hr = sh.createRow(0);
+            for (int i = 0; i < cols.length; i++) {
+                Cell c = hr.createCell(i); c.setCellValue(cols[i]); c.setCellStyle(head);
+            }
+            java.time.format.DateTimeFormatter df = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy");
+            java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+            LocalDate today = LocalDate.now(zone);
+            int r = 1;
+            for (uz.kassa.domain.Shipment s : list) {
+                Row row = sh.createRow(r++);
+                row.createCell(0).setCellValue(s.getDocNo());
+                row.createCell(1).setCellValue(s.getMoment() == null ? "" : s.getMoment().format(dtf));
+                row.createCell(2).setCellValue(s.getKassaId() == null ? "" : kassaName.apply(s.getKassaId()));
+                row.createCell(3).setCellValue(s.getOwnerUserId() == null ? s.getOwnerName() : userName.apply(s.getOwnerUserId()));
+                row.createCell(4).setCellValue(s.getAgentName());
+                row.createCell(5).setCellValue(s.getAgentPhone());
+                Cell c6 = row.createCell(6); c6.setCellValue(s.getSum()); c6.setCellStyle(money);
+                Cell c7 = row.createCell(7); c7.setCellValue(s.getPayedSum()); c7.setCellStyle(money);
+                Cell c8 = row.createCell(8); c8.setCellValue(s.remain()); c8.setCellStyle(money);
+                if (s.getAgentBalance() != null) { Cell c9 = row.createCell(9); c9.setCellValue(s.getAgentBalance()); c9.setCellStyle(money); }
+                row.createCell(10).setCellValue(s.getState());
+                row.createCell(11).setCellValue(s.getDueAt() == null ? "" : s.getDueAt().format(df));
+                row.createCell(12).setCellValue(s.getDueAt() == null ? "muddat yo'q"
+                        : s.getDueAt().isBefore(today) ? "o'tgan" : s.getDueAt().equals(today) ? "bugun" : "kutilmoqda");
+                row.createCell(13).setCellValue(s.getMasul());
+                if (s.getDebtSince() != null)
+                    row.createCell(14).setCellValue(java.time.temporal.ChronoUnit.DAYS.between(s.getDebtSince(), java.time.Instant.now()));
+                row.createCell(15).setCellValue(s.getComment() == null ? "" : s.getComment());
+                row.createCell(16).setCellValue(uz.kassa.service.control.ShipmentControlService.issueLabels(s.issueList()));
+            }
+            for (int i = 0; i < cols.length; i++) sh.autoSizeColumn(i);
+            wb.write(bos);
+            return bos.toByteArray();
+        } catch (Exception e) {
+            log.error("Qarzdorlar Excel xatosi: {}", e.getMessage());
+            throw new RuntimeException("Excel tayyorlashda xato: " + e.getMessage());
+        }
+    }
+
+
+    /** ⚠️ Tuzatilmagan kontragentlar ro'yxati. */
+    public byte[] buildAgentErrors(List<uz.kassa.domain.AgentCheck> list,
+                                   java.util.function.Function<Long, String> userName,
+                                   java.util.function.Function<Long, String> kassaName,
+                                   java.util.function.Function<String, String> ruleTitle) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            CellStyle head = wb.createCellStyle();
+            Font hf = wb.createFont(); hf.setBold(true); head.setFont(hf);
+            head.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            head.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+            Sheet sh = wb.createSheet("Kontragent xatolari");
+            String[] cols = {"Kontragent", "Yaratilgan", "Xodim (bot)", "MoySklad login", "Otdel", "Xatolar", "Holat", "Xabar berilgan"};
+            Row hr = sh.createRow(0);
+            for (int i = 0; i < cols.length; i++) {
+                Cell c = hr.createCell(i); c.setCellValue(cols[i]); c.setCellStyle(head);
+            }
+            java.time.format.DateTimeFormatter dtf = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+            int r = 1;
+            for (uz.kassa.domain.AgentCheck a : list) {
+                Row row = sh.createRow(r++);
+                row.createCell(0).setCellValue(a.getAgentName());
+                row.createCell(1).setCellValue(a.getMsCreatedAt() == null ? "" : a.getMsCreatedAt().format(dtf));
+                row.createCell(2).setCellValue(a.getCreatorUserId() == null ? "" : userName.apply(a.getCreatorUserId()));
+                row.createCell(3).setCellValue(a.getCreatedUid() == null ? "" : a.getCreatedUid());
+                row.createCell(4).setCellValue(a.getKassaId() == null ? "" : kassaName.apply(a.getKassaId()));
+                row.createCell(5).setCellValue(String.join("; ", a.violationList().stream().map(ruleTitle).toList()));
+                row.createCell(6).setCellValue(a.getStatus().name());
+                row.createCell(7).setCellValue(a.getNotifiedAt() == null ? "" : dtf.format(a.getNotifiedAt().atZone(java.time.ZoneId.of("Asia/Tashkent"))));
+            }
+            for (int i = 0; i < cols.length; i++) sh.autoSizeColumn(i);
+            wb.write(bos);
+            return bos.toByteArray();
+        } catch (Exception e) {
+            log.error("Kontragent xatolari Excel xatosi: {}", e.getMessage());
+            throw new RuntimeException("Excel tayyorlashda xato: " + e.getMessage());
+        }
+    }
+
     /* ---------------- 1: UMUMIY ---------------- */
 
     private void summarySheet(Workbook wb, CellStyle head, CellStyle money, CellStyle bold,

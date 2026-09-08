@@ -11,4 +11,6 @@ public interface AppUserRepo extends JpaRepository<AppUser, Long> {
     List<AppUser> findByRoleAndActiveTrue(Role role);
     List<AppUser> findByKassaIdAndActiveTrue(Long kassaId);
     List<AppUser> findByActiveTrueOrderByRoleAscIdAsc();
+    Optional<AppUser> findFirstByMsUidAndActiveTrue(String msUid);
+    Optional<AppUser> findFirstByMsEmployeeIdAndActiveTrue(String msEmployeeId);
 }

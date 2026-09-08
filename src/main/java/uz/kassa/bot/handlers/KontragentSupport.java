@@ -34,6 +34,8 @@ public class KontragentSupport {
 
     LocalDate today() { return LocalDate.now(props.zoneId()); }
 
+    java.time.ZoneId zone() { return props.zoneId(); }
+
 
     InlineKeyboardButton bk(String data) { return btn("⬅️ Orqaga", data); }
 

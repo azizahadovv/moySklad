@@ -430,6 +430,9 @@ async function pageHisobot(seg, q) {
   if (view === 'tarix') return hisobotTarix(q);
   if (view === 'excel') return hisobotExcel(q);
   if (view === 'pul') return hisobotPul(q);
+  if (view === 'qarz') return hisobotQarz(seg.slice(1), q);
+  if (view === 'xato') return hisobotXato(seg.slice(1), q);
+  if (view === 'nazorat') return hisobotNazorat(q);
   setTitle('Ҳисоботлар', 'бўлимни танланг');
   $main.innerHTML = `
     <div class="label">Кун бўйича</div><div class="tiles">
@@ -440,6 +443,11 @@ async function pageHisobot(seg, q) {
     <div class="label">Давр бўйича</div><div class="tiles">
       ${tile('💵', 'Пул ҳаракати', 'топширилган · қабул қилинган', '#/hisobot/pul')}
       ${tile('📜', 'История', 'барча операциялар', '#/hisobot/tarix')}
+    </div>
+    <div class="label">🕵️ Назорат</div><div class="tiles">
+      ${tile('🧾', 'Қарздорлар', 'отгрузка тўлови · муддат · ёпиш', '#/hisobot/qarz')}
+      ${tile('⚠️', 'Контрагент хатолари', 'мажбурий майдонлар · дубликат', '#/hisobot/xato')}
+      ${tile('📊', 'Назорат статистикаси', 'ходим кесимида: топилди · тузатилди · очиқ', '#/hisobot/nazorat')}
     </div>
     <div class="label">Файл</div><div class="tiles">
       ${tile('📊', 'Excel', 'умумий / касса — чатга', '#/hisobot/excel')}
@@ -607,6 +615,178 @@ async function hisobotExcel(q) {
     } catch (e) { toast(e.message); }
     btn.disabled = false;
   };
+}
+
+/* ============================================================
+   🕵️ НАЗОРАТ — 🧾 Қарздорлар (отгрузка) · ⚠️ Контрагент хатолари
+   (docs/KONTRAGENT-NAZORAT.md; бот билан бир манба — /api/admin/control/*)
+   ============================================================ */
+const openMs = url => { try { tg.openLink(url); } catch (_) { window.open(url, '_blank'); } };
+const kvRow = (l, v) => `<dt>${l}</dt><dd>${v}</dd>`;
+
+async function hisobotQarz(seg, q) {
+  if (seg[0]) return qarzCard(seg[0]);
+  const kassa = q.kassa || '0', page = +(q.page || 0), state = q.state || '';
+  const d = await api(`/admin/control/debts?kassa=${kassa}&page=${page}&state=${encodeURIComponent(state)}`);
+  setTitle('Қарздорлар', `отгрузка назорати · ${d.asOf}${d.enabled ? '' : ' · ⚪ назорат ўчирилган'}`);
+  let h = `<div class="kpis">
+    <div class="kpi"><div class="l">Қарзда</div><div class="v num ${d.xulosa.soni ? 'warn' : 'good'}">${d.xulosa.soni}</div><div class="s">отгрузка</div></div>
+    <div class="kpi"><div class="l">Қолдиқ</div><div class="v num">${fmt(d.xulosa.summa)}</div><div class="s">сўм</div></div>
+    <div class="kpi"><div class="l">Муддати ўтган</div><div class="v num ${d.xulosa.otgan ? 'bad' : ''}">${d.xulosa.otgan}</div></div>
+    <div class="kpi"><div class="l">Муддатсиз</div><div class="v num">${d.xulosa.muddatsiz}</div><div class="s">«Тўлов муддати» йўқ</div></div>
+  </div>
+  <div class="card">
+    <div class="field"><label>Отдел</label><select id="k"><option value="0">Ҳаммаси</option>${d.kassalar.map(k => `<option value="${k.id}" ${String(k.id) === kassa ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Статус</label><select id="st"><option value="">Ҳаммаси</option>${d.states.map(x => `<option value="${esc(x.name)}" ${x.name === state ? 'selected' : ''}>${x.quiet ? '🏦 ' : ''}${esc(x.name)} (${x.count})</option>`).join('')}</select></div>
+    ${d.states.some(x => x.quiet) ? `<div class="hint">🏦 — жим статус: хабар бормайди, фақат рўйхатда (${esc(d.states.filter(x => x.quiet).map(x => x.name).join(', '))})</div>` : ''}
+    <button class="btn ghost" id="xl">📥 Excel чатга</button>
+  </div><div class="rows">`;
+  if (!d.rows.length) h += '<div class="empty">Қарздор отгрузкалар йўқ ✅</div>';
+  for (const r of d.rows)
+    h += rowHtml(r.holat === 'otgan' ? 'bad' : r.holat === 'yoq' ? 'warn' : 'ok',
+      `${r.agent} · №${r.docNo}`,
+      `${r.xodim}${r.kassa ? ' · ' + r.kassa : ''} · ${r.moment}${r.due ? ' · муддат ' + r.due : ' · ❗ муддат йўқ'}`,
+      fmt(r.remain) + `<small>${esc(r.state)}</small>`, `#/hisobot/qarz/${r.id}`);
+  h += '</div>';
+  if (d.pages > 1) h += `<div class="seg">${Array.from({ length: d.pages }, (_, i) => `<button data-go="#/hisobot/qarz?kassa=${kassa}&page=${i}&state=${encodeURIComponent(state)}" class="${i === page ? 'on' : ''}">${i + 1}</button>`).join('')}</div>`;
+  $main.innerHTML = h;
+  bindGo();
+  document.getElementById('k').onchange = e => go('#/hisobot/qarz?kassa=' + e.target.value + '&state=' + encodeURIComponent(state));
+  document.getElementById('st').onchange = e => go('#/hisobot/qarz?kassa=' + kassa + '&state=' + encodeURIComponent(e.target.value));
+  document.getElementById('xl').onclick = async () => {
+    const b = document.getElementById('xl'); b.disabled = true;
+    try { const r = await post('/admin/control/debts/excel', { id: 0, kassaId: +kassa }); haptic('medium'); toast('📤 Excel чатга юборилди: ' + r.count + ' та'); }
+    catch (e) { toast(e.message); }
+    b.disabled = false;
+  };
+}
+
+async function qarzCard(id) {
+  const r = await api('/admin/control/debts/' + id);
+  setTitle(`№${r.docNo} · ${r.agent}`, r.status === 'QARZ' ? '🧾 қарзда · ' + r.days + ' кун' : r.status);
+  const bal = r.balance === null || r.balance === undefined ? '—' : (r.balance < 0 ? '−' : '') + fmt(Math.abs(r.balance)) + ' сўм';
+  $main.innerHTML = `<div class="card"><div class="kv">
+    ${kvRow('Ходим', esc(r.xodim) + (r.kassa ? ' · ' + esc(r.kassa) : '') + (r.xodimLinked ? '' : ' <small>(ботга боғланмаган)</small>'))}
+    ${kvRow('Клиент', esc(r.agent))}
+    ${kvRow('Телефон', esc(r.phone || '—'))}
+    ${kvRow('Отгрузка', '№' + esc(r.docNo) + ' · ' + esc(r.moment) + (r.state ? ' · ' + esc(r.state) : ''))}
+    ${kvRow('Сумма', fmt(r.sum))}
+    ${kvRow('Тўланган', fmt(r.payed))}
+    ${kvRow('Қолдиқ', '<b>' + fmt(r.remain) + '</b>')}
+    ${kvRow('Контрагент баланси', bal)}
+    ${kvRow('Тўлов муддати', r.due ? esc(r.due) + ' · ' + esc(r.dueLabel) : '❗ киритилмаган')}
+    ${kvRow('Масъул', esc(r.masul || '—'))}
+    ${kvRow('Комментария', esc(r.comment || '—'))}
+    ${r.status === 'QARZ' ? '' : kvRow('Ҳолат', esc(r.status) + (r.closeReason ? ' · ' + esc(r.closeReason) : '') + (r.closedBy ? ' · ' + esc(r.closedBy) : '') + (r.closedAt ? ' · ' + r.closedAt : ''))}
+  </div></div>
+  ${r.due ? '' : `<div class="hint">Муддат MoySkladʼдаги отгрузкада «Тўлов муддати» майдонига киритилади — бот ўзи ўқийди.</div>`}
+  <div class="actions">
+    ${r.status === 'QARZ' ? `<button class="btn ghost" id="rf">🔄 MoySkladʼдан янгилаш</button>` : ''}
+    ${r.canClose ? '<button class="btn main" id="cl">✅ Ёпиш (баланс текширилади)</button>' : ''}
+    <button class="btn ghost" id="ms">🔗 Отгрузка (MoySklad)</button>
+    ${r.agentUrl ? '<button class="btn ghost" id="ag">🔗 Контрагент (MoySklad)</button>' : ''}
+  </div>`;
+  document.getElementById('ms').onclick = () => openMs(r.msUrl);
+  const ag = document.getElementById('ag'); if (ag) ag.onclick = () => openMs(r.agentUrl);
+  const rf = document.getElementById('rf');
+  if (rf) rf.onclick = async () => { rf.disabled = true; try { await post('/admin/control/debts/refresh', { id: +id }); toast('🔄 Янгиланди'); render(); } catch (e) { toast(e.message); rf.disabled = false; } };
+  const cl = document.getElementById('cl'); if (cl) cl.onclick = () => closeDebt(id, '');
+}
+
+async function closeDebt(id, reason) {
+  try {
+    const res = await post('/admin/control/debts/close', { id: +id, reason: reason || '' });
+    if (res.result === 'OK' || res.result === 'GONE') { haptic('medium'); toast('✅ Ёпилди'); render(); return; }
+    if (res.result === 'DENIED') { toast('⛔ MoySklad баланси ҳали ' + res.balance + ' сўм — фақат SuperAdmin сабаб билан ёпа олади'); return; }
+    sheet(`<h2>Баланс ҳали ${esc(res.balance)} сўм</h2><p>SuperAdmin сифатида барибир ёпиш учун сабабни ёзинг (аудитда сақланади, ходим ва раҳбарга хабар боради).</p>
+      <div class="field"><label>Сабаб</label><input id="rs" placeholder="масалан: чегирма келишилди"></div>
+      <button class="btn main" id="ok">✅ Ёпиш</button><button class="btn ghost" id="no">Бекор</button>`,
+      (el, close) => {
+        el.querySelector('#ok').onclick = () => { const v = el.querySelector('#rs').value.trim(); if (v.length < 3) { toast('Сабаб жуда қисқа'); return; } close(); closeDebt(id, v); };
+        el.querySelector('#no').onclick = close;
+      });
+  } catch (e) { toast(e.message); }
+}
+
+async function hisobotNazorat(q) {
+  const days = q.days === undefined ? 30 : +q.days;
+  const d = await api('/admin/control/stats?days=' + days);
+  setTitle('Назорат статистикаси', days ? `охирги ${days} кун · ${d.asOf}` : `бутун давр · ${d.asOf}`);
+  const t = d.rows.reduce((a, r) => { a.kgF += r.kgFound; a.kgX += r.kgFixed; a.kgO += r.kgOpen; a.otF += r.otgFound; a.otX += r.otgFixed; a.otO += r.otgOpen; a.qO += r.qarzOpen; a.qC += r.qarzClosed; return a; },
+    { kgF: 0, kgX: 0, kgO: 0, otF: 0, otX: 0, otO: 0, qO: 0, qC: 0 });
+  const allFixed = d.rows.filter(r => r.kgOpen + r.otgOpen === 0 && r.kgFixed + r.otgFixed > 0).length;
+  let h = `<div class="seg">${[['Бугун', 1], ['7 кун', 7], ['30 кун', 30], ['Ҳаммаси', 0]].map(([l, n]) => `<button data-go="#/hisobot/nazorat?days=${n}" class="${n === days ? 'on' : ''}">${l}</button>`).join('')}</div>
+  <div class="kpis">
+    <div class="kpi"><div class="l">Ходимлар</div><div class="v num">${d.rows.length}</div><div class="s">хато/қарзли · ҳаммасини тузатган ${allFixed}</div></div>
+    <div class="kpi"><div class="l">🏢 Контрагент</div><div class="v num ${t.kgO ? 'warn' : 'good'}">${t.kgO}</div><div class="s">очиқ · топилди ${t.kgF} · тузатилди ${t.kgX}</div></div>
+    <div class="kpi"><div class="l">📦 Отгрузка</div><div class="v num ${t.otO ? 'warn' : 'good'}">${t.otO}</div><div class="s">очиқ · топилди ${t.otF} · тузатилди ${t.otX}</div></div>
+    <div class="kpi"><div class="l">🧾 Қарз</div><div class="v num">${t.qO}</div><div class="s">очиқ · ёпилди ${t.qC}</div></div>
+  </div>
+  <div class="card"><button class="btn ghost" id="rf">🔄 MoySkladʼдан янгилаш</button><div class="hint">Автоматик: контрагент/отгрузка ҳар 2 дақиқа, баланс созламадаги оралиқда.${d.lastRefresh ? ' Охирги қўлда: ' + esc(d.lastRefresh) : ''}</div></div>
+  <div class="tablewrap"><table><thead><tr><th>Ходим</th><th>🏢 топ / туз / очиқ</th><th>📦 топ / туз / очиқ</th><th>🧾 очиқ / ёпилди</th></tr></thead><tbody>`;
+  if (!d.rows.length) h += '<tr><td colspan="4"><div class="empty">Бу даврда хато ёки қарз йўқ ✅</div></td></tr>';
+  for (const r of d.rows)
+    h += `<tr><td>${esc(r.name)}${r.linked ? '' : ' <small>(ботда йўқ)</small>'}${r.kassa ? '<br><small>' + esc(r.kassa) + '</small>' : ''}</td>
+      <td class="num">${r.kgFound} / ${r.kgFixed} / <b>${r.kgOpen}</b></td>
+      <td class="num">${r.otgFound} / ${r.otgFixed} / <b>${r.otgOpen}</b></td>
+      <td class="num"><b>${r.qarzOpen}</b> (${fmt(r.qarzOpenSum)}) / ${r.qarzClosed}</td></tr>`;
+  h += '</tbody></table></div>';
+  $main.innerHTML = h;
+  bindGo();
+  document.getElementById('rf').onclick = async () => {
+    const b = document.getElementById('rf'); b.disabled = true;
+    try { const r = await post('/admin/control/refresh-all'); toast(r.started ? '⏳ Янгиланмоқда, 10–60 сония' : r.running ? '⏳ Аллақачон кетмоқда' : `⏱ ${r.wait} сониядан кейин`); }
+    catch (e) { toast(e.message); }
+    setTimeout(() => { b.disabled = false; }, 3000);
+  };
+}
+
+async function hisobotXato(seg) {
+  if (seg[0]) return xatoCard(seg[0]);
+  const d = await api('/admin/control/errors');
+  setTitle('Контрагент хатолари', `тузатилмаган · ${d.asOf}`);
+  let h = `<div class="card"><div class="hint">Янги контрагент MoySklad'да яратилганда мажбурий майдонлар (${esc(d.rules)}) текширилади; хато бўлса яратган ходимга хабар боради, тузатилгач ўзи ёпилади.</div>
+    <button class="btn ghost" id="xl">📥 Excel чатга</button></div><div class="rows">`;
+  if (!d.rows.length) h += '<div class="empty">Тузатилмаган контрагентлар йўқ ✅</div>';
+  for (const r of d.rows)
+    h += rowHtml(r.escalated ? 'bad' : 'warn', r.agent, `${r.xodim}${r.kassa ? ' · ' + r.kassa : ''} · ${r.created}`,
+      `<small>${esc(r.codes.join(', '))}</small>`, `#/hisobot/xato/${r.id}`);
+  h += '</div>';
+  h += `<div class="label">📦 Отгрузка камчиликлари — ${d.shipsTotal} та${d.shipsSummary ? ' · ' + esc(d.shipsSummary) : ''}</div><div class="rows">`;
+  if (!d.ships.length) h += '<div class="empty">Қарздаги отгрузкаларда камчилик йўқ ✅</div>';
+  for (const s of d.ships)
+    h += rowHtml('warn', `№${s.docNo} · ${s.agent}`, `${s.xodim}${s.kassa ? ' · ' + s.kassa : ''} · ${s.moment}`,
+      fmt(s.remain) + `<small>${esc(s.labels)}</small>`, `#/hisobot/qarz/${s.id}`);
+  h += '</div>';
+  if (d.shipsTotal > d.ships.length) h += `<div class="hint">Биринчи ${d.ships.length} та кўрсатилди — тўлиқ рўйхат 🧾 Қарздорлар Excel'да (Kamchilik устуни).</div>`;
+  $main.innerHTML = h;
+  bindGo();
+  document.getElementById('xl').onclick = async () => {
+    try { const r = await post('/admin/control/errors/excel'); haptic('medium'); toast('📤 Excel чатга юборилди: ' + r.count + ' та'); }
+    catch (e) { toast(e.message); }
+  };
+}
+
+async function xatoCard(id, recheck = false) {
+  const r = await api('/admin/control/errors/' + id + (recheck ? '?recheck=true' : ''));
+  setTitle(r.agent, r.status === 'OCHIQ' ? '🔴 тузатилмаган' : r.status === 'TUZATILDI' ? '✅ тузатилди' : r.status);
+  $main.innerHTML = `<div class="card"><div class="kv">
+    ${kvRow('Яратган', esc(r.xodim) + (r.kassa ? ' · ' + esc(r.kassa) : ''))}
+    ${kvRow('MoySklad логин', esc(r.uid || '—'))}
+    ${kvRow('Яратилган', esc(r.created || '—'))}
+    ${kvRow('Хабар берилган', esc(r.notified || '—') + (r.escalated ? ' · раҳбарга чиққан' : ''))}
+  </div></div>
+  <div class="card"><div class="label">Тузатиш керак</div>${r.titles.length ? '<ul>' + r.titles.map(t => '<li>' + t + '</li>').join('') + '</ul>' : '<div class="empty">Хато йўқ ✅</div>'}${r.note ? '<div class="hint">' + esc(r.note) + '</div>' : ''}</div>
+  <div class="actions">
+    <button class="btn ghost" id="rc">🔄 Қайта текшириш (MoySklad)</button>
+    <button class="btn ghost" id="ms">🔗 Контрагент (MoySklad)</button>
+    ${r.superadmin && r.status === 'OCHIQ' ? '<button class="btn ghost" id="ig">🙈 Эътиборсиз қолдириш</button>' : ''}
+  </div>`;
+  document.getElementById('rc').onclick = () => xatoCard(id, true);
+  document.getElementById('ms').onclick = () => openMs(r.msUrl);
+  const ig = document.getElementById('ig');
+  if (ig) ig.onclick = () => confirmSheet('Эътиборсиз қолдирилсинми?', 'Бу контрагент хатолар рўйхатидан чиқади, ходимга хабар бормайди.',
+    async () => { try { await post('/admin/control/errors/ignore', { id: +id }); toast('🙈 Эътиборсиз'); go('#/hisobot/xato'); } catch (e) { toast(e.message); } });
 }
 
 /* ============================================================

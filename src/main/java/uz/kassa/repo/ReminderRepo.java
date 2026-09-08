@@ -10,4 +10,5 @@ public interface ReminderRepo extends JpaRepository<Reminder, Long> {
     List<Reminder> findByStatusOrderByDueDateAscIdAsc(Reminder.Status status);
 
     List<Reminder> findByAgentMsIdAndStatusOrderByDueDateAsc(String agentMsId, Reminder.Status status);
+    java.util.Optional<Reminder> findFirstByShipmentId(Long shipmentId);
 }

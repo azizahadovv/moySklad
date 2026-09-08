@@ -80,6 +80,17 @@ public class Reminder {
     @Column(name = "pending_manual_by")
     private Long pendingManualBy;
 
+    /** QOLDA — xodim kiritgan; OTGRUZKA — otgruzka nazorati avtomatik yaratgan. */
+    @Builder.Default
+    @Column(nullable = false)
+    private String source = "QOLDA";
+
+    /** source=OTGRUZKA bo'lsa — shipments.id. */
+    @Column(name = "shipment_id")
+    private Long shipmentId;
+
+    public boolean isAuto() { return "OTGRUZKA".equals(source); }
+
     /** Qolgan qarz (manfiy bo'lmaydi). */
     public long remain() { return Math.max(0, amount - repaid); }
 

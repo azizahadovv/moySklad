@@ -37,7 +37,9 @@ public class Session {
         ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN,
         // 🤝 Kontragent (qarz daftari) oqimlari
         KG_SEARCH, KG_MN_NAME, KG_MN_INFO, KG_SUM, KG_IZOH,
-        KG_AU_TGID, KG_AU_NAME, KG_RN_NAME, KG_PAY_AMOUNT
+        KG_AU_TGID, KG_AU_NAME, KG_RN_NAME, KG_PAY_AMOUNT,
+        // 🕵️ Nazorat: qarzni sabab bilan yopish (SuperAdmin), sozlama qiymatini kiritish
+        KG_CLOSE_REASON, ADM_CT_VAL
     }
 
     public State state = State.IDLE;

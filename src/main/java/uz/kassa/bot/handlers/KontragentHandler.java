@@ -48,6 +48,7 @@ public class KontragentHandler {
     private final ReminderViewHandler view;
     private final ReminderWizardHandler wizard;
     private final KontragentStaffHandler staff;
+    private final ControlViewHandler control;
 
 
     /* ============================ MATN ============================ */
@@ -60,6 +61,7 @@ public class KontragentHandler {
             case KG_SUM -> { wizard.wzSum(s, text, chatId); return true; }
             case KG_IZOH -> { wizard.wzIzoh(u, s, text, chatId); return true; }
             case KG_PAY_AMOUNT -> { view.payAmount(u, s, text, chatId); return true; }
+            case KG_CLOSE_REASON -> { control.closeReason(u, s, text, chatId); return true; }
             case KG_AU_TGID -> { staff.auTgId(u, s, text, chatId); return true; }
             case KG_AU_NAME -> { staff.auName(u, s, text, chatId); return true; }
             case KG_RN_NAME -> { staff.rnName(u, s, text, chatId); return true; }
@@ -86,6 +88,8 @@ public class KontragentHandler {
         rows.add(irow(btn("👥 Контрагентлар (MoySklad)", "kg:s")));
         rows.add(irow(btn("➕ Boshqa shaxs (qo'lda)", "kg:mn")));
         rows.add(irow(btn("🔔 Хабарномалар", "kg:l")));
+        rows.add(irow(btn("🧾 Қарздорлар", "kg:dl"), btn("⚠️ Хатолар", "kg:el")));
+        if (control.canRefresh(u)) rows.add(irow(btn("🔄 Yangilash (MoySklad)", "kg:rf:m"), btn("📊 Statistika", "kg:es:30")));
         if (u.getKassaId() != null) rows.add(irow(btn("⚙️ Настройка (otdelim)", "kg:st")));
         return inline(rows);
     }
@@ -98,6 +102,9 @@ public class KontragentHandler {
         String[] p = data.split(":", 3);
         String cmd = p[1];
         String arg = p.length > 2 ? p[2] : "";
+
+        // 🕵️ Nazorat: qarzdorlar (d*) va kontragent xatolari (e*)
+        if (control.onCallback(u, s, cmd, arg, chatId, msgId)) return true;
 
         switch (cmd) {
             case "m" -> sender.edit(chatId, msgId, mainText(), mainKb(u));

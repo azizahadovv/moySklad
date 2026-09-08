@@ -52,6 +52,8 @@ public interface OperationRepo extends JpaRepository<Operation, Long> {
             OpType type, OpStatus status);
 
     List<Operation> findByStatusAndType(OpStatus status, OpType type);
+    /** 🏦 Topshirganlarim: kassadan buxgalteriyaga topshiriqlar (hisobotli va to'g'ridan-to'g'ri). */
+    List<Operation> findTop300ByTypeAndFromOwnerTypeAndFromOwnerIdOrderByIdDesc(OpType type, OwnerType fromOwnerType, Long fromOwnerId);
 
     /** Egaga tegishli oxirgi operatsiyalar (tarix uchun). */
     @Query("""

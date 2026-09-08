@@ -526,4 +526,262 @@ public class MoySkladClient {
         return href.isEmpty() ? "" : href.substring(href.lastIndexOf('/') + 1);
     }
 
+
+    /* ==================== 🕵️ NAZORAT: kontragent / otgruzka / xodim ==================== */
+
+    /** Kontragent — nazorat qoidalari uchun to'liq maydonlar. attributes: nom -> ko'rinadigan qiymat. */
+    public record MsAgentFull(String id, String name, String phone, String email, String companyType,
+                              String inn, String legalTitle, String legalAddress, List<String> tags,
+                              String stateName, String ownerId, String ownerName, String ownerUid,
+                              String groupId, LocalDateTime created, LocalDateTime updated,
+                              boolean archived, java.util.Map<String, String> attributes) {
+        public boolean isLegal() { return companyType != null && companyType.startsWith("legal"); }
+        public boolean isEntrepreneur() { return companyType != null && companyType.startsWith("entrepreneur"); }
+        public boolean isIndividual() { return companyType == null || companyType.startsWith("individual"); }
+    }
+
+
+    /** Otgruzka (demand). Summalar SO'MDA. dueAt — «Тўлов муддати», masul — «Масъул». */
+    public record MsDemand(String id, String docNo, LocalDateTime moment, LocalDateTime created,
+                           LocalDateTime updated, long sumSom, long payedSom, String agentId,
+                           String agentName, String agentPhone, String ownerId, String ownerName,
+                           String ownerUid, String groupId, String stateName, String description,
+                           LocalDate dueAt, String masul, boolean applicable) {}
+
+
+    /** MoySklad xodimi: UUID, login (uid), nom, telefon, otdel (group), lavozim (position). */
+    public record MsEmployeeFull(String id, String uid, String name, String phone,
+                                 String groupId, String groupName, String position, boolean archived) {}
+
+
+    private static final String AGENT_EXPAND = "&expand=owner,state";
+    private static final String DEMAND_EXPAND = "&expand=agent,owner,state";
+
+
+    /** updated>=from o'zgargan/yangi kontragentlar (nazorat polling). */
+    public List<MsAgentFull> fetchAgentsUpdated(LocalDateTime from) {
+        List<MsAgentFull> out = new ArrayList<>();
+        for (JsonNode r : api.rows("counterparty", AGENT_EXPAND, from)) out.add(agentFullOf(r));
+        return out;
+    }
+
+
+    /** Barcha kontragentlar (dublikat indeksi uchun, bir marta; expand'siz — yengil). */
+    public List<MsAgentFull> fetchAgentsAll() {
+        List<MsAgentFull> out = new ArrayList<>();
+        for (JsonNode r : api.rowsAll("counterparty", "")) out.add(agentFullOf(r));
+        return out;
+    }
+
+
+    /** Bitta kontragent; null — o'chirilgan (404) yoki ruxsat yo'q. */
+    public MsAgentFull fetchAgent(String id) {
+        JsonNode r = api.getJsonOr404(props.getMoysklad().getBaseUrl()
+                + "/entity/counterparty/" + id + "?expand=owner,state");
+        return r == null ? null : agentFullOf(r);
+    }
+
+
+    /** Kontragentni kim yaratgan — MoySklad audit (login/uid). Topilmasa "". */
+    public String fetchAgentCreatorUid(String id) {
+        try {
+            JsonNode root = api.getJsonOr404(props.getMoysklad().getBaseUrl()
+                    + "/entity/counterparty/" + id + "/audit");
+            if (root == null) return "";
+            String any = "";
+            for (JsonNode r : root.path("rows")) {
+                String uid = r.path("uid").asText("");
+                if (uid.isBlank()) continue;
+                if ("create".equalsIgnoreCase(r.path("eventType").asText(""))) return uid;
+                any = uid;   // eng eski yozuv (ro'yxat yangidan eskiga)
+            }
+            return any;
+        } catch (Exception e) {
+            log.warn("Kontragent auditi o'qilmadi ({}): {}", id, e.getMessage());
+            return "";
+        }
+    }
+
+
+    private MsAgentFull agentFullOf(JsonNode r) {
+        List<String> tags = new ArrayList<>();
+        for (JsonNode t : r.path("tags")) tags.add(t.asText(""));
+        JsonNode owner = r.path("owner");
+        return new MsAgentFull(
+                r.path("id").asText(""),
+                r.path("name").asText(""),
+                r.path("phone").asText(""),
+                r.path("email").asText(""),
+                r.path("companyType").asText(""),
+                r.path("inn").asText(""),
+                r.path("legalTitle").asText(""),
+                r.path("legalAddress").asText(""),
+                tags,
+                r.path("state").path("name").asText(""),
+                owner.path("id").asText(lastSegment(owner.path("meta").path("href").asText(""))),
+                owner.path("name").asText(""),
+                owner.path("uid").asText(""),
+                groupOf(r),
+                dt(r, "created"),
+                dt(r, "updated"),
+                r.path("archived").asBoolean(false),
+                attributesOf(r));
+    }
+
+
+    /** updated>=from o'zgargan/yangi otgruzkalar. */
+    public List<MsDemand> fetchDemandsUpdated(LocalDateTime from) {
+        List<MsDemand> out = new ArrayList<>();
+        for (JsonNode r : api.rows("demand", DEMAND_EXPAND, from)) out.add(demandOf(r));
+        return out;
+    }
+
+
+    /** Hujjat sanasi (moment) bo'yicha otgruzkalar — eski qarzlarni yuklash uchun. */
+    public List<MsDemand> fetchDemandsByMoment(LocalDateTime from, LocalDateTime to) {
+        String filter = java.net.URLEncoder.encode(
+                "moment>=" + api.toMs(from).format(FILTER_FMT) + ";moment<=" + api.toMs(to).format(FILTER_FMT),
+                java.nio.charset.StandardCharsets.UTF_8);
+        List<MsDemand> out = new ArrayList<>();
+        for (JsonNode r : api.rowsFiltered("demand", DEMAND_EXPAND, filter)) out.add(demandOf(r));
+        return out;
+    }
+
+
+    /** Bitta otgruzka; null — MoySklad'da o'chirilgan (404) yoki ruxsat yo'q. */
+    public MsDemand fetchDemand(String id) {
+        JsonNode r = api.getJsonOr404(props.getMoysklad().getBaseUrl()
+                + "/entity/demand/" + id + "?expand=agent,owner,state");
+        return r == null ? null : demandOf(r);
+    }
+
+
+    private MsDemand demandOf(JsonNode r) {
+        JsonNode agent = r.path("agent"), owner = r.path("owner");
+        LocalDate due = null;
+        String masul = "";
+        for (JsonNode a : r.path("attributes")) {
+            String n = normAttr(a.path("name").asText(""));
+            if (n.contains("тулов") && n.contains("муддат")) {
+                String v = a.path("value").asText("");
+                if (v.length() >= 10) try { due = LocalDate.parse(v.substring(0, 10)); } catch (Exception ignored) { }
+            } else if (n.equals("масъул") || n.equals("масул") || n.equals("masul")) {
+                JsonNode v = a.path("value");
+                masul = v.isObject() ? v.path("name").asText("") : v.asText("");
+            }
+        }
+        return new MsDemand(
+                r.path("id").asText(""),
+                r.path("name").asText(""),
+                dt(r, "moment"),
+                dt(r, "created"),
+                dt(r, "updated"),
+                Math.round(r.path("sum").asDouble(0) / 100.0),
+                Math.round(r.path("payedSum").asDouble(0) / 100.0),
+                agent.path("id").asText(lastSegment(agent.path("meta").path("href").asText(""))),
+                agent.path("name").asText(""),
+                agent.path("phone").asText(""),
+                owner.path("id").asText(lastSegment(owner.path("meta").path("href").asText(""))),
+                owner.path("name").asText(""),
+                owner.path("uid").asText(""),
+                groupOf(r),
+                r.path("state").path("name").asText(""),
+                r.path("description").asText(""),
+                due, masul,
+                r.path("applicable").asBoolean(true));
+    }
+
+
+    /** Xodimlar: UUID, login, nom, telefon. Xatoda bo'sh ro'yxat. */
+    public List<MsEmployeeFull> fetchEmployeesFull() {
+        List<MsEmployeeFull> out = new ArrayList<>();
+        try {
+            JsonNode root = api.getJson(props.getMoysklad().getBaseUrl() + "/entity/employee?limit=100&expand=group");
+            if (root != null)
+                for (JsonNode r : root.path("rows")) {
+                    JsonNode g = r.path("group");
+                    out.add(new MsEmployeeFull(r.path("id").asText(""), r.path("uid").asText(""),
+                            r.path("name").asText(""), r.path("phone").asText(""),
+                            g.path("id").asText(lastSegment(g.path("meta").path("href").asText(""))),
+                            g.path("name").asText(""), r.path("position").asText(""),
+                            r.path("archived").asBoolean(false)));
+                }
+        } catch (Exception e) {
+            log.warn("Xodimlar (to'liq) ro'yxati o'qilmadi: {}", e.getMessage());
+        }
+        return out;
+    }
+
+
+    /**
+     * Bir nechta kontragent balansi (so'm, manfiy = bizga qarzdor): POST /report/counterparty
+     * 100 tadan; POST ishlamasa — har biri alohida GET. Olinmaganlari map'da bo'lmaydi.
+     */
+    public java.util.Map<String, Long> fetchAgentBalancesSom(java.util.Collection<String> ids) {
+        java.util.Map<String, Long> out = new java.util.HashMap<>();
+        List<String> list = new ArrayList<>(new java.util.LinkedHashSet<>(ids));
+        String base = props.getMoysklad().getBaseUrl();
+        for (int i = 0; i < list.size(); i += 100) {
+            List<String> chunk = list.subList(i, Math.min(list.size(), i + 100));
+            boolean ok = false;
+            try {
+                StringBuilder body = new StringBuilder("{\"counterparties\":[");
+                for (int j = 0; j < chunk.size(); j++) {
+                    if (j > 0) body.append(',');
+                    body.append("{\"counterparty\":{\"meta\":{\"href\":\"").append(base)
+                        .append("/entity/counterparty/").append(chunk.get(j))
+                        .append("\",\"type\":\"counterparty\",\"mediaType\":\"application/json\"}}}");
+                }
+                body.append("]}");
+                JsonNode root = api.postJson(base + "/report/counterparty", body.toString());
+                if (root != null) {
+                    for (JsonNode r : root.path("rows")) {
+                        String id = lastSegment(r.path("counterparty").path("meta").path("href").asText(""));
+                        if (!id.isBlank()) out.put(id, Math.round(r.path("balance").asDouble(0) / 100.0));
+                    }
+                    ok = true;
+                }
+            } catch (Exception e) {
+                log.warn("Balanslar (POST) o'qilmadi, alohida so'raladi: {}", e.getMessage());
+            }
+            if (!ok)
+                for (String id : chunk) {
+                    Long b = fetchAgentBalanceSom(id);
+                    if (b != null) out.put(id, b);
+                    try { Thread.sleep(80); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); return out; }
+                }
+        }
+        return out;
+    }
+
+
+    private java.util.Map<String, String> attributesOf(JsonNode r) {
+        java.util.Map<String, String> m = new java.util.LinkedHashMap<>();
+        for (JsonNode a : r.path("attributes")) {
+            JsonNode v = a.path("value");
+            String s = v.isObject() ? v.path("name").asText("") : v.asText("");
+            m.put(a.path("name").asText(""), s);
+        }
+        return m;
+    }
+
+
+    /** Attribut nomini solishtirish uchun: kichik harf, ў→у, қ→к, ғ→г, ҳ→х. */
+    public static String normAttr(String s) {
+        return s == null ? "" : s.toLowerCase().replace('ў', 'у').replace('қ', 'к')
+                .replace('ғ', 'г').replace('ҳ', 'х').trim();
+    }
+
+
+    private static final DateTimeFormatter DT_FMT =
+            new java.time.format.DateTimeFormatterBuilder().appendPattern("yyyy-MM-dd HH:mm:ss")
+                    .optionalStart().appendPattern(".SSS").optionalEnd().toFormatter();
+
+    /** MoySklad vaqt maydoni (Moskva, UTC+3) → bot vaqti (Toshkent). */
+    private LocalDateTime dt(JsonNode r, String field) {
+        String v = r.path(field).asText("");
+        if (v.isBlank()) return null;
+        try { return api.fromMs(LocalDateTime.parse(v, DT_FMT)); } catch (Exception e) { return null; }
+    }
+
 }
