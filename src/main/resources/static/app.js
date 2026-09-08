@@ -345,16 +345,27 @@ function collectSheet(k) {
       ${kassirs.length ? `<select id="who">${kassirs.map(n => `<option>${esc(n)}</option>`).join('')}<option value="">Бошқа…</option></select>` : ''}
       <input id="who2" placeholder="Исм" ${kassirs.length ? 'hidden' : ''}></div>
     <div class="field"><label>Қайси сана учун</label><div class="seg" id="dt"><button class="on" data-d="${t}">Бугун</button><button data-d="${addDays(t, -1)}">Кеча</button></div><input type="date" id="dti" value="${t}" max="${t}"></div>
+    <div class="hint" id="dayrem"></div>
     <button class="btn main" id="ok" ${k.pending.length ? 'disabled' : ''}>✅ Қабул қилиш</button>`, (el, close) => {
     let mt = 'NAQD';
     const suggest = { NAQD: k.naqdMavjud, TERMINAL: (k.today || {}).prixodTerminal || 0 };
+    // Танланган кун бўйича топширилмаган нақд: шу кун БИРИНЧИ қопланади, ортгани энг эски кунлардан
+    const dayRemain = d => d === t ? (k.todayRemainNaqd || 0) : ((k.openDays.find(x => x.date === d) || {}).naqd || 0);
+    const showDayRem = () => {
+      const d = el.querySelector('#dti').value, r = dayRemain(d), h = el.querySelector('#dayrem');
+      h.hidden = mt !== 'NAQD';
+      h.innerHTML = r ? `${dShort(d)} бўйича топширилмаган: <b>${fmt(r)}</b> сўм — шу кун биринчи ёпилади, ортгани энг эски кунлардан`
+                      : `${dShort(d)} бўйича топширилмаган нақд йўқ — сумма энг эски кунлардан ёпилади`;
+    };
     el.querySelectorAll('#mt button').forEach(b => b.onclick = () => {
       mt = b.dataset.mt; el.querySelectorAll('#mt button').forEach(x => x.classList.toggle('on', x === b));
       el.querySelector('#avail').hidden = mt !== 'NAQD';
       el.querySelector('#sum').value = suggest[mt] > 0 ? suggest[mt] : '';   // йиғилган сумма — қўлда ўзгартириш мумкин
+      showDayRem();
     });
-    el.querySelectorAll('#dt button').forEach(b => b.onclick = () => { el.querySelector('#dti').value = b.dataset.d; el.querySelectorAll('#dt button').forEach(x => x.classList.toggle('on', x === b)); });
-    el.querySelector('#dti').onchange = () => el.querySelectorAll('#dt button').forEach(x => x.classList.remove('on'));
+    el.querySelectorAll('#dt button').forEach(b => b.onclick = () => { el.querySelector('#dti').value = b.dataset.d; el.querySelectorAll('#dt button').forEach(x => x.classList.toggle('on', x === b)); showDayRem(); });
+    el.querySelector('#dti').onchange = () => { el.querySelectorAll('#dt button').forEach(x => x.classList.remove('on')); showDayRem(); };
+    showDayRem();
     const sel = el.querySelector('#who'); if (sel) sel.onchange = () => { el.querySelector('#who2').hidden = sel.value !== ''; };
     el.querySelector('#ok').onclick = () => {
       const amount = +el.querySelector('#sum').value;

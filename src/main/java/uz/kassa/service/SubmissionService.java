@@ -1,6 +1,7 @@
 package uz.kassa.service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import uz.kassa.domain.*;
@@ -9,17 +10,31 @@ import uz.kassa.repo.OperationRepo;
 import uz.kassa.repo.SubmissionRepo;
 
 import java.time.Instant;
-import java.util.Comparator;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Hisobot topshirish va qabul qilish (TZ 7.5, 7.6).
  * Bir nechta kun bitta hisobotda topshirilishi mumkin; kunlar FIFO — eng
  * eskisidan boshlab yopiladi. Qisman qabulda farq kassada qarzdorlik bo'lib qoladi.
+ *
+ * KUNLARNI QOPLASH QOIDASI (hamma joyda bir xil):
+ *  1) manfiy qoldiqli kunlar (rasxod/storno prixoddan oshgan) avval YUTILADI —
+ *     ular boshqa kunlar pulidan qoplangan, alohida «-» bo'lib osilib qolmasin;
+ *  2) bevosita qabulda TANLANGAN SANA birinchi qoplanadi — buxgalter «05.09 uchun
+ *     oldim» desa, 05.09 kuni yopilsin (avval eng eski kun yopilib, 05.09 to'liq
+ *     qolib ketardi — «topshirilgan kun yana ko'rinadi, qayta qabul qilsa bo'ladi»);
+ *  3) qolgani FIFO — eng eski kundan.
+ * Kun qatorlari QULF ostida o'zgartiriladi (DayRepo.lock*) — sinxron bilan poyga yo'q.
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SubmissionService {
+
+    private static final List<DayStatus> OPEN = List.of(DayStatus.YOPILGAN, DayStatus.OCHIQ);
 
     private final LedgerService ledger;
     private final DayRepo dayRepo;
@@ -41,7 +56,10 @@ public class SubmissionService {
         Long kassaId = kassir.getKassaId();
         if (kassaId == null) throw new BusinessException("Sizga kassa biriktirilmagan");
 
-        List<DayRecord> all = submittableDays(kassaId);
+        // Qulf tartibi: avval balans, keyin kunlar (sinxron bilan bir xil tartib)
+        ledger.lock(OwnerType.KASSA, kassaId, MoneyType.NAQD);
+        ledger.lock(OwnerType.KASSA, kassaId, MoneyType.KLIK);
+        List<DayRecord> all = dayRepo.lockByKassaIdAndStatusIn(kassaId, List.of(DayStatus.YOPILGAN));
         if (all.isEmpty()) throw new BusinessException("Topshiriladigan yopilgan kun yo'q");
         if (firstN <= 0 || firstN > all.size()) firstN = all.size();
         List<DayRecord> days = all.subList(0, firstN);
@@ -98,7 +116,7 @@ public class SubmissionService {
         if (sub.getNaqd() > 0) ledger.unreserve(OwnerType.KASSA, sub.getKassaId(), MoneyType.NAQD, sub.getNaqd());
         if (sub.getKlik() > 0) ledger.unreserve(OwnerType.KASSA, sub.getKassaId(), MoneyType.KLIK, sub.getKlik());
 
-        List<DayRecord> days = daysOf(sub);
+        List<DayRecord> days = lockedDaysOf(sub);
         for (DayRecord d : days) d.setStatus(DayStatus.YOPILGAN);
         dayRepo.saveAll(days);
 
@@ -112,7 +130,8 @@ public class SubmissionService {
 
     /**
      * Buxgalter/Admin pulni kassadan BEVOSITA qabul qiladi (hisobot kutmasdan):
-     * kassa balansidan yechiladi, Buxgalteriyaga kiradi, kunlar FIFO qoplanadi.
+     * kassa balansidan yechiladi, Buxgalteriyaga kiradi, kunlar qoplanadi
+     * (tanlangan sana birinchi, qolgani FIFO).
      * HIMOYA: mavjud (available) qoldiqdan ko'p qabul qilib BO'LMAYDI — balans 0
      * bo'lsa kassada pul yo'q, «qayerdan beradi?»; kutilayotgan hisobot borida ham
      * taqiq — rezervdagi pul ikki marta yechilib ketmasin. TERMINAL — faqat
@@ -127,7 +146,7 @@ public class SubmissionService {
     /** date — pul haqiqatda qaysi kun uchun qabul qilingani (kalendar orqali tanlanadi). */
     @Transactional
     public Operation directCollect(Long kassaId, MoneyType mt, long amount,
-                                   AppUser by, String topshirgan, java.time.LocalDate date) {
+                                   AppUser by, String topshirgan, LocalDate date) {
         if (amount <= 0) throw new BusinessException("Summa noldan katta bo'lishi kerak");
         // KLIK siyosati: buxgalteriya klik pulini QABUL QILMAYDI — klik har bir
         // kassaning o'z hisobida yig'iladi, hisobot esa «📤 Hisobot topshirish»
@@ -160,27 +179,19 @@ public class SubmissionService {
                 .build());
 
         if (mt != MoneyType.TERMINAL) {
-            long rem = amount;
-            List<DayRecord> days = new java.util.ArrayList<>();
-            days.addAll(dayRepo.findByKassaIdAndStatusOrderByDateAsc(kassaId, DayStatus.YOPILGAN));
-            days.addAll(dayRepo.findByKassaIdAndStatusOrderByDateAsc(kassaId, DayStatus.OCHIQ));
-            for (DayRecord d : days) {
-                if (rem <= 0) break;
-                long need = mt == MoneyType.NAQD ? d.remainNaqd() : d.remainKlik();
-                if (need <= 0) continue;
-                long take = Math.min(need, rem);
-                if (mt == MoneyType.NAQD) d.setCoveredNaqd(d.getCoveredNaqd() + take);
-                else d.setCoveredKlik(d.getCoveredKlik() + take);
-                rem -= take;
-                if (d.getStatus() == DayStatus.YOPILGAN
-                        && d.remainNaqd() == 0 && d.remainKlik() == 0)
-                    d.setStatus(DayStatus.QABUL_QILINGAN);
-            }
+            List<DayRecord> days = dayRepo.lockByKassaIdAndStatusIn(kassaId, OPEN);
+            long rem = absorbNegative(days, mt, amount);
+            for (DayRecord d : days)                       // 2) tanlangan sana birinchi
+                if (d.getDate().equals(date)) rem = takeFrom(d, mt, rem);
+            rem = fifo(days, mt, rem);                     // 3) qolgani eng eski kundan
+            days.forEach(SubmissionService::closeIfCovered);
             dayRepo.saveAll(days);
+            reportLeftover(by, kassaId, mt, amount, rem, "operation", op.getId());
         }
 
         audit.log(by.getId(), "PUL_QABUL", "operation", op.getId(),
-                "kassa=" + kassaId + " " + mt + " " + amount + " topshirdi=" + topshirgan);
+                "kassa=" + kassaId + " " + mt + " " + amount + " topshirdi=" + topshirgan
+                        + " sana=" + date);
         return op;
     }
 
@@ -194,10 +205,10 @@ public class SubmissionService {
         return sub;
     }
 
-    private List<DayRecord> daysOf(Submission sub) {
-        return dayRepo.findAllById(sub.getDayIds()).stream()
-                .sorted(Comparator.comparing(DayRecord::getDate))
-                .toList();
+    /** Hisobot kunlari — QULF ostida, sana bo'yicha o'sish tartibida. */
+    private List<DayRecord> lockedDaysOf(Submission sub) {
+        if (sub.getDayIds().isEmpty()) return new ArrayList<>();
+        return new ArrayList<>(dayRepo.lockByIds(sub.getDayIds()));
     }
 
     private Submission decide(Submission sub, AppUser by, long accNaqd, long accKlik, String comment) {
@@ -218,22 +229,30 @@ public class SubmissionService {
             opRepo.save(topshiriqOp(sub, MoneyType.NAQD, accNaqd, by));
         }
 
-        // Kunlarni FIFO qoplash: eng eski kundan boshlab.
-        List<DayRecord> days = daysOf(sub);
-        long remN = accNaqd, remK = accKlik;
+        // Hisobot kunlarini qoplash: manfiylar yutiladi, qolgani FIFO (eng eski kundan).
+        List<DayRecord> days = lockedDaysOf(sub);
+        long remN = fifo(days, MoneyType.NAQD, absorbNegative(days, MoneyType.NAQD, accNaqd));
+        long remK = fifo(days, MoneyType.KLIK, absorbNegative(days, MoneyType.KLIK, accKlik));
         for (DayRecord d : days) {
-            long needN = d.remainNaqd();
-            if (needN <= remN) { d.setCoveredNaqd(d.netNaqd()); remN -= needN; }
-            else { d.setCoveredNaqd(d.getCoveredNaqd() + remN); remN = 0; }
-
-            long needK = d.remainKlik();
-            if (needK <= remK) { d.setCoveredKlik(d.netKlik()); remK -= needK; }
-            else { d.setCoveredKlik(d.getCoveredKlik() + remK); remK = 0; }
-
             boolean fullyCovered = d.remainNaqd() == 0 && d.remainKlik() == 0;
             d.setStatus(fullyCovered ? DayStatus.QABUL_QILINGAN : DayStatus.YOPILGAN);
         }
         dayRepo.saveAll(days);
+
+        // Hisobot topshirilgandan keyin uning kunlari kichrayib qolgan bo'lsa (MoySklad
+        // storno/summa o'zgarishi) — ortgan pul kassaning boshqa ochiq kunlariga tushadi,
+        // balans va kunlar kesimi ajralib ketmasin.
+        if (remN > 0 || remK > 0) {
+            Set<Long> own = new java.util.HashSet<>(sub.getDayIds());
+            List<DayRecord> others = new ArrayList<>(dayRepo.lockByKassaIdAndStatusIn(kassaId, OPEN));
+            others.removeIf(d -> own.contains(d.getId()));
+            remN = fifo(others, MoneyType.NAQD, remN);
+            remK = fifo(others, MoneyType.KLIK, remK);
+            others.forEach(SubmissionService::closeIfCovered);
+            dayRepo.saveAll(others);
+            reportLeftover(by, kassaId, MoneyType.NAQD, accNaqd, remN, "submission", sub.getId());
+            reportLeftover(by, kassaId, MoneyType.KLIK, accKlik, remK, "submission", sub.getId());
+        }
 
         boolean full = accNaqd == sub.getNaqd() && accKlik == sub.getKlik();
         sub.setAcceptedNaqd(accNaqd);
@@ -258,5 +277,68 @@ public class SubmissionService {
                 .createdBy(sub.getSubmittedBy())
                 .decidedBy(by.getId()).decidedAt(Instant.now())
                 .build();
+    }
+
+    /* ------------------------ kunlarni qoplash yordamchilari ------------------------ */
+
+    private static long remain(DayRecord d, MoneyType mt) {
+        return mt == MoneyType.NAQD ? d.remainNaqd() : d.remainKlik();
+    }
+
+    private static void addCovered(DayRecord d, MoneyType mt, long x) {
+        if (mt == MoneyType.NAQD) d.setCoveredNaqd(d.getCoveredNaqd() + x);
+        else d.setCoveredKlik(d.getCoveredKlik() + x);
+    }
+
+    /**
+     * Manfiy qoldiqli kunlar yutiladi: covered += remain (qoldiq 0 bo'ladi), qoplash
+     * uchun qolgan summa shu miqdorga OSHADI — bu pul boshqa kunlar tushumidan
+     * ketgan, ular endi shuncha ko'proq qoplanadi. Natijada kunlar yig'indisi
+     * balans bilan teng qoladi, «-» kun esa abadiy osilib qolmaydi.
+     */
+    private static long absorbNegative(List<DayRecord> days, MoneyType mt, long rem) {
+        for (DayRecord d : days) {
+            long r = remain(d, mt);
+            if (r < 0) { addCovered(d, mt, r); rem -= r; }
+        }
+        return rem;
+    }
+
+    /** Bitta kunni qoldig'igacha qoplash; qolgan summa qaytadi. */
+    private static long takeFrom(DayRecord d, MoneyType mt, long rem) {
+        long need = remain(d, mt);
+        if (need <= 0 || rem <= 0) return rem;
+        long take = Math.min(need, rem);
+        addCovered(d, mt, take);
+        return rem - take;
+    }
+
+    /** FIFO: ro'yxat tartibida (eng eski kundan) qoplash. */
+    private static long fifo(List<DayRecord> days, MoneyType mt, long rem) {
+        for (DayRecord d : days) {
+            if (rem <= 0) break;
+            rem = takeFrom(d, mt, rem);
+        }
+        return rem;
+    }
+
+    /** YOPILGAN kun to'liq qoplangan bo'lsa — QABUL_QILINGAN (OCHIQ bugungi kun ochiq qoladi). */
+    private static void closeIfCovered(DayRecord d) {
+        if (d.getStatus() == DayStatus.YOPILGAN && d.remainNaqd() == 0 && d.remainKlik() == 0)
+            d.setStatus(DayStatus.QABUL_QILINGAN);
+    }
+
+    /**
+     * Balansdan yechilgan summa kunlarga to'liq tushmadi — kunlar kesimi balansdan
+     * kam edi (eski nomuvofiqlik). Jimgina yo'qotilmaydi: audit + log; yaxlitlik
+     * tekshiruvi (Jobs.ledgerIntegrity → verifyDays) SuperAdmin'ga ko'rsatadi.
+     */
+    private void reportLeftover(AppUser by, Long kassaId, MoneyType mt, long amount, long rem,
+                                String entity, Long entityId) {
+        if (rem <= 0) return;
+        String msg = "kassa=" + kassaId + " " + mt + " qabul=" + amount
+                + " kunlarga tushmagan qoldiq=" + rem + " (kunlar kesimi balansdan kam)";
+        log.warn("Kun qoplash qoldig'i: {}", msg);
+        audit.log(by.getId(), "QOPLASH_QOLDIQ", entity, entityId, msg);
     }
 }

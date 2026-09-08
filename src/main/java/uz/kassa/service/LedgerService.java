@@ -488,7 +488,10 @@ public class LedgerService {
      */
     @Transactional
     public long[] resetKassaBefore(Long kassaId, LocalDate beforeExclusive, Long byUserId) {
-        List<DayRecord> days = dayRepo.findByKassaIdAndStatusInOrderByDateAsc(
+        // Qulf tartibi: avval balans, keyin kunlar (sinxron/qabul bilan bir xil — deadlock yo'q)
+        lock(OwnerType.KASSA, kassaId, MoneyType.NAQD);
+        lock(OwnerType.KASSA, kassaId, MoneyType.KLIK);
+        List<DayRecord> days = dayRepo.lockByKassaIdAndStatusIn(
                         kassaId, List.of(DayStatus.OCHIQ, DayStatus.YOPILGAN)).stream()
                 .filter(d -> d.getDate().isBefore(beforeExclusive)).toList();
         long n = 0, k = 0;
@@ -557,6 +560,28 @@ public class LedgerService {
             if (expected != b.getAmount())
                 issues.add(new Mismatch(b.getOwnerType(), b.getOwnerId(), b.getMoneyType(),
                         expected, b.getAmount()));
+        }
+        return issues;
+    }
+
+    /** Kassa NAQD balansi va kunlar kesimi (barcha kunlar qoldig'i yig'indisi) farqi. */
+    public record DayMismatch(Long kassaId, long daysRemain, long balance) {
+        public long diff() { return balance - daysRemain; }
+    }
+
+    /**
+     * Kassa NAQD balansi == kunlar qoldig'i yig'indisi (status'dan qat'i nazar) —
+     * ikki kesim bir manbadan (operatsiyalar) yuritiladi, farq bo'lsa qayerdadir
+     * yozuv yo'qolgan (poyga) yoki qoplash to'liq tushmagan. KLIK tekshirilmaydi:
+     * klik hisobot qabulida kunlar qoplanadi, balans esa kassada qoladi (siyosat).
+     */
+    @Transactional(readOnly = true)
+    public List<DayMismatch> verifyDays() {
+        List<DayMismatch> issues = new java.util.ArrayList<>();
+        for (Balance b : balanceRepo.findAll()) {
+            if (b.getOwnerType() != OwnerType.KASSA || b.getMoneyType() != MoneyType.NAQD) continue;
+            long days = dayRepo.sumRemainNaqd(b.getOwnerId());
+            if (days != b.getAmount()) issues.add(new DayMismatch(b.getOwnerId(), days, b.getAmount()));
         }
         return issues;
     }

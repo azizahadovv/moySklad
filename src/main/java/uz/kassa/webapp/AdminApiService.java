@@ -171,6 +171,7 @@ public class AdminApiService {
                 "id", id, "name", k.getName(), "label", nz(k.getShopLabel()), "cashless", k.isCashless(),
                 "naqd", n.getAmount(), "naqdBand", n.getReserved(), "naqdMavjud", n.available(),
                 "klik", kl.getAmount(), "klikBand", kl.getReserved(), "klikMavjud", kl.available(),
+                "todayRemainNaqd", day == null ? 0 : day.remainNaqd(),
                 "today", day == null ? Map.of() : mapOf(
                         "prixodNaqd", day.getPrixodNaqd(), "prixodKlik", day.getPrixodKlik(),
                         "prixodTerminal", day.getPrixodTerminal(),

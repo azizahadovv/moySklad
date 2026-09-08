@@ -249,7 +249,22 @@ public class Jobs {
     public void ledgerIntegrity() {
         try {
             List<LedgerService.Mismatch> issues = ledger.verifyIntegrity();
-            if (issues.isEmpty()) return;
+            List<LedgerService.DayMismatch> dayIssues = ledger.verifyDays();
+            if (issues.isEmpty() && dayIssues.isEmpty()) return;
+            if (issues.isEmpty()) {
+                StringBuilder sb = new StringBuilder("⚠️ <b>Kunlar kesimi balansga mos emas!</b>\n"
+                        + "Kassa naqd balansi va kunlar qoldig'i yig'indisi farq qiladi "
+                        + "(pul qabulida kunlarga tushmagan qoldiq yoki yo'qolgan yozuv):\n");
+                for (LedgerService.DayMismatch m : dayIssues)
+                    sb.append("\n<b>").append(TextUtil.esc(names.owner(OwnerType.KASSA, m.kassaId())))
+                      .append("</b>: balans ").append(TextUtil.fmt(m.balance()))
+                      .append(" · kunlar ").append(TextUtil.fmt(m.daysRemain()))
+                      .append(" · farq <b>").append(TextUtil.fmt(m.diff())).append("</b> so'm");
+                sb.append("\n\nTuzatish: 🛠 Корректировка (farq sanasi bilan) yoki ♻️ Нол бошлаш.");
+                notify.toRole(Role.SUPERADMIN, sb.toString(), null);
+                log.warn("Kunlar kesimi nomuvofiqligi: {} ta kassa", dayIssues.size());
+                return;
+            }
             StringBuilder sb = new StringBuilder("⚠️ <b>Balans nomuvofiqligi topildi!</b>\n"
                     + "Saqlangan qiymat operatsiyalar tarixiga mos kelmayapti:\n");
             for (LedgerService.Mismatch m : issues) {

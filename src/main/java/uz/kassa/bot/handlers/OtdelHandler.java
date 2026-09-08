@@ -299,13 +299,31 @@ public class OtdelHandler {
         String topshirgan = userRepo.findById(Long.parseLong(arg))
                 .map(AppUser::getFullName).orElse("?");
         s.data.put("qbWho", topshirgan);
+        long kassaId = s.getLong("qbKassa");
+        MoneyType mt = MoneyType.valueOf(s.getStr("qbMt"));
+        java.time.LocalDate today = ledger.today();
+        // Tugmalarda o'sha kunning topshirilmagan qoldig'i — tanlangan sana BIRINCHI
+        // qoplanadi, qolgani eng eski kunlardan yopiladi.
+        String hint = mt == MoneyType.NAQD
+                ? "\n<i>Tanlangan kun birinchi yopiladi, ortgani eng eski kunlardan.</i>" : "";
         sender.edit(chatId, msgId, "💰 Summa: <b>" + fmt(s.getLong("qbSum")) + "</b> so'm ("
-                + mtLabel(MoneyType.valueOf(s.getStr("qbMt"))) + ")\n"
+                + mtLabel(mt) + ")\n"
                 + "👤 Topshirdi: <b>" + esc(topshirgan) + "</b>\n\n"
-                + "📅 <b>Qaysi sana uchun qabul qilinsin?</b>", inline(List.of(
-                irow(btn("📅 Bugun", "a:qbd:0"), btn("Kecha", "a:qbd:1")),
+                + "📅 <b>Qaysi sana uchun qabul qilinsin?</b>" + hint, inline(List.of(
+                irow(btn("📅 Bugun" + dayRemainLabel(kassaId, mt, today), "a:qbd:0"),
+                     btn("Kecha" + dayRemainLabel(kassaId, mt, today.minusDays(1)), "a:qbd:1")),
                 irow(btn("🗓 Kalendar", "a:cal:o:q")),
                 irow(btn("❌ Bekor", "cx")))));
+    }
+
+
+    /** « (410 000)» — o'sha kunning topshirilmagan naqd qoldig'i (faqat NAQD, qoldiq bo'lsa). */
+    private String dayRemainLabel(long kassaId, MoneyType mt, java.time.LocalDate d) {
+        if (mt != MoneyType.NAQD) return "";
+        return dayRepo.findByKassaIdAndDate(kassaId, d)
+                .filter(x -> x.getStatus() == DayStatus.OCHIQ || x.getStatus() == DayStatus.YOPILGAN)
+                .filter(x -> x.remainNaqd() != 0)
+                .map(x -> " (" + fmt(x.remainNaqd()) + ")").orElse("");
     }
 
 
