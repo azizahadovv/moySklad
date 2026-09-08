@@ -236,6 +236,72 @@ public class SubmissionService {
         return op;
     }
 
+    /**
+     * ❌ Bevosita qabulni BEKOR qilish (faqat SuperAdmin) — xato/ikki marta qabul uchun:
+     * pul buxgalteriyadan kassaga qaytadi, kunlar qoplanishi teskari yechiladi (avval
+     * shu qabulga bog'langan kunlar, keyin boshqa qoplangan kunlar — eng yangisidan),
+     * operatsiya BEKOR holatiga o'tadi (jurnalda qoladi, hisobotlarga kirmaydi),
+     * avto-hisobot RAD bo'ladi.
+     */
+    @Transactional
+    public Operation cancelCollect(Long opId, AppUser by, String reason) {
+        Operation op = opRepo.findById(opId).orElseThrow(() -> new BusinessException("Operatsiya topilmadi"));
+        if (op.getType() != OpType.TOPSHIRIQ || op.getStatus() != OpStatus.TASDIQLANGAN
+                || op.getFromOwnerType() != OwnerType.KASSA)
+            throw new BusinessException("Bu operatsiya bekor qilinadigan pul qabuli emas");
+        if (op.getMoneyType() != MoneyType.NAQD)
+            throw new BusinessException("Faqat naqd qabuli bekor qilinadi");
+        Long kassaId = op.getFromOwnerId();
+        long amount = op.getAmount();
+        Submission sub = op.getSubmissionId() == null ? null : subRepo.findById(op.getSubmissionId()).orElse(null);
+        if (sub != null && (sub.getComment() == null || !sub.getComment().startsWith(DIRECT_PREFIX)))
+            throw new BusinessException("Bu qabul kassir hisoboti orqali — hisobot bekor qilinmaydi, "
+                    + "korrektirovka bilan tuzating");
+
+        // Balans: kassaga qaytadi, buxgalteriyadan chiqadi (tekshiruvsiz — minus bo'lishi mumkin)
+        ledger.credit(OwnerType.KASSA, kassaId, MoneyType.NAQD, amount);
+        ledger.settle(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD, 0, amount);
+
+        // Kunlar: qoplash teskari yechiladi
+        List<DayRecord> days = dayRepo.lockCoveredNaqdByKassa(kassaId);
+        Set<Long> own = sub == null ? Set.of() : new java.util.HashSet<>(sub.getDayIds());
+        long rem = amount;
+        for (int pass = 0; pass < 2 && rem > 0; pass++) {
+            for (DayRecord d : days) {
+                if (rem <= 0) break;
+                if ((pass == 0) != own.contains(d.getId())) continue;
+                long c = d.getCoveredNaqd();
+                if (c <= 0) continue;
+                long take = Math.min(c, rem);
+                d.setCoveredNaqd(c - take);
+                rem -= take;
+            }
+        }
+        for (DayRecord d : days)
+            if (d.getStatus() == DayStatus.QABUL_QILINGAN && (d.remainNaqd() != 0 || d.remainKlik() != 0))
+                d.setStatus(DayStatus.YOPILGAN);
+        dayRepo.saveAll(days);
+        if (rem > 0) {
+            log.warn("Qabul bekor: {} so'm qoplangan kun topilmadi (kassa {})", rem, kassaId);
+            audit.log(by.getId(), "QOPLASH_QOLDIQ", "operation", op.getId(),
+                    "bekor: kassa=" + kassaId + " kunlardan yechilmagan=" + rem);
+        }
+
+        op.setStatus(OpStatus.BEKOR);
+        op.setComment((op.getComment() == null ? "" : op.getComment() + " | ") + "❌ Бекор: " + reason);
+        op = opRepo.save(op);
+        if (sub != null) {
+            sub.setStatus(SubmissionStatus.RAD);
+            sub.setComment(sub.getComment() + " | ❌ Бекор: " + reason);
+            sub.setDecidedBy(by.getId());
+            sub.setDecidedAt(Instant.now());
+            subRepo.save(sub);
+        }
+        audit.log(by.getId(), "PUL_QABUL_BEKOR", "operation", op.getId(),
+                "kassa=" + kassaId + " NAQD " + amount + " sana=" + op.getOpDate() + " | " + reason);
+        return op;
+    }
+
     /** Bevosita qabuldan avtomatik yaratilgan hisobot izohi shu bilan boshlanadi. */
     public static final String DIRECT_PREFIX = "Бевосита қабул — топширди: ";
 

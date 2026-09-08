@@ -42,6 +42,11 @@ public interface OperationRepo extends JpaRepository<Operation, Long> {
     List<Operation> findByOpDateBetweenAndMoyskladIdStartingWith(
             java.time.LocalDate from, java.time.LocalDate to, String prefix);
 
+    /** Qabulni bekor qilish ro'yxati: tasdiqlangan qabullar, sahifalab (davrga bog'liq emas). */
+    List<Operation> findByTypeAndStatusAndMoneyTypeOrderByIdDesc(OpType type, OpStatus status, MoneyType mt,
+                                                                 Pageable page);
+    long countByTypeAndStatusAndMoneyType(OpType type, OpStatus status, MoneyType mt);
+
     /** Bekor qilish/tahrirlash uchun: bot orqali tasdiqlangan oxirgi rasxodlar. */
     List<Operation> findTop10ByTypeAndStatusAndMoyskladIdIsNullOrderByIdDesc(
             OpType type, OpStatus status);

@@ -156,8 +156,16 @@ public class AdminHandler {
             case "qbd" -> otdelH.qbDate(u, s, arg, chatId, msgId);
             case "cal" -> calH.calCb(u, s, arg, chatId, msgId);
             case "rxm" -> statsH.rasxodMenu(s, chatId, msgId);
-            case "tp" -> statsH.topshirilgan(s, chatId, msgId, arg);
+            case "tp" -> statsH.topshirilgan(u, s, chatId, msgId, arg);
             case "tpx" -> statsH.topshirilganExcel(u, arg, chatId);
+            case "tpc", "tpcx", "tpcy" -> {
+                if (u.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Faqat SuperAdmin uchun."); return true; }
+                switch (cmd) {
+                    case "tpc" -> statsH.tpcList(s, arg, chatId, msgId);
+                    case "tpcx" -> statsH.tpcConfirm(arg, chatId, msgId);
+                    default -> statsH.tpcDo(u, arg, chatId, msgId);
+                }
+            }
             case "audm" -> statsH.auditMenu(s, chatId, msgId);
             case "aud" -> statsH.auditView(s, Long.parseLong(arg), chatId, msgId);
             case "aux" -> statsH.auditExcel(Long.parseLong(arg), chatId);
@@ -499,7 +507,7 @@ public class AdminHandler {
                 if (text.equals("🗓 Kalendar")) { calH.calOpen(s, chatId, 0, "tp"); return true; }
                 String code = sup.codeOf(text);
                 if (code == null) return false;
-                statsH.topshirilgan(s, chatId, 0, code);
+                statsH.topshirilgan(u, s, chatId, 0, code);
             }
             case "svod" -> {
                 switch (text) {

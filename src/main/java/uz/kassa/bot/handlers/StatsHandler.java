@@ -40,14 +40,16 @@ public class StatsHandler {
     private final uz.kassa.repo.AuditRepo auditRepo;
     private final uz.kassa.config.AppProps props;
     private final uz.kassa.webapp.AdminMoneyReportService moneyReport;
+    private final uz.kassa.service.SubmissionService submissionService;
+    private final NotificationService notify;
     private final AdminSupport sup;
 
 
     /* ---------- 🏦 ТОПШИРИЛГАН ПУЛЛАР (davr bo'yicha qabul qilingan pullar) ---------- */
 
-    void topshirilgan(Session s, long chatId, int msgId, String code) {
+    void topshirilgan(AppUser u, Session s, long chatId, int msgId, String code) {
         java.time.LocalDate[] p = sup.periodOf(code);
-        topshirilganRange(s, chatId, msgId, p[0], p[1]);
+        topshirilganRange(u, s, chatId, msgId, p[0], p[1]);
     }
 
 
@@ -58,7 +60,7 @@ public class StatsHandler {
      * (AdminMoneyReportService.money), Excel ham o'sha.
      */
     @SuppressWarnings("unchecked")
-    void topshirilganRange(Session s, long chatId, int msgId,
+    void topshirilganRange(AppUser u, Session s, long chatId, int msgId,
                            java.time.LocalDate from, java.time.LocalDate to) {
         Map<String, Object> d = moneyReport.money(from, to, null);
         Map<String, Object> ct = (Map<String, Object>) d.get("colTotals");
@@ -101,11 +103,16 @@ public class StatsHandler {
           .append("   топширилди: 💵 ").append(fmt(num(st, "naqd"))).append(" · 📲 ").append(fmt(num(st, "klik")))
           .append("\n   қабул қилинди: 💵 ").append(fmt(num(st, "accNaqd"))).append(" · 📲 ").append(fmt(num(st, "accKlik")));
 
-        InlineKeyboardMarkup kb = inline(List.of(
-                irow(btn("📆 Bugun", "a:tp:t"), btn("Kecha", "a:tp:y"), btn("7 kun", "a:tp:7")),
-                irow(btn("30 kun", "a:tp:30"), btn("Shu oy", "a:tp:m"), btn("🗓 Kalendar", "a:cal:o:tp")),
-                irow(btn("📗 Excel", "a:tpx:" + from + ":" + to)),
-                irow(sup.bk("a:p:st"))));
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        // Tanlangan davr tugmasi ✅ bilan belgilanadi
+        rows.add(irow(pbtn("📆 Bugun", "t", from, to), pbtn("Kecha", "y", from, to), pbtn("7 kun", "7", from, to)));
+        rows.add(irow(pbtn("30 kun", "30", from, to), pbtn("Shu oy", "m", from, to), btn("🗓 Kalendar", "a:cal:o:tp")));
+        rows.add(irow(btn("📗 Excel", "a:tpx:" + from + ":" + to)));
+        // Xato/ikki marta qabulni bekor qilish — faqat SuperAdmin
+        if (u.getRole() == Role.SUPERADMIN && !cols.isEmpty())
+            rows.add(irow(btn("❌ Қабулни бекор қилиш", "a:tpc:0")));
+        rows.add(irow(sup.bk("a:p:st")));
+        InlineKeyboardMarkup kb = inline(rows);
         if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), kb);
         else sup.sendContent(s, chatId, sb.toString(), kb);
     }
@@ -120,6 +127,98 @@ public class StatsHandler {
         } catch (uz.kassa.service.BusinessException e) {
             sender.send(chatId, "⚠️ " + esc(e.getMessage()));
         }
+    }
+
+
+    /* ---------- ❌ Qabulni bekor qilish (faqat SuperAdmin) ---------- */
+
+    private static final int TPC_PAGE = 8;
+
+    /** a:tpc:<sahifa> — bevosita qabullar, sahifalab (davrga BOG'LIQ EMAS — eski kunlar ham ko'rinsin). */
+    void tpcList(Session s, String arg, long chatId, int msgId) {
+        int page = 0;
+        try { page = Math.max(0, Integer.parseInt(arg.split(":")[0])); } catch (NumberFormatException ignored) { }
+        long total = opRepo.countByTypeAndStatusAndMoneyType(OpType.TOPSHIRIQ, OpStatus.TASDIQLANGAN, MoneyType.NAQD);
+        int pages = (int) Math.max(1, (total + TPC_PAGE - 1) / TPC_PAGE);
+        if (page >= pages) page = pages - 1;
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        int n = 0;
+        for (Operation o : opRepo.findByTypeAndStatusAndMoneyTypeOrderByIdDesc(
+                OpType.TOPSHIRIQ, OpStatus.TASDIQLANGAN, MoneyType.NAQD,
+                org.springframework.data.domain.PageRequest.of(page, TPC_PAGE))) {
+            if (o.getFromOwnerType() != OwnerType.KASSA) continue;
+            n++;
+            rows.add(irow(btn("#" + o.getId() + " · " + o.getOpDate().format(DF) + " · "
+                    + names.owner(OwnerType.KASSA, o.getFromOwnerId()) + " · " + fmt(o.getAmount()),
+                    "a:tpcx:" + o.getId())));
+        }
+        if (pages > 1) {
+            List<InlineKeyboardButton> nav = new ArrayList<>();
+            if (page > 0) nav.add(btn("‹ Олдинги", "a:tpc:" + (page - 1)));
+            nav.add(btn((page + 1) + " / " + pages, "a:tpc:" + page));
+            if (page < pages - 1) nav.add(btn("Кейинги ›", "a:tpc:" + (page + 1)));
+            rows.add(nav);
+        }
+        rows.add(irow(sup.bk("a:tp:m")));
+        String text = "❌ <b>Қабулни бекор қилиш</b>\n<i>Жами " + total + " та қабул (барча саналар), "
+                + "саҳифа " + (page + 1) + "/" + pages + "</i>\n\n"
+                + (n == 0 ? "Бекор қилинадиган қабул йўқ."
+                    : "Қайси қабул хато ёки икки марта қилинган? Танланг:");
+        sender.edit(chatId, msgId, text, inline(rows));
+    }
+
+
+    /** a:tpcx:<opId> — tasdiqlash oynasi. */
+    void tpcConfirm(String arg, long chatId, int msgId) {
+        Operation o = opRepo.findById(Long.parseLong(arg)).orElse(null);
+        if (o == null || o.getStatus() != OpStatus.TASDIQLANGAN) {
+            sender.edit(chatId, msgId, "⚠️ Операция топилмади ёки аллақачон бекор қилинган.",
+                    inline(List.of(irow(sup.bk("a:tp:m")))));
+            return;
+        }
+        String who = o.getComment() != null && o.getComment().startsWith("Topshirdi: ")
+                ? o.getComment().substring(11) : "";
+        sender.edit(chatId, msgId, "❌ <b>Қабулни бекор қилиш</b>\n\n"
+                + "Операция: <b>#" + o.getId() + "</b>\n"
+                + "🏪 Касса: <b>" + esc(names.owner(OwnerType.KASSA, o.getFromOwnerId())) + "</b>\n"
+                + "💰 Сумма: <b>" + fmt(o.getAmount()) + "</b> so'm\n"
+                + "📅 Сана: <b>" + o.getOpDate().format(DF) + "</b>\n"
+                + (who.isEmpty() ? "" : "👤 Топширди: " + esc(who) + "\n")
+                + "\nБекор қилинса: пул бухгалтериядан кассага қайтади, кунлар яна «топширилмаган» бўлади, "
+                + "операция журналда «бекор» деб қолади, ҳисоботларга кирмайди.\n\n<b>Тасдиқлайсизми?</b>",
+                inline(List.of(
+                        irow(btn("✅ Ҳа, бекор қилиш", "a:tpcy:" + o.getId())),
+                        irow(sup.bk("a:tp:m")))));
+    }
+
+
+    /** a:tpcy:<opId> — bajarish. */
+    void tpcDo(AppUser u, String arg, long chatId, int msgId) {
+        try {
+            Operation o = submissionService.cancelCollect(Long.parseLong(arg), u,
+                    "SuperAdmin " + u.getFullName() + " бекор қилди");
+            long kassaId = o.getFromOwnerId();
+            long avail = ledger.view(OwnerType.KASSA, kassaId, MoneyType.NAQD).available();
+            long bux = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).getAmount();
+            sender.edit(chatId, msgId, "✅ <b>Қабул бекор қилинди</b> #" + o.getId() + "\n\n"
+                    + "🏪 " + esc(names.owner(OwnerType.KASSA, kassaId)) + " ← 🏦 Бухгалтерия: <b>"
+                    + fmt(o.getAmount()) + "</b> so'm\n"
+                    + "💼 Кассада энди: <b>" + fmt(avail) + "</b> so'm\n"
+                    + "🏦 Отдел основной: <b>" + fmt(bux) + "</b> so'm",
+                    inline(List.of(irow(btn("🏦 Топширилган пуллар", "a:tp:m")), irow(sup.bk("a:p:st")))));
+            notify.toKassa(kassaId, "↩️ Бухгалтерия " + o.getOpDate().format(DF) + " учун қабул қилинган <b>"
+                    + fmt(o.getAmount()) + "</b> so'm қабулини бекор қилди — пул кассангизга қайтарилди.", null);
+        } catch (uz.kassa.service.BusinessException e) {
+            sender.edit(chatId, msgId, "⚠️ " + esc(e.getMessage()), inline(List.of(irow(sup.bk("a:tp:m")))));
+        }
+    }
+
+
+    /** Davr tugmasi: joriy davrga mos kelsa «✅ …». */
+    private InlineKeyboardButton pbtn(String label, String code, java.time.LocalDate from, java.time.LocalDate to) {
+        java.time.LocalDate[] p = sup.periodOf(code);
+        boolean on = p[0].equals(from) && p[1].equals(to);
+        return btn((on ? "✅ " : "") + label, "a:tp:" + code);
     }
 
 

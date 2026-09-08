@@ -40,6 +40,11 @@ public interface DayRepo extends JpaRepository<DayRecord, Long> {
     @Query("select d from DayRecord d where d.id in :ids order by d.date asc")
     List<DayRecord> lockByIds(@Param("ids") Collection<Long> ids);
 
+    /** Qabulni bekor qilish: naqd qoplangan kunlar, eng yangisidan (qoplash teskari yechiladi). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select d from DayRecord d where d.kassaId = :kassaId and d.coveredNaqd <> 0 order by d.date desc")
+    List<DayRecord> lockCoveredNaqdByKassa(@Param("kassaId") Long kassaId);
+
     /** Yaxlitlik: kassaning BARCHA kunlari bo'yicha topshirilmagan naqd yig'indisi
      *  (status'dan qat'i nazar) — kassa NAQD balansi bilan teng bo'lishi kerak. */
     @Query("""
