@@ -77,8 +77,14 @@ public class OtdelHandler {
                 + "📲 Click: <b>" + fmt(k) + "</b> so'm\n"
                 + "💳 Terminal: <b>" + fmt(t) + "</b> so'm\n"
                 + "➕ <b>Жами: " + fmt(n + k + t) + "</b> so'm";
-        InlineKeyboardMarkup qb = inline(List.of(
-                irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id))));
+        s.data.put("qbPreDate", ledger.today().toString());   // bugungi tushumdan qabul — sana bugun
+        s.data.put("qbPreKassa", id);
+        s.data.remove("qbPreFrom"); s.data.remove("qbPreTo");
+        // Topshiriladigan naqd bo'lmasa — qabul tugmasi chiqmaydi (0 dan qabul bo'lmaydi)
+        long avail = ledger.view(OwnerType.KASSA, id, MoneyType.NAQD).available();
+        InlineKeyboardMarkup qb = avail > 0 ? inline(List.of(
+                irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id)))) : null;
+        if (avail <= 0) text += "\n\n✅ Топшириладиган нақд йўқ";
         if (msgId > 0) sender.edit(chatId, msgId, text, qb);
         else sup.sendContent(s, chatId, text, qb);
     }
@@ -89,6 +95,8 @@ public class OtdelHandler {
      * joriy qo'ldagi qoldiq (naqd/click) + topshirilmagan yopilgan kunlar ro'yxati.
      */
     void kassaTopshirilmagan(Session s, long id, long chatId, int msgId) {
+        s.data.remove("qbPreDate"); s.data.remove("qbPreKassa");   // umumiy qoldiq — sana so'raladi
+        s.data.remove("qbPreFrom"); s.data.remove("qbPreTo");
         Balance n = ledger.view(OwnerType.KASSA, id, MoneyType.NAQD);
         Balance k = ledger.view(OwnerType.KASSA, id, MoneyType.KLIK);
         List<DayRecord> days = submissionService.submittableDays(id);
@@ -129,8 +137,10 @@ public class OtdelHandler {
                     + "ундан кейин пулни бевосита қабул қилиш мумкин.");
             rows.add(irow(btn("📥 Ҳисоботларни кўриш", "a:p:pnd:" + id)));
         }
-        rows.add(irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id)));
-        InlineKeyboardMarkup qb = inline(rows);
+        // Qabul tugmasi faqat topshiriladigan naqd bo'lsa va kutilayotgan hisobot bo'lmasa
+        if (pend.isEmpty() && n.available() > 0)
+            rows.add(irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id)));
+        InlineKeyboardMarkup qb = rows.isEmpty() ? null : inline(rows);
         if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), qb);
         else sup.sendContent(s, chatId, sb.toString(), qb);
     }
@@ -204,40 +214,79 @@ public class OtdelHandler {
 
     void kassaPeriodRange(Session s, long id, java.time.LocalDate from,
                                   java.time.LocalDate to, long chatId, int msgId) {
-        long kn = 0, kk = 0, rn = 0, rk = 0;
-        for (Operation o : opRepo.byPeriod(from, to)) {
-            boolean in = o.getToOwnerType() == OwnerType.KASSA && Long.valueOf(id).equals(o.getToOwnerId());
-            boolean out = o.getFromOwnerType() == OwnerType.KASSA && Long.valueOf(id).equals(o.getFromOwnerId());
-            if (o.getType() == OpType.PRIXOD && in) {
-                if (o.getMoneyType() == MoneyType.KLIK) kk += o.getAmount(); else kn += o.getAmount();
-            }
-            if (o.getType() == OpType.RASXOD && out) {
-                if (o.getMoneyType() == MoneyType.KLIK) rk += o.getAmount(); else rn += o.getAmount();
+        // Davr ko'rsatkichlari KUN YOZUVLARIDAN (Баланс bo'limi bilan bir manba) —
+        // terminal (karta) alohida: u bank hisobiga tushadi, naqdga QO'SHILMAYDI
+        // (avval operatsiyalar yig'indisida terminal naqdga qo'shilib, «Давр» va
+        // «Баланс» 150 000 ga farq qilardi, buxgalter ortiqcha qabul qilardi).
+        long kn = 0, kk = 0, kt = 0, vn = 0, vk = 0, rn = 0, rk = 0, cov = 0, rem = 0;
+        List<DayRecord> dl = new ArrayList<>(dayRepo.findByKassaIdAndDateBetween(id, from, to));
+        dl.sort(java.util.Comparator.comparing(DayRecord::getDate));
+        StringBuilder dayLines = new StringBuilder();
+        for (DayRecord d : dl) {
+            kn += d.getPrixodNaqd(); kk += d.getPrixodKlik(); kt += d.getPrixodTerminal();
+            vn += d.getVozvratNaqd(); vk += d.getVozvratKlik();
+            rn += d.getRasxodNaqd(); rk += d.getRasxodKlik();
+            cov += d.getCoveredNaqd();
+            boolean open = d.getStatus() == DayStatus.OCHIQ || d.getStatus() == DayStatus.YOPILGAN;
+            if (open) rem += d.remainNaqd();
+            // Kun-bakun holat: nima yopildi, nima qoldi (faqat davr uchun, 20 kungacha)
+            if (dl.size() > 1 && dayLines.length() < 1500 && (d.netNaqd() != 0 || d.getCoveredNaqd() != 0)) {
+                long r = open ? d.remainNaqd() : 0;
+                dayLines.append("• ").append(d.getDate().format(DF)).append(" — нақд ").append(fmt(d.netNaqd()))
+                        .append(r == 0 ? " ✅ ёпилган" : " · ⏳ қолди <b>" + fmt(r) + "</b>")
+                        .append(d.getStatus() == DayStatus.TOPSHIRILGAN ? " (ҳисоботда)" : "").append("\n");
             }
         }
-        String text = "📆 <b>" + sup.rangeLabel(from, to) + "</b> — "
+        StringBuilder text = new StringBuilder("📆 <b>" + sup.rangeLabel(from, to) + "</b> — "
                 + esc(names.owner(OwnerType.KASSA, id)) + "\n\n"
-                + "🟢 Тушум: 💵 <b>" + fmt(kn) + "</b> · 📲 <b>" + fmt(kk) + "</b>\n"
-                + "🔴 Расход: 💵 <b>" + fmt(rn) + "</b> · 📲 <b>" + fmt(rk) + "</b>\n"
-                + "➕ <b>Фарқ: " + fmt(kn + kk - rn - rk) + "</b> so'm";
-        InlineKeyboardMarkup qb = inline(List.of(
+                + "🟢 Тушум: 💵 <b>" + fmt(kn) + "</b> · 📲 <b>" + fmt(kk) + "</b>"
+                + (kt == 0 ? "" : " · 💳 " + fmt(kt) + " <i>(банк)</i>") + "\n");
+        if (vn != 0 || vk != 0)
+            text.append("↩️ Возврат: 💵 <b>").append(fmt(vn)).append("</b> · 📲 <b>").append(fmt(vk)).append("</b>\n");
+        text.append("🔴 Расход: 💵 <b>").append(fmt(rn)).append("</b> · 📲 <b>").append(fmt(rk)).append("</b>\n")
+            .append("➕ <b>Фарқ: ").append(fmt(kn + kk - vn - vk - rn - rk)).append("</b> so'm\n\n")
+            .append("🏦 Қабул қилинган нақд: <b>").append(fmt(cov)).append("</b> so'm\n")
+            .append(rem == 0 ? "✅ Топширилмаган нақд йўқ"
+                    : "⏳ Топширилмаган нақд: <b>" + fmt(rem) + "</b> so'm");
+        // Shu davrda (qabul sanasi bo'yicha) buxgalteriya qabul qilgan pullar ro'yxati
+        int shown = 0, more = 0;
+        StringBuilder tl = new StringBuilder();
+        for (Operation o : opRepo.byPeriod(from, to)) {
+            if (o.getType() != OpType.TOPSHIRIQ || o.getStatus() != OpStatus.TASDIQLANGAN) continue;
+            if (o.getFromOwnerType() != OwnerType.KASSA || !Long.valueOf(id).equals(o.getFromOwnerId())) continue;
+            if (shown++ >= 10) { more++; continue; }
+            String who = o.getComment() != null && o.getComment().startsWith("Topshirdi: ")
+                    ? o.getComment().substring(11) : "";
+            tl.append("  • ").append(o.getOpDate().format(DF)).append(" — <b>").append(fmt(o.getAmount()))
+              .append("</b> ").append(o.getMoneyType() == MoneyType.TERMINAL ? "💳" : "💵")
+              .append(who.isEmpty() ? "" : " · " + esc(who))
+              .append(o.getSubmissionId() != null ? " (#" + o.getSubmissionId() + ")" : "").append("\n");
+        }
+        if (tl.length() > 0) text.append("\n\n🏦 <b>Қабул қилинганлар:</b>\n").append(tl);
+        if (more > 0) text.append("  … яна ").append(more).append(" та");
+        if (dayLines.length() > 0) text.append("\n\n📅 <b>Кунлар:</b>\n").append(dayLines);
+        // Qabul oqimida sana qayta so'ralmaydi: bitta kun — shu kun; davr — shu davr
+        // kunlari birinchi yopiladi (eng eskisidan), sana — davrning oxirgi kuni
+        s.data.put("qbPreKassa", id);
+        if (from.equals(to)) {
+            s.data.put("qbPreDate", from.toString());
+            s.data.remove("qbPreFrom"); s.data.remove("qbPreTo");
+        } else {
+            s.data.remove("qbPreDate");
+            s.data.put("qbPreFrom", from.toString()); s.data.put("qbPreTo", to.toString());
+        }
+        InlineKeyboardMarkup qb = rem <= 0 ? null : inline(List.of(
                 irow(btn("💰 Пулларни қабул қилиш", "a:p:qb:" + id))));
-        if (msgId > 0) sender.edit(chatId, msgId, text, qb);
-        else sup.sendContent(s, chatId, text, qb);
+        if (msgId > 0) sender.edit(chatId, msgId, text.toString(), qb);
+        else sup.sendContent(s, chatId, text.toString(), qb);
     }
 
 
     /* ---------- 💰 ПУЛЛАРНИ ҚАБУЛ ҚИЛИШ ---------- */
 
+    /** Faqat NAQD qabul qilinadi (klik — kassa hisobida, terminal — bankda), tur so'ralmaydi. */
     void qbStart(Session s, long kassaId, long chatId) {
-        sup.sendContent(s, chatId, "💰 <b>Пулларни қабул қилиш</b> — "
-                        + esc(names.owner(OwnerType.KASSA, kassaId)) + "\n\nPul turini tanlang:\n"
-                        + "<i>📲 Klik qabul qilinmaydi — u kassaning o'z hisobida yig'iladi, "
-                        + "hisoboti «📤 Hisobot topshirish» orqali yopiladi.</i>",
-                inline(List.of(
-                        irow(btn("💵 Нақд", "a:p:qm:" + kassaId + ":NAQD"),
-                             btn("💳 Терминал", "a:p:qm:" + kassaId + ":TERMINAL")),
-                        irow(btn("❌ Bekor", "cx")))));
+        qbMoney(s, kassaId, "NAQD", chatId, 0);
     }
 
 
@@ -245,15 +294,38 @@ public class OtdelHandler {
         s.data.put("qbKassa", kassaId);
         s.data.put("qbMt", mt);
         s.state = Session.State.ADM_QB_SUM;
+        // Oldingi ekranda bitta kun tanlangan bo'lsa (Давр / Бугунги тушум) — sana shu,
+        // qayta so'ralmaydi
+        Object pk = s.data.get("qbPreKassa");
+        boolean same = pk != null && ((Number) pk).longValue() == kassaId;
+        s.data.remove("qbDate"); s.data.remove("qbFrom"); s.data.remove("qbTo");
+        if (same && s.getStr("qbPreDate") != null) s.data.put("qbDate", s.getStr("qbPreDate"));
+        else if (same && s.getStr("qbPreFrom") != null) {
+            s.data.put("qbFrom", s.getStr("qbPreFrom")); s.data.put("qbTo", s.getStr("qbPreTo"));
+        }
         String extra = "";
         if (MoneyType.valueOf(mt) == MoneyType.NAQD) {
             long avail = ledger.view(OwnerType.KASSA, kassaId, MoneyType.NAQD).available();
-            extra = "\n💼 Kassada mavjud: <b>" + fmt(avail) + "</b> so'm"
+            extra = "\n💼 Kassada mavjud (barcha kunlar): <b>" + fmt(avail) + "</b> so'm"
                     + (avail <= 0 ? "\n⚠️ Mavjud pul yo'q — qabul o'tmaydi." : "");
+            if (s.getStr("qbDate") != null) {
+                java.time.LocalDate d = java.time.LocalDate.parse(s.getStr("qbDate"));
+                long dr = dayRepo.findByKassaIdAndDate(kassaId, d).map(DayRecord::remainNaqd).orElse(0L);
+                extra += "\n📅 Sana: <b>" + d.format(DF) + "</b> — shu kun bo'yicha topshirilmagan: <b>"
+                        + fmt(dr) + "</b> so'm";
+            } else if (s.getStr("qbFrom") != null) {
+                java.time.LocalDate f = java.time.LocalDate.parse(s.getStr("qbFrom"));
+                java.time.LocalDate t = java.time.LocalDate.parse(s.getStr("qbTo"));
+                extra += "\n📅 Davr: <b>" + sup.rangeLabel(f, t) + "</b> — davr bo'yicha topshirilmagan: <b>"
+                        + fmt(rangeRemain(kassaId, f, t)) + "</b> so'm\n"
+                        + "<i>Davr kunlari birinchi yopiladi, ortgani eng eski kunlardan.</i>";
+            }
         }
-        sender.edit(chatId, msgId, "💰 " + esc(names.owner(OwnerType.KASSA, kassaId))
+        String text = "💰 <b>Пулларни қабул қилиш</b> — " + esc(names.owner(OwnerType.KASSA, kassaId))
                 + " — " + mtLabel(MoneyType.valueOf(mt)) + extra
-                + "\n\n<b>Olingan summani kiriting</b> (so'm):");
+                + "\n\n<b>Olingan summani kiriting</b> (so'm):";
+        if (msgId > 0) sender.edit(chatId, msgId, text);
+        else sup.sendContent(s, chatId, text, inline(List.of(irow(btn("❌ Bekor", "cx")))));
     }
 
 
@@ -302,6 +374,17 @@ public class OtdelHandler {
         long kassaId = s.getLong("qbKassa");
         MoneyType mt = MoneyType.valueOf(s.getStr("qbMt"));
         java.time.LocalDate today = ledger.today();
+        // Sana oldingi ekranda tanlangan — qayta so'ramasdan qabul qilinadi
+        if (s.getStr("qbDate") != null) {
+            java.time.LocalDate d = java.time.LocalDate.parse(s.getStr("qbDate"));
+            qbCommit(u, s, d, d, chatId, msgId);
+            return;
+        }
+        if (s.getStr("qbFrom") != null) {
+            qbCommit(u, s, java.time.LocalDate.parse(s.getStr("qbFrom")),
+                    java.time.LocalDate.parse(s.getStr("qbTo")), chatId, msgId);
+            return;
+        }
         // Tugmalarda o'sha kunning topshirilmagan qoldig'i — tanlangan sana BIRINCHI
         // qoplanadi, qolgani eng eski kunlardan yopiladi.
         String hint = mt == MoneyType.NAQD
@@ -334,14 +417,30 @@ public class OtdelHandler {
 
 
     void qbCommit(AppUser u, Session s, java.time.LocalDate date, long chatId, int msgId) {
+        qbCommit(u, s, date, date, chatId, msgId);
+    }
+
+
+    /** [from, to] — davr uchun qabul: davr kunlari birinchi yopiladi, sana — davr oxiri. */
+    void qbCommit(AppUser u, Session s, java.time.LocalDate from, java.time.LocalDate to,
+                  long chatId, int msgId) {
         if (s.data.get("qbSum") == null || s.data.get("qbWho") == null) return;
         long kassaId = s.getLong("qbKassa");
         MoneyType mt = MoneyType.valueOf(s.getStr("qbMt"));
         long sum = s.getLong("qbSum");
         String topshirgan = s.getStr("qbWho");
+        String sana = sup.rangeLabel(from, to);
         // Avval amal — xato bo'lsa (mavjud yetarli emas / kutilayotgan hisobot bor)
         // sessiya saqlanib qoladi va foydalanuvchi xabarni ko'radi
-        var op = submissionService.directCollect(kassaId, mt, sum, u, topshirgan, date);
+        var op = submissionService.directCollect(kassaId, mt, sum, u, topshirgan, from, to);
+        String after = "";
+        if (mt == MoneyType.NAQD) {
+            long dr = rangeRemain(kassaId, from, to);
+            long avail = ledger.view(OwnerType.KASSA, kassaId, MoneyType.NAQD).available();
+            after = "\n📆 " + sana + " bo'yicha topshirilmagan qoldiq: <b>" + fmt(dr) + "</b> so'm"
+                    + "\n💼 Kassada qoldi (barcha kunlar): <b>" + fmt(avail) + "</b> so'm"
+                    + "\n\n<i>Kun-bakun holat: kassa kartasi → 📆 Давр танлаш.</i>";
+        }
         String nav = s.getStr("nav");
         Object pm = s.data.get("panelMsg");
         s.reset();
@@ -352,15 +451,25 @@ public class OtdelHandler {
         sender.edit(chatId, msgId, "✅ <b>Pul qabul qilindi</b> #" + op.getId() + "\n\n"
                 + "🏪 Kassa: <b>" + esc(kassaName) + "</b> → 🏦 Buxgalteriya\n"
                 + "💰 Summa: <b>" + fmt(sum) + "</b> so'm (" + mtLabel(mt) + ")\n"
-                + "📅 Sana: <b>" + date.format(DF) + "</b>\n"
+                + "📅 " + (from.equals(to) ? "Sana" : "Davr") + ": <b>" + sana + "</b>\n"
                 + "👤 Topshirdi: <b>" + esc(topshirgan) + "</b>\n"
                 + "✍️ Qabul qildi: " + esc(u.getFullName())
                 + (mt == MoneyType.TERMINAL
                     ? "\n\nℹ️ Terminal puli faqat jurnalga yozildi — u firma bank hisobida."
-                    : "\n\nKassa balansidan yechildi, Buxgalteriyaga qo'shildi."));
+                    : "\n\nKassa balansidan yechildi, Buxgalteriyaga qo'shildi." + after));
         notify.toKassa(kassaId, "💰 Buxgalteriya kassangizdan pul qabul qildi: <b>"
-                + fmt(sum) + "</b> so'm (" + mtLabel(mt) + ")\n📅 Sana: "
-                + date.format(DF) + "\nTopshirdi: " + esc(topshirgan), null);
+                + fmt(sum) + "</b> so'm (" + mtLabel(mt) + ")\n📅 "
+                + (from.equals(to) ? "Sana" : "Davr") + ": " + sana
+                + "\nTopshirdi: " + esc(topshirgan), null);
+    }
+
+
+    /** Davr kunlarining topshirilmagan naqd yig'indisi (OCHIQ/YOPILGAN). */
+    private long rangeRemain(long kassaId, java.time.LocalDate from, java.time.LocalDate to) {
+        long r = 0;
+        for (DayRecord d : dayRepo.findByKassaIdAndDateBetween(kassaId, from, to))
+            if (d.getStatus() == DayStatus.OCHIQ || d.getStatus() == DayStatus.YOPILGAN) r += d.remainNaqd();
+        return r;
     }
 
 }

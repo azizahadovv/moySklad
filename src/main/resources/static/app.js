@@ -323,12 +323,12 @@ async function pageKassa(seg, q = {}) {
     h += `<div class="hint">Тўлиқ рўйхат: Ҳисоботлар → История.</div>`;
   }
   h += `<div class="label">Амаллар</div><div class="actions">
-    <button class="btn main" id="collect">💰 Пул қабул қилиш</button>
+    ${k.naqdMavjud > 0 && !k.pending.length ? '<button class="btn main" id="collect">💰 Пул қабул қилиш</button>' : '<span class="hint">✅ Топшириладиган нақд йўқ</span>'}
     ${ME?.role === 'SUPERADMIN' ? '<button class="btn ghost" id="adjust">🛠 Корректировка</button>' : ''}
   </div>`;
   $main.innerHTML = h;
   bindGo();
-  document.getElementById('collect').onclick = () => collectSheet(k);
+  document.getElementById('collect')?.addEventListener('click', () => collectSheet(k));
   document.getElementById('adjust')?.addEventListener('click', () => adjustSheet(k));
 }
 
@@ -338,7 +338,7 @@ function collectSheet(k) {
   const t = TODAY();
   sheet(html`<h2>💰 Пул қабул қилиш — ${esc(k.name)}</h2>
     ${k.pending.length ? `<div class="err">Бу кассанинг кўриб чиқилмаган ҳисоботи бор (#${k.pending[0].id}). Аввал уни қабул қилинг ёки рад этинг, акс ҳолда бир пул икки марта ечилади.</div>` : ''}
-    <div class="seg" id="mt"><button class="on" data-mt="NAQD">💵 Нақд</button><button data-mt="TERMINAL">💳 Терминал</button></div>
+    <div class="hint">Фақат 💵 нақд қабул қилинади (click — касса ҳисобида, терминал — банкда).</div>
     <div class="hint" id="avail">Мавжуд нақд: <b>${fmt(k.naqdMavjud)}</b> сўм${k.naqdBand ? ' (банд ' + fmt(k.naqdBand) + ')' : ''}</div>
     <div class="field"><label>Сумма (сўм) — йиғилган сумма қўйилган, керак бўлса ўзгартиринг</label><input id="sum" type="number" inputmode="numeric" value="${k.naqdMavjud > 0 ? k.naqdMavjud : ''}" placeholder="0"></div>
     <div class="field"><label>Ким топширди</label>
@@ -347,8 +347,7 @@ function collectSheet(k) {
     <div class="field"><label>Қайси сана учун</label><div class="seg" id="dt"><button class="on" data-d="${t}">Бугун</button><button data-d="${addDays(t, -1)}">Кеча</button></div><input type="date" id="dti" value="${t}" max="${t}"></div>
     <div class="hint" id="dayrem"></div>
     <button class="btn main" id="ok" ${k.pending.length ? 'disabled' : ''}>✅ Қабул қилиш</button>`, (el, close) => {
-    let mt = 'NAQD';
-    const suggest = { NAQD: k.naqdMavjud, TERMINAL: (k.today || {}).prixodTerminal || 0 };
+    const mt = 'NAQD';   // фақат нақд
     // Танланган кун бўйича топширилмаган нақд: шу кун БИРИНЧИ қопланади, ортгани энг эски кунлардан
     const dayRemain = d => d === t ? (k.todayRemainNaqd || 0) : ((k.openDays.find(x => x.date === d) || {}).naqd || 0);
     const showDayRem = () => {
@@ -357,12 +356,6 @@ function collectSheet(k) {
       h.innerHTML = r ? `${dShort(d)} бўйича топширилмаган: <b>${fmt(r)}</b> сўм — шу кун биринчи ёпилади, ортгани энг эски кунлардан`
                       : `${dShort(d)} бўйича топширилмаган нақд йўқ — сумма энг эски кунлардан ёпилади`;
     };
-    el.querySelectorAll('#mt button').forEach(b => b.onclick = () => {
-      mt = b.dataset.mt; el.querySelectorAll('#mt button').forEach(x => x.classList.toggle('on', x === b));
-      el.querySelector('#avail').hidden = mt !== 'NAQD';
-      el.querySelector('#sum').value = suggest[mt] > 0 ? suggest[mt] : '';   // йиғилган сумма — қўлда ўзгартириш мумкин
-      showDayRem();
-    });
     el.querySelectorAll('#dt button').forEach(b => b.onclick = () => { el.querySelector('#dti').value = b.dataset.d; el.querySelectorAll('#dt button').forEach(x => x.classList.toggle('on', x === b)); showDayRem(); });
     el.querySelector('#dti').onchange = () => { el.querySelectorAll('#dt button').forEach(x => x.classList.remove('on')); showDayRem(); };
     showDayRem();
@@ -373,7 +366,7 @@ function collectSheet(k) {
       const date = el.querySelector('#dti').value;
       if (!(amount > 0)) { toast('Суммани киритинг'); return; }
       if (!who) { toast('Ким топширганини кўрсатинг'); return; }
-      confirmSheet('Тасдиқлайсизми?', `<b>${fmt(amount)}</b> сўм (${mt === 'NAQD' ? '💵 нақд' : '💳 терминал'}) · ${esc(k.name)} → бухгалтерия · ${dShort(date)} · топширди: ${esc(who)}${mt === 'TERMINAL' ? '<br><small>Терминал пули фақат журналга ёзилади.</small>' : ''}`, async () => {
+      confirmSheet('Тасдиқлайсизми?', `<b>${fmt(amount)}</b> сўм (💵 нақд) · ${esc(k.name)} → бухгалтерия · ${dShort(date)} · топширди: ${esc(who)}`, async () => {
         try {
           const r = await post(`/admin/kassa/${k.id}/collect`, { mt, amount, topshirgan: who, date });
           haptic('medium'); close(); toast(`✅ Қабул қилинди #${r.opId}`); render();

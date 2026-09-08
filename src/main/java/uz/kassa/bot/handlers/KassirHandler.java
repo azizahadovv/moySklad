@@ -551,7 +551,9 @@ public class KassirHandler {
             total++;
             // Faqat TASDIQLANGAN operatsiyalar summaga kiradi
             if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
-                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
+                // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
+                if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
+                        && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
                 if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
                         || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
             }

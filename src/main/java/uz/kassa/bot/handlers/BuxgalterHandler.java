@@ -441,7 +441,9 @@ public class BuxgalterHandler {
             if (!show) continue;
             // Faqat TASDIQLANGAN operatsiyalar summaga kiradi — rad etilgan/yo'ldagi pul emas
             if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
-                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
+                // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
+                if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
+                        && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
                 if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
                         || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
             }
@@ -533,7 +535,9 @@ public class BuxgalterHandler {
         for (Operation o : opRepo.byPeriod(p[0], p[1])) {
             if (!touches(o, OwnerType.KASSA, id)) continue;
             if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
-                if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH) kirim += o.getAmount();
+                // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
+                if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
+                        && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
                 if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
                         || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
             }

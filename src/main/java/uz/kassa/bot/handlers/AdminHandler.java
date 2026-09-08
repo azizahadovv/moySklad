@@ -137,7 +137,7 @@ public class AdminHandler {
         // Buxgalter: panel ko'rinishlari, pul qabul qilish, kassa nomidan rasxod,
         // kalendar va Баланс
         if (u.getRole() == Role.BUXGALTER
-                && !java.util.Set.of("p", "qbu", "qbd", "cal", "bl", "rxm").contains(cmd))
+                && !java.util.Set.of("p", "qbu", "qbd", "cal", "bl", "rxm", "tp", "tpx").contains(cmd))
             return false;
 
         // Ҳуқуқлар — barcha SuperAdmin'larga ochiq; lekin SUPERADMIN'ga tegadigan
@@ -156,6 +156,8 @@ public class AdminHandler {
             case "qbd" -> otdelH.qbDate(u, s, arg, chatId, msgId);
             case "cal" -> calH.calCb(u, s, arg, chatId, msgId);
             case "rxm" -> statsH.rasxodMenu(s, chatId, msgId);
+            case "tp" -> statsH.topshirilgan(s, chatId, msgId, arg);
+            case "tpx" -> statsH.topshirilganExcel(u, arg, chatId);
             case "audm" -> statsH.auditMenu(s, chatId, msgId);
             case "aud" -> statsH.auditView(s, Long.parseLong(arg), chatId, msgId);
             case "aux" -> statsH.auditExcel(Long.parseLong(arg), chatId);
@@ -488,8 +490,16 @@ public class AdminHandler {
                     case "📲 Кликлар" -> kassaH.clickMenu(u, s, chatId, 0);
                     case "📊 Свод" -> sup.navTo(u, s, "svod", chatId, "📊 <b>Свод</b>\n\nExcel turini tanlang:",
                             List.of("📗 Умумий Excel", "📘 Даврий Excel", "📙 Отдел Excel"));
+                    case "🏦 Топширилган пуллар" -> sup.navTo(u, s, "topsh", chatId,
+                            "🏦 <b>Топширилган пуллар</b>\n\nDavrni tanlang:", PERIODS);
                     default -> { return false; }
                 }
+            }
+            case "topsh" -> {
+                if (text.equals("🗓 Kalendar")) { calH.calOpen(s, chatId, 0, "tp"); return true; }
+                String code = sup.codeOf(text);
+                if (code == null) return false;
+                statsH.topshirilgan(s, chatId, 0, code);
             }
             case "svod" -> {
                 switch (text) {
@@ -603,6 +613,8 @@ public class AdminHandler {
         ACTIONS.put("📲 Кликлар", (u, s, c) -> kassaH.clickMenu(u, s, c, 0));
         ACTIONS.put("📊 Свод", (u, s, c) -> sup.navTo(u, s, "svod", c, "📊 <b>Свод</b>\n\nExcel turini tanlang:",
                 List.of("📗 Умумий Excel", "📘 Даврий Excel", "📙 Отдел Excel")));
+        ACTIONS.put("🏦 Топширилган пуллар", (u, s, c) -> sup.navTo(u, s, "topsh", c,
+                "🏦 <b>Топширилган пуллар</b>\n\nDavrni tanlang:", PERIODS));
         // ⚙️ Настройка guruhlari ichidagi amallar
         ACTIONS.put("🏪 Касса", (u, s, c) -> sup.navTo(u, s, "sozkassa", c, "🏪 <b>Касса</b>", SOZKASSA_MENU));
         ACTIONS.put("👥 Фойдаланувчилар", (u, s, c) -> sup.navTo(u, s, "sozuser", c, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU));

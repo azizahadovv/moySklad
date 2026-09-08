@@ -12,7 +12,9 @@ import uz.kassa.repo.SubmissionRepo;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -41,6 +43,7 @@ public class SubmissionService {
     private final SubmissionRepo subRepo;
     private final OperationRepo opRepo;
     private final AuditService audit;
+    private final uz.kassa.repo.AppUserRepo userRepo;
 
     /** Topshirilishi mumkin bo'lgan (YOPILGAN) kunlar, eng eskisidan boshlab. */
     public List<DayRecord> submittableDays(Long kassaId) {
@@ -147,13 +150,31 @@ public class SubmissionService {
     @Transactional
     public Operation directCollect(Long kassaId, MoneyType mt, long amount,
                                    AppUser by, String topshirgan, LocalDate date) {
+        return directCollect(kassaId, mt, amount, by, topshirgan, date, date);
+    }
+
+    /**
+     * Davr uchun qabul: [from, to] oralig'idagi kunlar BIRINCHI yopiladi (eng eskisidan),
+     * ortgani boshqa kunlardan FIFO. Operatsiya sanasi — davrning oxirgi kuni (to).
+     */
+    @Transactional
+    public Operation directCollect(Long kassaId, MoneyType mt, long amount,
+                                   AppUser by, String topshirgan, LocalDate from, LocalDate to) {
         if (amount <= 0) throw new BusinessException("Summa noldan katta bo'lishi kerak");
+        if (from.isAfter(to)) { LocalDate x = from; from = to; to = x; }
+        final LocalDate date = to;
+        final LocalDate pFrom = from;
         // KLIK siyosati: buxgalteriya klik pulini QABUL QILMAYDI — klik har bir
         // kassaning o'z hisobida yig'iladi, hisobot esa «📤 Hisobot topshirish»
         // orqali topshiriladi va qabul qilinadi.
         if (mt == MoneyType.KLIK)
             throw new BusinessException("Klik puli qabul qilinmaydi — u kassaning o'z hisobida "
                     + "yig'iladi. Klik hisoboti kassir yuborgan hisobot orqali yopiladi.");
+        // TERMINAL (karta) puli firma bank hisobida — buxgalteriya uni qabul qilmaydi
+        // (foydalanuvchi qarori 2026-09-08: faqat NAQD qabul qilinadi).
+        if (mt == MoneyType.TERMINAL)
+            throw new BusinessException("Terminal puli qabul qilinmaydi — u bank hisobida. "
+                    + "Faqat naqd qabul qilinadi.");
 
         if (mt != MoneyType.TERMINAL) {
             // Kutilayotgan hisobot borida bevosita qabul TAQIQ — o'sha pul allaqachon
@@ -180,19 +201,50 @@ public class SubmissionService {
 
         if (mt != MoneyType.TERMINAL) {
             List<DayRecord> days = dayRepo.lockByKassaIdAndStatusIn(kassaId, OPEN);
+            Map<Long, Long> before = new HashMap<>();
+            for (DayRecord d : days) before.put(d.getId(), d.getCoveredNaqd());
             long rem = absorbNegative(days, mt, amount);
-            for (DayRecord d : days)                       // 2) tanlangan sana birinchi
-                if (d.getDate().equals(date)) rem = takeFrom(d, mt, rem);
+            for (DayRecord d : days)                       // 2) tanlangan sana/davr birinchi (eng eskisidan)
+                if (!d.getDate().isBefore(pFrom) && !d.getDate().isAfter(date)) rem = takeFrom(d, mt, rem);
             rem = fifo(days, mt, rem);                     // 3) qolgani eng eski kundan
             days.forEach(SubmissionService::closeIfCovered);
             dayRepo.saveAll(days);
             reportLeftover(by, kassaId, mt, amount, rem, "operation", op.getId());
+
+            // Bevosita qabul ham HISOBOT sifatida yoziladi (avtomatik QABUL holatida) —
+            // «Топширилган ҳисоботлар» ro'yxati/Excel'ida, kassir tarixida ko'rinadi;
+            // kassir alohida hisobot topshirishi shart emas.
+            Submission sub = Submission.builder()
+                    .kassaId(kassaId).naqd(amount).klik(0)
+                    .acceptedNaqd(amount).acceptedKlik(0L)
+                    .status(SubmissionStatus.QABUL)
+                    .submittedBy(submitterId(kassaId, topshirgan, by))
+                    .decidedBy(by.getId()).decidedAt(Instant.now())
+                    .comment(DIRECT_PREFIX + topshirgan + " · "
+                            + (pFrom.equals(date) ? date.toString() : pFrom + " — " + date))
+                    .build();
+            for (DayRecord d : days)
+                if (d.getCoveredNaqd() != before.getOrDefault(d.getId(), 0L)) sub.getDayIds().add(d.getId());
+            sub = subRepo.save(sub);
+            op.setSubmissionId(sub.getId());
+            op = opRepo.save(op);
         }
 
         audit.log(by.getId(), "PUL_QABUL", "operation", op.getId(),
                 "kassa=" + kassaId + " " + mt + " " + amount + " topshirdi=" + topshirgan
-                        + " sana=" + date);
+                        + " sana=" + (pFrom.equals(date) ? date.toString() : pFrom + ".." + date));
         return op;
+    }
+
+    /** Bevosita qabuldan avtomatik yaratilgan hisobot izohi shu bilan boshlanadi. */
+    public static final String DIRECT_PREFIX = "Бевосита қабул — топширди: ";
+
+    /** Avto-hisobot «kim topshirdi»: kassaning shu ismli faol xodimi, topilmasa qabul qilgan. */
+    private Long submitterId(Long kassaId, String topshirgan, AppUser by) {
+        if (topshirgan != null)
+            for (AppUser x : userRepo.findByKassaIdAndActiveTrue(kassaId))
+                if (topshirgan.trim().equalsIgnoreCase(x.getFullName())) return x.getId();
+        return by.getId();
     }
 
     /* ------------------------ ichki ------------------------ */

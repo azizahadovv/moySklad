@@ -186,7 +186,8 @@ public class WebAppController {
         for (Operation o : opRepo.byPeriod(f, t)) {
             if (!isForKassa(o, id)) continue;
             boolean in = (o.getToOwnerType() == OwnerType.KASSA && id == o.getToOwnerId());
-            if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN) {
+            if (o.getStatus() == uz.kassa.domain.OpStatus.TASDIQLANGAN
+                    && o.getMoneyType() != MoneyType.TERMINAL) {   // karta puli kassada emas
                 if (o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH
                         || (o.getType() == OpType.OTKAZMA && in)) kirim += o.getAmount();
                 else chiqim += o.getAmount();

@@ -168,6 +168,7 @@ public class CalendarHandler {
                 java.time.LocalDate from = f.isBefore(d) ? f : d;
                 java.time.LocalDate to = f.isBefore(d) ? d : f;
                 if (ctx.equals("x")) statsH.genExcelRange(chatId, msgId, from, to, null);
+                else if (ctx.equals("tp")) statsH.topshirilganRange(s, chatId, msgId, from, to);
                 else if (ctx.startsWith("xo"))
                     statsH.genExcelRange(chatId, msgId, from, to, Long.parseLong(ctx.substring(2)));
                 else if (ctx.startsWith("k")) {

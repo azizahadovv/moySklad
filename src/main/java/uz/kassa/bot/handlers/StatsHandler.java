@@ -39,7 +39,94 @@ public class StatsHandler {
     private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
     private final uz.kassa.repo.AuditRepo auditRepo;
     private final uz.kassa.config.AppProps props;
+    private final uz.kassa.webapp.AdminMoneyReportService moneyReport;
     private final AdminSupport sup;
+
+
+    /* ---------- 🏦 ТОПШИРИЛГАН ПУЛЛАР (davr bo'yicha qabul qilingan pullar) ---------- */
+
+    void topshirilgan(Session s, long chatId, int msgId, String code) {
+        java.time.LocalDate[] p = sup.periodOf(code);
+        topshirilganRange(s, chatId, msgId, p[0], p[1]);
+    }
+
+
+    /**
+     * Kassalardan buxgalteriyaga QABUL QILINGAN pullar (TOPSHIRIQ: bevosita yoki
+     * kassir hisoboti orqali) — kassa kesimida, har bir qabul alohida qatorda;
+     * pastda kassir hisobotlari xulosasi. Ma'lumot Mini App bilan bir manbadan
+     * (AdminMoneyReportService.money), Excel ham o'sha.
+     */
+    @SuppressWarnings("unchecked")
+    void topshirilganRange(Session s, long chatId, int msgId,
+                           java.time.LocalDate from, java.time.LocalDate to) {
+        Map<String, Object> d = moneyReport.money(from, to, null);
+        Map<String, Object> ct = (Map<String, Object>) d.get("colTotals");
+        Map<String, Object> st = (Map<String, Object>) d.get("subTotals");
+        List<Map<String, Object>> cols = (List<Map<String, Object>>) d.get("collections");
+        List<Map<String, Object>> perKassa = (List<Map<String, Object>>) d.get("perKassa");
+
+        StringBuilder sb = new StringBuilder("🏦 <b>ТОПШИРИЛГАН ПУЛЛАР</b>\n📅 "
+                + sup.rangeLabel(from, to) + "\n\n"
+                + "💵 Қабул қилинган нақд: <b>" + fmt(num(ct, "naqd")) + "</b> so'm ("
+                + num(ct, "soni") + " та)\n");
+        if (num(ct, "terminal") > 0)
+            sb.append("💳 Терминал (фақат журнал): <b>").append(fmt(num(ct, "terminal"))).append("</b> so'm\n");
+        sb.append("   ҳисобот орқали: ").append(num(ct, "viaSub"))
+          .append(" · бевосита: ").append(num(ct, "direct")).append("\n");
+
+        int lines = 0;
+        for (Map<String, Object> k : perKassa) {
+            long kid = num(k, "kassaId");
+            sb.append("\n🏪 <b>").append(esc(String.valueOf(k.get("kassa")))).append("</b>: <b>")
+              .append(fmt(num(k, "naqd"))).append("</b> so'm (").append(num(k, "soni")).append(" та)\n");
+            int shown = 0, more = 0;
+            for (Map<String, Object> c : cols) {
+                if (num(c, "kassaId") != kid) continue;
+                if (shown >= 8 || lines >= 45) { more++; continue; }
+                shown++; lines++;
+                String mt = "TERMINAL".equals(c.get("mt")) ? "💳" : "💵";
+                sb.append("  • ").append(java.time.LocalDate.parse(String.valueOf(c.get("date"))).format(DF))
+                  .append(" — <b>").append(fmt(num(c, "amount"))).append("</b> ").append(mt)
+                  .append(" · ").append(esc(String.valueOf(c.get("topshirdi"))))
+                  .append(" → ").append(esc(String.valueOf(c.get("qabulQildi"))))
+                  .append(" (").append(esc(String.valueOf(c.get("source")))).append(")\n");
+            }
+            if (more > 0) sb.append("  … яна ").append(more).append(" та (Excel'да тўлиқ)\n");
+        }
+        if (perKassa.isEmpty()) sb.append("\nБу даврда қабул қилинган пул йўқ.\n");
+
+        sb.append("\n📤 <b>Кассир ҳисоботлари:</b> ").append(num(st, "soni")).append(" та")
+          .append(num(st, "pending") > 0 ? " (кутмоқда " + num(st, "pending") + ")" : "").append("\n")
+          .append("   топширилди: 💵 ").append(fmt(num(st, "naqd"))).append(" · 📲 ").append(fmt(num(st, "klik")))
+          .append("\n   қабул қилинди: 💵 ").append(fmt(num(st, "accNaqd"))).append(" · 📲 ").append(fmt(num(st, "accKlik")));
+
+        InlineKeyboardMarkup kb = inline(List.of(
+                irow(btn("📆 Bugun", "a:tp:t"), btn("Kecha", "a:tp:y"), btn("7 kun", "a:tp:7")),
+                irow(btn("30 kun", "a:tp:30"), btn("Shu oy", "a:tp:m"), btn("🗓 Kalendar", "a:cal:o:tp")),
+                irow(btn("📗 Excel", "a:tpx:" + from + ":" + to)),
+                irow(sup.bk("a:p:st"))));
+        if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), kb);
+        else sup.sendContent(s, chatId, sb.toString(), kb);
+    }
+
+
+    /** a:tpx:<from>:<to> — shu davr uchun Excel (Mini App bilan bir xil fayl). */
+    void topshirilganExcel(AppUser u, String arg, long chatId) {
+        String[] a = arg.split(":");
+        try {
+            moneyReport.sendExcel(u, java.time.LocalDate.parse(a[0]), java.time.LocalDate.parse(a[1]), null);
+            sender.send(chatId, "⏳ Excel tayyorlanmoqda…");
+        } catch (uz.kassa.service.BusinessException e) {
+            sender.send(chatId, "⚠️ " + esc(e.getMessage()));
+        }
+    }
+
+
+    private static long num(Map<String, Object> m, String key) {
+        Object v = m == null ? null : m.get(key);
+        return v instanceof Number n ? n.longValue() : 0;
+    }
 
 
     /* ---------- 🏦 БУХГАЛТЕРИЯ HISOBOTI ---------- */
@@ -120,7 +207,7 @@ public class StatsHandler {
                 irow(btn("🧾 Карзлар реестр", "a:p:dbt"), btn("📜 История", "a:p:his")),
                 irow(btn("👥 Фойдаланувчилар умумий", "a:p:usr")),
                 irow(btn("💼 Салдо", "a:p:sd"), btn("📊 Свод", "a:p:sv")),
-                irow(btn("📲 Кликлар", "a:p:ck")),
+                irow(btn("📲 Кликлар", "a:p:ck"), btn("🏦 Топширилган пуллар", "a:tp:m")),
                 irow(sup.bk("a:p:main"))));
     }
 

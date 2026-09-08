@@ -99,7 +99,11 @@ public class AdminMoneyReportService {
             if (o.getType() != OpType.TOPSHIRIQ || o.getStatus() != OpStatus.TASDIQLANGAN) continue;
             if (o.getFromOwnerType() != OwnerType.KASSA) continue;
             if (!all && !kassaId.equals(o.getFromOwnerId())) continue;
-            boolean fromSub = o.getSubmissionId() != null;
+            // Bevosita qabul ham avto-hisobot bilan bog'lanadi (izohi DIRECT_PREFIX bilan) —
+            // manba uchun kassir yuborgan hisobotdan farqlanadi
+            Submission linked = o.getSubmissionId() == null ? null : subRepo.findById(o.getSubmissionId()).orElse(null);
+            boolean fromSub = linked != null && (linked.getComment() == null
+                    || !linked.getComment().startsWith(uz.kassa.service.SubmissionService.DIRECT_PREFIX));
             if (fromSub) viaSub++; else direct++;
             if (o.getMoneyType() == MoneyType.NAQD) cNaqd += o.getAmount(); else if (o.getMoneyType() == MoneyType.TERMINAL) cTerm += o.getAmount();
             long[] agg = byKassa.computeIfAbsent(o.getFromOwnerId(), k -> new long[3]);
@@ -109,7 +113,8 @@ public class AdminMoneyReportService {
                     : user(o.getCreatedBy());
             cols.add(mapOf("id", o.getId(), "date", o.getOpDate().toString(), "kassaId", o.getFromOwnerId(),
                     "kassa", kassa(o.getFromOwnerId()), "mt", o.getMoneyType().name(), "amount", o.getAmount(),
-                    "source", fromSub ? "ҳисобот #" + o.getSubmissionId() : "бевосита",
+                    "source", fromSub ? "ҳисобот #" + o.getSubmissionId()
+                            : (linked == null ? "бевосита" : "бевосита · #" + o.getSubmissionId()),
                     "topshirdi", who, "qabulQildi", user(o.getDecidedBy()),
                     "at", o.getDecidedAt() == null ? "" : DT.format(o.getDecidedAt().atZone(z))));
         }

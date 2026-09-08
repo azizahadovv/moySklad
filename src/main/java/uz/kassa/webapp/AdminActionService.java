@@ -39,7 +39,7 @@ public class AdminActionService {
     /** 💰 Pul qabul qilish (Buxgalter ham, SuperAdmin ham). NAQD yoki TERMINAL. */
     public Map<String, Object> collect(AppUser u, long kassaId, CollectReq r) {
         Kassa k = kassaRepo.findById(kassaId).orElseThrow(() -> new BusinessException("Касса топилмади"));
-        MoneyType mt = parseMt(r.mt(), MoneyType.NAQD, MoneyType.TERMINAL);
+        MoneyType mt = parseMt(r.mt(), MoneyType.NAQD);   // faqat naqd qabul qilinadi
         long sum = r.amount() == null ? 0 : r.amount();
         if (sum <= 0) throw new BusinessException("Сумма нолдан катта бўлсин");
         String topshirgan = r.topshirgan() == null ? "" : r.topshirgan().trim();
