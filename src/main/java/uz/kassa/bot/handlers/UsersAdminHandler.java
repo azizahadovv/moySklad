@@ -36,6 +36,8 @@ public class UsersAdminHandler {
     private final NotificationService notify;
     private final uz.kassa.service.AuditService audit;
     private final AdminSupport sup;
+    private final uz.kassa.service.control.EmployeeLinkService link;
+    private final uz.kassa.service.control.UserMergeService merge;
 
 
     /* ---------- 🔄 ROL O'ZGARTIRISH ---------- */
@@ -141,14 +143,15 @@ public class UsersAdminHandler {
                 .filter(g -> userRepo.findByTelegramId(g.getTelegramId()).isEmpty())
                 .limit(8).toList();
 
-        // MoySklad xodimlari (Владелец-сотрудник) — hali tizimda yo'qlari
+        // MoySklad xodimlari — botda HAQIQATAN yo'qlari (id/uid/telefon/ism-o'xshashlik bo'yicha;
+        // avval ism aynan tengligi tekshirilardi — «110 Ахадов Азизбек» ≠ «Ахадов Азизбек» → dublikat chiqardi)
         List<String[]> emps = new ArrayList<>();
         try {
-            List<AppUser> all = userRepo.findAll();
-            for (MoySkladClient.MsEmployee e : msClient.fetchEmployees()) {
-                boolean exists = all.stream()
-                        .anyMatch(x -> x.getFullName().equalsIgnoreCase(e.name()));
-                if (!exists) emps.add(new String[]{e.name(), e.phone()});
+            for (MoySkladClient.MsEmployeeFull e : link.employees()) {
+                if (e.archived() || e.name().isBlank()) continue;
+                if (link.findMatch(e).isPresent()) continue;
+                emps.add(new String[]{uz.kassa.service.control.EmployeeLinkService.cleanName(e.name()),
+                        e.phone(), e.id(), e.uid(), e.groupName()});
                 if (emps.size() >= 20) break;
             }
         } catch (Exception ignored) { }
@@ -190,6 +193,8 @@ public class UsersAdminHandler {
         s.data.remove("tgid");
         s.data.put("name", emp[0]);
         s.data.put("empPhone", emp[1] == null ? "" : emp[1]);
+        s.data.put("empId", emp.length > 2 && emp[2] != null ? emp[2] : "");
+        s.data.put("empUid", emp.length > 3 && emp[3] != null ? emp[3] : "");
         s.state = Session.State.ADM_AU_ROLE;
         sender.edit(chatId, msgId, "👔 Tanlandi: <b>" + esc(emp[0]) + "</b>"
                 + (emp[1] == null || emp[1].isBlank() ? "" : " · " + esc(emp[1]))
@@ -329,11 +334,41 @@ public class UsersAdminHandler {
     }
 
 
+    /** «Baribir yaratish» — dublikat ogohlantirishidan keyin (a:auf). */
+    void saveUserForce(Session s, long chatId, int msgId) {
+        if (s.state != Session.State.ADM_AU_FORCE) return;
+        Role role = (Role) s.data.get("auRole");
+        Long kassaId = s.data.get("auKassa") == null ? null : s.getLong("auKassa");
+        s.data.put("auForce", true);
+        saveUser(s, role, kassaId, chatId, msgId);
+    }
+
     void saveUser(Session s, Role role, Long kassaId, long chatId, int msgId) {
         Long tgId = s.data.get("tgid") == null ? null : s.getLong("tgid");
         String name = s.getStr("name");
         String phoneRaw = s.getStr("empPhone");
         String phone = phoneRaw == null ? "" : phoneRaw.replaceAll("\\D", "");
+        String empId = s.getStr("empId"), empUid = s.getStr("empUid");
+        // Dublikat himoyasi: MoySklad id/uid, telefon yoki ism-familiya o'xshash FAOL foydalanuvchi bormi?
+        if (!Boolean.TRUE.equals(s.data.get("auForce"))) {
+            AppUser ex = merge.findExisting(name, phone, empId, empUid);
+            if (ex != null) {
+                s.data.put("auRole", role);
+                if (kassaId != null) s.data.put("auKassa", kassaId);
+                s.state = Session.State.ADM_AU_FORCE;
+                sender.edit(chatId, msgId, "⚠️ <b>Bu odam allaqachon bor:</b> " + esc(ex.getFullName())
+                        + " (" + ex.getRole() + (ex.getKassaId() == null ? "" : " · " + esc(names.owner(OwnerType.KASSA, ex.getKassaId()))) + ")\n"
+                        + "Sabab: " + (merge.why(ex, AppUser.builder().fullName(name).phone(phone.isEmpty() ? null : phone)
+                            .msEmployeeId(empId).msUid(empUid).build()) == null ? "o'xshashlik" : merge.why(ex, AppUser.builder().fullName(name)
+                            .phone(phone.isEmpty() ? null : phone).msEmployeeId(empId).msUid(empUid).build())) + ".\n\n"
+                        + "Yangi yozuv ochish o'rniga uning kartasini oching — Telegram, otdel, MoySklad'ni o'sha yerda ulaysiz.",
+                        inline(List.of(
+                                irow(btn("👤 Kartasini ochish", "a:ctu:" + ex.getId())),
+                                irow(btn("➕ Bu boshqa odam — baribir yaratish", "a:auf")),
+                                irow(btn("❌ Bekor", "cx")))));
+                return;
+            }
+        }
         // Bir xil telefon raqamli IKKINCHI foydalanuvchi yaratilmasin
         if (!phone.isEmpty()) {
             var dupPhone = userRepo.findAll().stream()
@@ -352,10 +387,16 @@ public class UsersAdminHandler {
             }
         }
         s.reset();
-        userRepo.save(AppUser.builder()
+        AppUser created = userRepo.save(AppUser.builder()
                 .telegramId(tgId).fullName(name).role(role).kassaId(kassaId)
                 .phone(phone.isEmpty() ? null : phone)
+                .msEmployeeId(empId == null || empId.isBlank() ? null : empId)
+                .msUid(empUid == null || empUid.isBlank() ? null : empUid)
                 .active(true).build());
+        audit.log(null, "USER_QOSHILDI", "user", created.getId(), name + " (" + role + ")"
+                + (empId == null || empId.isBlank() ? "" : " · MoySklad " + empId));
+        if (created.getMsEmployeeId() != null)
+            try { link.applyDepartment(created, null); } catch (Exception ignored) { }   // MoySklad otdeli/rahbarligi
         if (tgId != null) guestRepo.deleteById(tgId);   // ro'yxatga olindi — mehmonlardan chiqadi
         String where = kassaId == null ? "" : "\nKassa: " + esc(names.owner(OwnerType.KASSA, kassaId));
         sender.edit(chatId, msgId, "✅ Foydalanuvchi qo'shildi:\n<b>" + esc(name) + "</b> ("
@@ -385,10 +426,25 @@ public class UsersAdminHandler {
             if (!x.getId().equals(me.getId()) && rows.size() < 12)
                 rows.add(irow(btn("🚫 " + x.getFullName(), "a:ux:" + x.getId())));
         }
+        long eligible = users.stream().filter(x -> !x.getId().equals(me.getId())).count();
         sb.append("\nFaolsizlantirish uchun tugmani bosing:");
+        if (eligible > rows.size())
+            sb.append("\n<i>… yana ").append(eligible - rows.size())
+              .append(" ta tugma sig'madi — qolganlarini 🔐 Ҳуқуқлар bo'limidan toping</i>");
         sender.send(chatId, sb.toString(), rows.isEmpty() ? null : inline(rows));
     }
 
+
+    /** UX-7: Ҳуқуқлар yo'lidagi kabi bu yo'lda ham tasdiqlash so'raladi. */
+    void deactivateConfirm(AppUser me, long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null || x.getId().equals(me.getId())) return;
+        sender.edit(chatId, msgId, "⚠️ <b>" + esc(x.getFullName()) + "</b> ("
+                + x.getRole() + ") faolsizlantirilsinmi?\n\nU botdan foydalana olmay qoladi.",
+                inline(List.of(
+                        irow(btn("✅ Ha, faolsizlantirilsin", "a:uxy:" + userId)),
+                        irow(btn("❌ Yo'q", "cx")))));
+    }
 
     void deactivate(AppUser me, long userId, long chatId, int msgId) {
         AppUser x = userRepo.findById(userId).orElse(null);

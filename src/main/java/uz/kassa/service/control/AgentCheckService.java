@@ -187,6 +187,7 @@ public class AgentCheckService {
         ac.setViolations(codes(v));
         ac.setNotifiedAt(Instant.now());
         ac.setEscalatedAt(null);
+        ac.setEscalated2At(null);
         ac.setFixedAt(null);
         if (ac.getCreatedUid() == null || ac.getCreatedUid().isBlank()) {
             String uid = msClient.fetchAgentCreatorUid(a.id());
@@ -228,21 +229,42 @@ public class AgentCheckService {
     }
 
 
-    /** escalate_hours o'tgan OCHIQ xatolar — otdel rahbari + SuperAdmin + belgilanganlar. */
+    /**
+     * Ikki bosqichli eskalatsiya (user 09.09.2026): xodimga xabardan esc1 daqiqa o'tsa — otdel RAHBARI;
+     * esc2 daqiqa o'tsa ham tuzatilmasa — «tuzatilmadi» SuperAdmin + rahbar + belgilanganlar.
+     */
     private void escalate(LocalDateTime now) {
-        Instant limit = Instant.now().minusSeconds(cfg.escalateHours() * 3600L);
+        Instant lim1 = Instant.now().minusSeconds(cfg.esc1Min() * 60L);
+        Instant lim2 = Instant.now().minusSeconds(cfg.esc2Min() * 60L);
         for (AgentCheck ac : repo.findByStatusOrderByIdDesc(AgentCheck.Status.OCHIQ)) {
-            if (ac.getEscalatedAt() != null || ac.getNotifiedAt() == null || ac.getNotifiedAt().isAfter(limit)) continue;
-            ac.setEscalatedAt(Instant.now());
-            repo.save(ac);
-            audit.log(ac.getCreatorUserId(), "KG_XATO_ESKALATSIYA", "agent_check", ac.getId(), ac.getAgentName());
-            String text = "⏰ <b>Kontragent xatosi " + cfg.escalateHours() + " soatdan beri tuzatilmadi</b>\n"
-                    + "👤 Xodim: " + esc(who(ac)) + " · " + esc(notifier.kassaName(ac.getKassaId())) + "\n"
-                    + "🏢 Kontragent: " + esc(ac.getAgentName()) + "\n"
-                    + "🕒 Yaratilgan: " + (ac.getMsCreatedAt() == null ? "—" : ac.getMsCreatedAt().format(DTF)) + "\n\n"
-                    + "Tuzatish kerak:\n" + bullets(ac.violationList());
-            notifier.send(notifier.escalation(ac.getKassaId()), text, agentKb(ac.getAgentMsId()));
+            if (ac.getNotifiedAt() == null) continue;
+            if (ac.getEscalatedAt() == null && !ac.getNotifiedAt().isAfter(lim1)) {
+                ac.setEscalatedAt(Instant.now());
+                repo.save(ac);
+                audit.log(ac.getCreatorUserId(), "KG_XATO_ESKALATSIYA", "agent_check", ac.getId(), ac.getAgentName() + " -> rahbar");
+                String text = "\u23F0 <b>Kontragent xatosi " + cfg.esc1Min() + " daqiqadan beri tuzatilmadi</b>\n"
+                        + agentLines(ac)
+                        + "\nXodim tuzatishini nazorat qiling. " + cfg.esc2Min() + " daqiqada tuzatilmasa admin'ga «tuzatilmadi» xabari boradi.";
+                Set<AppUser> heads = notifier.heads(ac.getKassaId());
+                if (!heads.isEmpty()) notifier.send(heads, text, agentKb(ac.getAgentMsId()));
+            }
+            if (ac.getEscalated2At() == null && !ac.getNotifiedAt().isAfter(lim2)) {
+                ac.setEscalated2At(Instant.now());
+                repo.save(ac);
+                audit.log(ac.getCreatorUserId(), "KG_XATO_TUZATILMADI", "agent_check", ac.getId(), ac.getAgentName() + " -> admin");
+                String text = "\u274C <b>TUZATILMADI — kontragent xatosi " + cfg.esc2Min() + " daqiqadan beri ochiq</b>\n"
+                        + agentLines(ac)
+                        + "\nXodim ham, otdel rahbari ham tuzatmadi.";
+                notifier.send(notifier.escalation(ac.getKassaId()), text, agentKb(ac.getAgentMsId()));
+            }
         }
+    }
+
+    private String agentLines(AgentCheck ac) {
+        return "\uD83D\uDC64 Xodim: " + esc(who(ac)) + " · " + esc(notifier.kassaName(ac.getKassaId())) + "\n"
+                + "\uD83C\uDFE2 Kontragent: " + esc(ac.getAgentName()) + "\n"
+                + "\uD83D\uDD52 Yaratilgan: " + (ac.getMsCreatedAt() == null ? "—" : ac.getMsCreatedAt().format(DTF)) + "\n\n"
+                + "Tuzatish kerak:\n" + bullets(ac.violationList());
     }
 
 
@@ -292,7 +314,7 @@ public class AgentCheckService {
         sb.append("🕒 Yaratildi: ").append(ac.getMsCreatedAt() == null ? "—" : ac.getMsCreatedAt().format(DTF)).append(" (MoySklad)\n\n");
         sb.append("<b>Tuzatish kerak:</b>\n").append(bullets(ac.violationList()));
         sb.append("\nℹ️ MoySklad'da tuzating — bot o'zi tekshiradi va «✅» yuboradi. ")
-          .append(cfg.escalateHours()).append(" soatda tuzatilmasa rahbarga xabar boradi.");
+          .append(cfg.esc1Min()).append(" daqiqada tuzatilmasa rahbarga, ").append(cfg.esc2Min()).append(" daqiqada admin'ga xabar boradi.");
         return sb.toString();
     }
 
@@ -300,6 +322,7 @@ public class AgentCheckService {
     public void restartTimeline(AgentCheck ac) {
         ac.setNotifiedAt(Instant.now());
         ac.setEscalatedAt(null);
+        ac.setEscalated2At(null);
         repo.save(ac);
     }
 
@@ -436,7 +459,7 @@ public class AgentCheckService {
         sb.append("<b>Tuzatish kerak:</b>\n");
         for (Violation x : v) sb.append("• ").append(x.text()).append("\n");
         sb.append("\nℹ️ MoySklad'da tuzating — bot o'zi tekshiradi va «✅» yuboradi. ")
-          .append(cfg.escalateHours()).append(" soatda tuzatilmasa rahbarga xabar boradi.");
+          .append(cfg.esc1Min()).append(" daqiqada tuzatilmasa rahbarga, ").append(cfg.esc2Min()).append(" daqiqada admin'ga xabar boradi.");
         return sb.toString();
     }
 

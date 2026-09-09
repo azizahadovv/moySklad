@@ -10,6 +10,17 @@ import java.util.Optional;
 
 public interface OperationRepo extends JpaRepository<Operation, Long> {
 
+    /** Dublikat foydalanuvchi birlashtirish: kim yaratgan/qaror bergan — from → to. */
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("update Operation o set o.createdBy = :to where o.createdBy = :from")
+    int remapCreatedBy(@Param("from") Long from, @Param("to") Long to);
+
+    @org.springframework.data.jpa.repository.Modifying(clearAutomatically = true)
+    @org.springframework.transaction.annotation.Transactional
+    @Query("update Operation o set o.decidedBy = :to where o.decidedBy = :from")
+    int remapDecidedBy(@Param("from") Long from, @Param("to") Long to);
+
     /** Kunlik hisobot: kassadan buxgalteriyaga TOPSHIRILGAN naqd (sana bo'yicha). */
     @Query("""
         select coalesce(sum(o.amount), 0) from Operation o

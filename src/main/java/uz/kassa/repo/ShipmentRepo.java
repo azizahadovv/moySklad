@@ -23,6 +23,7 @@ public interface ShipmentRepo extends JpaRepository<Shipment, Long> {
     List<Shipment> findByIssuesNotAndMasulUserIdOrderByMomentDesc(String issues, Long masulUserId);
     List<Shipment> findByIssuesNotAndKassaIdOrderByMomentDesc(String issues, Long kassaId);
     List<Shipment> findByIssuesNotAndIssuesNotifiedAtIsNull(String issues);
+    List<Shipment> findByIssuesNotAndIssuesNotifiedAtIsNotNull(String issues);
     long countByIssuesNot(String issues);
     List<Shipment> findByControlStatusAndClosedAtAfter(Shipment.Status status, Instant after);
 
@@ -38,4 +39,13 @@ public interface ShipmentRepo extends JpaRepository<Shipment, Long> {
     @Modifying(clearAutomatically = true) @Transactional
     @Query("update Shipment s set s.ownerUserId = null where s.ownerUserId = :userId")
     int clearOwner(Long userId);
+
+    /** Dublikat birlashtirish: egasi from → to. */
+    @Modifying(clearAutomatically = true) @Transactional
+    @Query("update Shipment s set s.ownerUserId = :to where s.ownerUserId = :from")
+    int remapOwnerUser(Long from, Long to);
+
+    @Modifying(clearAutomatically = true) @Transactional
+    @Query("update Shipment s set s.masulUserId = :to where s.masulUserId = :from")
+    int remapMasulUser(Long from, Long to);
 }

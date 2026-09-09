@@ -23,4 +23,9 @@ public interface AgentCheckRepo extends JpaRepository<AgentCheck, Long> {
     @Modifying(clearAutomatically = true) @Transactional
     @Query("update AgentCheck a set a.creatorUserId = null where a.creatorUserId = :userId")
     int clearCreator(Long userId);
+
+    /** Dublikat birlashtirish: yaratuvchi from → to. */
+    @Modifying(clearAutomatically = true) @Transactional
+    @Query("update AgentCheck a set a.creatorUserId = :to where a.creatorUserId = :from")
+    int remapCreatorUser(Long from, Long to);
 }

@@ -66,8 +66,8 @@ public class AdminHandler {
         if (u.getRole() == Role.SUPERADMIN) switch (s.state) {
             case ADM_AU_TGID -> { usersH.auTgId(s, text, chatId); return true; }
             case ADM_AU_NAME -> { usersH.auName(s, text, chatId); return true; }
-            case ADM_AK_NAME -> { kassaH.akName(s, text, chatId); return true; }
-            case ADM_AK_MSID -> { kassaH.akFinish(s, text, chatId); return true; }
+            case ADM_AK_NAME -> { kassaH.akName(u, s, text, chatId); return true; }
+            case ADM_AK_MSID -> { kassaH.akFinish(u, s, text, chatId); return true; }
             case ADM_IB_NAQD -> { balanceH.ibNaqd(s, text, chatId); return true; }
             case ADM_IB_KLIK -> { balanceH.ibFinish(u, s, text, chatId); return true; }
             case ADM_IB_SANA -> { balanceH.ibSana(u, s, text, chatId); return true; }
@@ -152,6 +152,8 @@ public class AdminHandler {
             return true;
         }
 
+        // 📱 Kontakt xabaridagi «mehmon sifatida qo'shish» — mavjud qo'shish oqimiga kiradi
+        if (cmd.equals("ctgu")) { s.reset(); s.state = Session.State.ADM_AU_PICK; usersH.auPick(s, arg, chatId, msgId); return true; }
         // 🕵️ Назорат sozlamalari (a:ct*)
         if (cmd.startsWith("ct")) return controlAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
 
@@ -177,7 +179,7 @@ public class AdminHandler {
             case "lbm" -> settingsH.labelList(s, chatId, msgId);
             case "lb" -> settingsH.labelPick(s, Integer.parseInt(arg), chatId, msgId);
             case "lbr" -> settingsH.labelRenameStart(s, Integer.parseInt(arg), chatId, msgId);
-            case "lbh" -> settingsH.labelHideToggle(s, Integer.parseInt(arg), chatId, msgId);
+            case "lbh" -> settingsH.labelHideToggle(u, s, Integer.parseInt(arg), chatId, msgId);
             case "msk" -> msH.msToken(s, chatId, msgId);
             case "msr" -> namesH.msNamesMenu(chatId, msgId);
             case "msrp" -> namesH.msNamesPreview(chatId, msgId);
@@ -309,7 +311,8 @@ public class AdminHandler {
             case "me" -> usersH.auEmp(s, arg, chatId, msgId);
             case "rl" -> usersH.auRole(s, arg, chatId, msgId);
             case "ks" -> usersH.auKassa(s, arg, chatId, msgId);
-            case "gr" -> kassaH.akGroup(s, arg, chatId, msgId);
+            case "auf" -> usersH.saveUserForce(s, chatId, msgId);
+            case "gr" -> kassaH.akGroup(u, s, arg, chatId, msgId);
             case "ib" -> balanceH.ibOwner(s, arg, chatId, msgId);
             case "ibd" -> balanceH.ibSanaBtn(u, s, arg, chatId, msgId);
             case "kro" -> balanceH.krOwner(s, arg, chatId, msgId);
@@ -323,7 +326,8 @@ public class AdminHandler {
             case "rzc" -> kassaH.rzCommit(u, s, arg, chatId, msgId);
             case "ckq" -> kassaH.ckStart(s, arg, chatId, msgId);
             case "ckd" -> kassaH.ckSanaBtn(u, s, arg, chatId, msgId);
-            case "ux" -> usersH.deactivate(u, Long.parseLong(arg), chatId, msgId);
+            case "ux" -> usersH.deactivateConfirm(u, Long.parseLong(arg), chatId, msgId);
+            case "uxy" -> usersH.deactivate(u, Long.parseLong(arg), chatId, msgId);
             default -> {
                 // 🔔 Bildirishnomalar — «a:nf…» (alohida handler)
                 if (cmd.startsWith("nf")) return notifyAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
@@ -407,8 +411,10 @@ public class AdminHandler {
                 switch (text) {
                     case "🏪 Касса" -> sup.navTo(u, s, "sozkassa", chatId, "🏪 <b>Касса</b>",
                             SOZKASSA_MENU);
-                    case "👥 Фойдаланувчилар" -> sup.navTo(u, s, "sozuser", chatId,
-                            "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
+                    case "👥 Фойдаланувчилар" -> {
+                        sup.navTo(u, s, "sozuser", chatId, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
+                        controlAdmin.employees(s, chatId, 0);   // bitta ro'yxat: bot + MoySklad
+                    }
                     case "💼 Бошланғич қолдиқ" -> { balanceH.ibStart(s, chatId); s.data.put("nav", "sozlash"); }
                     case "🛠 Корректировка" -> { balanceH.krStart(s, chatId); s.data.put("nav", "sozlash"); }
                     case "📋 Аудит" -> statsH.auditMenu(s, chatId, 0);
@@ -458,7 +464,10 @@ public class AdminHandler {
                         sup.navTo(u, s, "sozkassa", chatId, block, SOZKASSA_MENU);
                         return true;
                     }
-                    kassaRepo.findById(id).ifPresent(k -> { k.setActive(false); kassaRepo.save(k); });
+                    kassaRepo.findById(id).ifPresent(k -> {
+                        k.setActive(false); kassaRepo.save(k);
+                        audit.log(u.getId(), "KASSA_OCHIRILDI", "kassa", k.getId(), u.getFullName() + ": " + k.getName());
+                    });
                     sup.navTo(u, s, "sozkassa", chatId, "🚫 Kassa faolsizlantirildi",
                             SOZKASSA_MENU);
                 } else if (text.startsWith("❌")) {
@@ -631,7 +640,10 @@ public class AdminHandler {
                 "🏦 <b>Топширилган пуллар</b>\n\nDavrni tanlang:", PERIODS));
         // ⚙️ Настройка guruhlari ichidagi amallar
         ACTIONS.put("🏪 Касса", (u, s, c) -> sup.navTo(u, s, "sozkassa", c, "🏪 <b>Касса</b>", SOZKASSA_MENU));
-        ACTIONS.put("👥 Фойдаланувчилар", (u, s, c) -> sup.navTo(u, s, "sozuser", c, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU));
+        ACTIONS.put("👥 Фойдаланувчилар", (u, s, c) -> {
+            sup.navTo(u, s, "sozuser", c, "👥 <b>Фойдаланувчилар</b>", SOZUSER_MENU);
+            controlAdmin.employees(s, c, 0);   // bitta ro'yxat: bot + MoySklad
+        });
         ACTIONS.put("💼 Бошланғич қолдиқ", (u, s, c) -> { String nav = s.getStr("nav"); balanceH.ibStart(s, c); if (nav != null) s.data.put("nav", nav); });
         ACTIONS.put("🛠 Корректировка", (u, s, c) -> { String nav = s.getStr("nav"); balanceH.krStart(s, c); if (nav != null) s.data.put("nav", nav); });
         ACTIONS.put("📋 Аудит", (u, s, c) -> statsH.auditMenu(s, c, 0));
@@ -701,7 +713,7 @@ public class AdminHandler {
             case "sk"   -> kassaH.setKassa(chatId, msgId);
             case "skd"  -> kassaH.kassaDeleteList(chatId, msgId);
             case "skx"  -> kassaH.kassaDeleteConfirm(Long.parseLong(a[1]), chatId, msgId);
-            case "sky"  -> kassaH.kassaDeactivate(Long.parseLong(a[1]), chatId, msgId);
+            case "sky"  -> kassaH.kassaDeactivate(u, Long.parseLong(a[1]), chatId, msgId);
             case "sko"  -> kassaH.kassaOtdelList(chatId, msgId);
             case "skg"  -> kassaH.kassaOtdelMenu(Long.parseLong(a[1]), chatId, msgId);
             case "skgs" -> kassaH.kassaOtdelSet(u, Long.parseLong(a[1]), a[2], false, chatId, msgId);

@@ -91,6 +91,7 @@ public class ShipmentControlService {
         if (n > 0) log.debug("Otgruzka nazorati: {} ta hujjat yangilandi", n);
         dueChecks(true);
         notifyIssues();
+        escalateIssues();
     }
 
 
@@ -664,8 +665,8 @@ public class ShipmentControlService {
         boolean wasEmpty = s.getIssues().isEmpty();
         String before = s.getIssues();
         s.setIssues(codes);
-        if (codes.isEmpty()) { s.setIssuesSince(null); s.setIssuesNotifiedAt(null); }
-        else if (wasEmpty) { s.setIssuesSince(Instant.now()); s.setIssuesNotifiedAt(null); }
+        if (codes.isEmpty()) { s.setIssuesSince(null); s.setIssuesNotifiedAt(null); s.setIssuesEscalatedAt(null); s.setIssuesEscalated2At(null); }
+        else if (wasEmpty) { s.setIssuesSince(Instant.now()); s.setIssuesNotifiedAt(null); s.setIssuesEscalatedAt(null); s.setIssuesEscalated2At(null); }
         repo.save(s);
         // 📊 statistika uchun: kamchilik topildi / xodim tuzatdi (qarz yopilib ketgani tuzatish emas)
         if (wasEmpty && !codes.isEmpty())
@@ -723,6 +724,68 @@ public class ShipmentControlService {
         }
     }
 
+
+    /**
+     * Ikki bosqichli eskalatsiya (user 09.09.2026): xodimga xabardan esc1 daqiqa o'tsa — otdel RAHBARI
+     * (otdel kesimida bitta guruhlangan xabar); esc2 daqiqa o'tsa ham tuzatilmasa — «tuzatilmadi»
+     * SuperAdmin + rahbar + belgilanganlar. Jim statuslar eskalatsiya qilinmaydi.
+     */
+    public void escalateIssues() {
+        Instant lim1 = Instant.now().minusSeconds(cfg.esc1Min() * 60L);
+        Instant lim2 = Instant.now().minusSeconds(cfg.esc2Min() * 60L);
+        Map<Long, List<Shipment>> st1 = new LinkedHashMap<>(), st2 = new LinkedHashMap<>();
+        for (Shipment s : repo.findByIssuesNotAndIssuesNotifiedAtIsNotNull("")) {
+            if (cfg.isQuietState(s.getState())) continue;
+            long k = s.getKassaId() == null ? -1 : s.getKassaId();
+            if (s.getIssuesEscalatedAt() == null && !s.getIssuesNotifiedAt().isAfter(lim1))
+                st1.computeIfAbsent(k, x -> new ArrayList<>()).add(s);
+            if (s.getIssuesEscalated2At() == null && !s.getIssuesNotifiedAt().isAfter(lim2))
+                st2.computeIfAbsent(k, x -> new ArrayList<>()).add(s);
+        }
+        Instant now = Instant.now();
+        for (var e : st1.entrySet()) {
+            for (Shipment s : e.getValue()) { s.setIssuesEscalatedAt(now); repo.save(s); }
+            Long kassa = e.getKey() < 0 ? null : e.getKey();
+            Set<AppUser> heads = notifier.heads(kassa);
+            if (heads.isEmpty()) continue;   // rahbar yo'q — 2-bosqichda admin oladi
+            notifier.send(heads, "\u23F0 <b>Otgruzka kamchiliklari " + cfg.esc1Min() + " daqiqadan beri tuzatilmadi</b> — "
+                    + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa)) + "\n"
+                    + escalationLines(e.getValue())
+                    + "\nXodimlar tuzatishini nazorat qiling. " + cfg.esc2Min()
+                    + " daqiqada tuzatilmasa admin'ga «tuzatilmadi» xabari boradi.", null);
+            audit.log(null, "OTG_KAMCHILIK_ESKALATSIYA", "kassa", kassa, e.getValue().size() + " ta -> rahbar");
+        }
+        for (var e : st2.entrySet()) {
+            for (Shipment s : e.getValue()) { s.setIssuesEscalated2At(now); repo.save(s); }
+            Long kassa = e.getKey() < 0 ? null : e.getKey();
+            notifier.send(notifier.escalation(kassa), "\u274C <b>TUZATILMADI — otgruzka kamchiliklari " + cfg.esc2Min()
+                    + " daqiqadan beri ochiq</b> — " + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa)) + "\n"
+                    + escalationLines(e.getValue())
+                    + "\nXodim ham, otdel rahbari ham tuzatmadi.", null);
+            audit.log(null, "OTG_KAMCHILIK_TUZATILMADI", "kassa", kassa, e.getValue().size() + " ta -> admin");
+        }
+    }
+
+    /** Eskalatsiya xabari qatorlari: xodim kesimida otgruzkalar. */
+    private String escalationLines(List<Shipment> list) {
+        Map<String, List<Shipment>> byOwner = new LinkedHashMap<>();
+        for (Shipment s : list) {
+            String who = s.getOwnerUserId() != null ? notifier.userName(s.getOwnerUserId())
+                    : (s.getOwnerName().isBlank() ? "noma'lum xodim" : s.getOwnerName());
+            byOwner.computeIfAbsent(who, k -> new ArrayList<>()).add(s);
+        }
+        StringBuilder sb = new StringBuilder();
+        int n = 0;
+        for (var e : byOwner.entrySet()) {
+            sb.append("\uD83D\uDC64 <b>").append(esc(e.getKey())).append("</b> — ").append(e.getValue().size()).append(" ta\n");
+            for (Shipment s : e.getValue()) {
+                if (++n > 25) { sb.append("… yana ").append(list.size() - 25).append(" ta\n"); return sb.toString(); }
+                sb.append("  • №").append(esc(s.getDocNo())).append(" · ").append(esc(s.getAgentName()))
+                  .append(" · ").append(fmt(s.remain())).append(" · ").append(issueLabels(s.issueList())).append("\n");
+            }
+        }
+        return sb.toString();
+    }
 
     /**
      * Xodimga tegishli (ega yoki Масъул) kamchilikli otgruzkalar — Telegram ulanganda bir marta yuborish uchun.

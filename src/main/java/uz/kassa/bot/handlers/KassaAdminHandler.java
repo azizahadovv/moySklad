@@ -198,13 +198,16 @@ public class KassaAdminHandler {
     }
 
 
-    void kassaDeactivate(long id, long chatId, int msgId) {
+    void kassaDeactivate(AppUser u, long id, long chatId, int msgId) {
         String block = kassaDeactivateBlock(id);
         if (block != null) {
             sup.show(chatId, msgId, block, List.of(irow(sup.bk("a:p:sk"))));
             return;
         }
-        kassaRepo.findById(id).ifPresent(k -> { k.setActive(false); kassaRepo.save(k); });
+        kassaRepo.findById(id).ifPresent(k -> {
+            k.setActive(false); kassaRepo.save(k);
+            audit.log(u.getId(), "KASSA_OCHIRILDI", "kassa", k.getId(), u.getFullName() + ": " + k.getName());
+        });
         sup.show(chatId, msgId, "🚫 Kassa faolsizlantirildi", List.of(irow(sup.bk("a:p:sk"))));
     }
 
@@ -269,7 +272,7 @@ public class KassaAdminHandler {
         if (sum <= 0) { sender.send(chatId, "⚠️ Musbat summa kiriting:"); return; }
         s.data.put("ckSum", sum);
         s.state = Session.State.ADM_CK_SANA;
-        java.time.LocalDate now = java.time.LocalDate.now();
+        java.time.LocalDate now = ledger.today();
         sender.send(chatId, "📅 <b>Qaysi sanaga kiritilsin?</b>\n\n"
                         + "Tugmani bosing yoki eskiroq sanani o'zingiz yozing (masalan <code>"
                         + now.minusDays(10).format(DF) + "</code>):",
@@ -285,7 +288,7 @@ public class KassaAdminHandler {
 
     void ckSanaBtn(AppUser u, Session s, String arg, long chatId, int msgId) {
         if (s.state != Session.State.ADM_CK_SANA) return;
-        java.time.LocalDate d = java.time.LocalDate.now().minusDays(Long.parseLong(arg));
+        java.time.LocalDate d = ledger.today().minusDays(Long.parseLong(arg));
         sender.edit(chatId, msgId, "📅 Sana: <b>" + d.format(DF) + "</b>");
         ckCommit(u, s, d, chatId);
     }
@@ -298,11 +301,11 @@ public class KassaAdminHandler {
             try { d = java.time.LocalDate.parse(text.trim()); }
             catch (Exception e2) {
                 sender.send(chatId, "⚠️ Sana formati: <code>kun.oy.yil</code> — masalan <code>"
-                        + java.time.LocalDate.now().format(DF) + "</code>");
+                        + ledger.today().format(DF) + "</code>");
                 return;
             }
         }
-        if (d.isAfter(java.time.LocalDate.now())) {
+        if (d.isAfter(ledger.today())) {
             sender.send(chatId, "⚠️ Kelajak sanasi bo'lmaydi. Qaytadan kiriting:");
             return;
         }
@@ -331,19 +334,19 @@ public class KassaAdminHandler {
 
     /* ==================== 🏪 KASSA QO'SHISH ==================== */
 
-    void akName(Session s, String text, long chatId) {
+    void akName(AppUser u, Session s, String text, long chatId) {
         // Soddalashtirilgan: nom -> darhol otdel tanlash (savdo nuqtasi bosqichi olib tashlandi)
         s.data.put("kassaName", text);
-        akFinish(s, "-", chatId);
+        akFinish(u, s, "-", chatId);
     }
 
 
-    void akFinish(Session s, String text, long chatId) {
+    void akFinish(AppUser u, Session s, String text, long chatId) {
         s.data.put("kassaMsId", text.equals("-") ? "" : text.trim());
 
         // MoySklad otdellari (Владелец-отдел) — kirim/chiqim shu bog'lanish orqali kassaga tushadi
         Map<String, String> groups = msClient.fetchGroups();
-        if (groups.isEmpty()) { createKassa(s, null, chatId, null); return; }
+        if (groups.isEmpty()) { createKassa(u, s, null, chatId, null); return; }
 
         s.data.put("groups", groups);
         s.state = Session.State.ADM_AK_GROUP;
@@ -357,13 +360,13 @@ public class KassaAdminHandler {
     }
 
 
-    void akGroup(Session s, String arg, long chatId, int msgId) {
+    void akGroup(AppUser u, Session s, String arg, long chatId, int msgId) {
         if (s.state != Session.State.ADM_AK_GROUP) return;
-        createKassa(s, arg.equals("-") ? null : arg, chatId, msgId);
+        createKassa(u, s, arg.equals("-") ? null : arg, chatId, msgId);
     }
 
 
-    void createKassa(Session s, String groupId, long chatId, Integer msgId) {
+    void createKassa(AppUser u, Session s, String groupId, long chatId, Integer msgId) {
         String name = s.getStr("kassaName");
         String msIdRaw = s.getStr("kassaMsId");
         String storeId = (msIdRaw == null || msIdRaw.isBlank()) ? null : msIdRaw;
@@ -374,6 +377,8 @@ public class KassaAdminHandler {
 
         Kassa k = kassaRepo.save(Kassa.builder()
                 .name(name).moyskladStoreId(storeId).moyskladGroupId(groupId).active(true).build());
+        audit.log(u.getId(), "KASSA_QOSHILDI", "kassa", k.getId(), u.getFullName() + ": " + k.getName()
+                + (groupId == null ? "" : " otdel=" + groupId));
 
         String text = "✅ Kassa qo'shildi: <b>" + esc(k.getName()) + "</b> (#" + k.getId() + ")"
                 + (storeId == null ? "" : "\nSavdo nuqtasi ID: <code>" + esc(storeId) + "</code>")

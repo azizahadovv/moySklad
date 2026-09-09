@@ -52,6 +52,7 @@ public class ReminderViewHandler {
                     + fmt(r.remain()) + " · " + r.getDueDate().format(DF), "kg:v:" + r.getId())));
         }
         if (!list.isEmpty()) sb.append("\nBatafsil ko'rish uchun tanlang:");
+        if (list.size() > 15) sb.append("\n<i>… yana ").append(list.size() - 15).append(" ta ko'rsatilmadi</i>");
         rows.add(irow(ks.bk("kg:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
     }

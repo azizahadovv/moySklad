@@ -82,7 +82,7 @@ public class BalanceAdminHandler {
         }
         s.data.put("ibKlik", klik);
         s.state = Session.State.ADM_IB_SANA;
-        java.time.LocalDate now = java.time.LocalDate.now();
+        java.time.LocalDate now = ledger.today();
         sender.send(chatId, "📅 <b>Qaysi sanaga kiritilsin?</b>\n\n"
                         + "Tugmani bosing yoki eskiroq sanani o'zingiz yozing (masalan <code>"
                         + now.minusDays(10).format(DF) + "</code>):",
@@ -98,7 +98,7 @@ public class BalanceAdminHandler {
 
     void ibSanaBtn(AppUser u, Session s, String arg, long chatId, int msgId) {
         if (s.state != Session.State.ADM_IB_SANA) return;
-        java.time.LocalDate d = java.time.LocalDate.now().minusDays(Long.parseLong(arg));
+        java.time.LocalDate d = ledger.today().minusDays(Long.parseLong(arg));
         sender.edit(chatId, msgId, "📅 Sana: <b>" + d.format(DF) + "</b>");
         ibCommit(u, s, d, chatId);
     }
@@ -111,11 +111,11 @@ public class BalanceAdminHandler {
             try { d = java.time.LocalDate.parse(text.trim()); }
             catch (Exception e2) {
                 sender.send(chatId, "⚠️ Sana formati: <code>kun.oy.yil</code> — masalan <code>"
-                        + java.time.LocalDate.now().format(DF) + "</code>");
+                        + ledger.today().format(DF) + "</code>");
                 return;
             }
         }
-        if (d.isAfter(java.time.LocalDate.now())) {
+        if (d.isAfter(ledger.today())) {
             sender.send(chatId, "⚠️ Kelajak sanasi bo'lmaydi. Qaytadan kiriting:");
             return;
         }

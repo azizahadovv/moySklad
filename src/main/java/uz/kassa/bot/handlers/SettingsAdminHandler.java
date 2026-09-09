@@ -114,11 +114,12 @@ public class SettingsAdminHandler {
         int shown = 0;
         for (AppUser x : userRepo.findByActiveTrueOrderByRoleAscIdAsc()) {
             if (x.getTelegramId() == null) continue;   // Telegram'siz odam tanlolmaydi
-            if (shown++ >= 20) break;
+            if (shown++ >= 20) continue;
             rows.add(irow(btn("👤 " + x.getFullName(), "a:kms:" + cardId + ":" + x.getId())));
         }
         rows.add(irow(sup.bk("a:kmc:" + cardId)));
-        sup.show(chatId, msgId, "👤 <b>Mas'ulni tanlang</b> (user ID bilan biriktiriladi):", rows);
+        sup.show(chatId, msgId, "👤 <b>Mas'ulni tanlang</b> (user ID bilan biriktiriladi):"
+                + (shown > 20 ? "\n<i>… yana " + (shown - 20) + " ta sig'madi</i>" : ""), rows);
     }
 
 
@@ -213,13 +214,13 @@ public class SettingsAdminHandler {
     }
 
 
-    void labelHideToggle(Session s, int idx, long chatId, int msgId) {
+    void labelHideToggle(AppUser u, Session s, int idx, long chatId, int msgId) {
         if (idx < 0 || idx >= LabelService.RENAMABLE.size()) return;
         String canonical = LabelService.RENAMABLE.get(idx);
         if (canonical.equals(LabelService.PROTECTED_LABEL)) { labelPick(s, idx, chatId, msgId); return; }
         boolean nowHidden = !labelSvc.isHidden(canonical);
         labelSvc.setHidden(canonical, nowHidden);
-        audit.log(null, nowHidden ? "BOLIM_OCHIRILDI" : "BOLIM_YOQILDI", "label", null, canonical);
+        audit.log(u.getId(), nowHidden ? "BOLIM_OCHIRILDI" : "BOLIM_YOQILDI", "label", null, canonical);
         sender.send(chatId, (nowHidden
                 ? "🙈 <b>" + esc(labelSvc.display(canonical)) + "</b> o'chirildi — menyularda "
                   + "ko'rinmaydi, bosilsa ham ishlamaydi (SuperAdmin'dan tashqari)."

@@ -33,6 +33,7 @@ import static uz.kassa.bot.TextUtil.esc;
 public class NotifyAdminHandler {
 
     private final Sender sender;
+    private final uz.kassa.config.AppProps props;
     private final NotifyService svc;
     private final AppUserRepo userRepo;
     private final KassaRepo kassaRepo;
@@ -184,14 +185,14 @@ public class NotifyAdminHandler {
                 Notify n = current(s);
                 if (n == null) { menu(s, chatId, 0); return true; }
                 if (v.equals("-")) { scheduleMenu(n.getId(), chatId, 0); return true; }
-                LocalDateTime at = NotifyService.parseOnceText(v, java.time.ZoneId.of("Asia/Tashkent"));
+                LocalDateTime at = NotifyService.parseOnceText(v, props.zoneId());
                 if (at == null) {
                     s.state = st;
                     sender.send(chatId, "⚠️ Tushunmadim. Masalan: <code>05.09.2026 14:30</code>, <code>bugun 18:00</code>, "
                             + "<code>ertaga 09:00</code>. Qayta yuboring yoki «-» bilan bekor qiling:");
                     return true;
                 }
-                if (!at.isAfter(LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent")))) {
+                if (!at.isAfter(LocalDateTime.now(props.zoneId()))) {
                     s.state = st;
                     sender.send(chatId, "⚠️ Bu vaqt o'tib ketgan. Kelajakdagi vaqtni yuboring yoki «-»:");
                     return true;
@@ -391,7 +392,7 @@ public class NotifyAdminHandler {
                     case "nfy" -> {   // 🚀 hozir yuborish (barcha qabul qiluvchilarga)
                         String err = svc.send(n);
                         n.setLastError(err);
-                        n.setLastSent(LocalDateTime.now().withSecond(0).withNano(0).toString());
+                        n.setLastSent(LocalDateTime.now(props.zoneId()).withSecond(0).withNano(0).toString());
                         svc.save(n);
                         audit.log(u.getId(), "NOTIFY_YUBORILDI", "notify", id, u.getFullName() + " qo'lda yubordi"
                                 + (err == null ? "" : " (xato: " + err + ")"));

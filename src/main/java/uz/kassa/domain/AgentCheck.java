@@ -59,8 +59,15 @@ public class AgentCheck {
     @Column(name = "last_daily")
     private LocalDate lastDaily;
 
+    /** 1-bosqich: otdel rahbariga yuborilgan vaqt. */
+    /** 1-bosqich: otdel rahbariga yuborilgan vaqt. */
     @Column(name = "escalated_at")
     private Instant escalatedAt;
+
+    /** 2-bosqich: «tuzatilmadi» — admin + rahbarga yuborilgan vaqt. */
+    @Column(name = "escalated2_at")
+    private Instant escalated2At;
+
 
     @Column(name = "fixed_at")
     private Instant fixedAt;

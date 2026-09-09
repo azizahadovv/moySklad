@@ -437,6 +437,11 @@ public class LedgerService {
         // bir-biridan uzoqlashib ketmasin (aks holda boshlang'ich qoldiq
         // «Баланс — НАҚД» ko'rinishida umuman ko'rinmay qolardi).
         LocalDate d = date == null ? today() : date;
+        // K5: manba jurnalda farqlansin — avto (sinxron/audit/qayta yuklash) yozuvlari
+        // «🤖 Avto:» prefiksi va *_AVTO audit amali bilan, qo'lda kiritilganlar userId bilan.
+        boolean system = byUserId == null;
+        if (system && (reason == null || !reason.startsWith("🤖 Avto:")))
+            reason = "🤖 Avto: " + (reason == null ? "" : reason);
         if ((type == OpType.KORREKTIROVKA || type == OpType.BOSHLANGICH) && ot == OwnerType.KASSA) {
             if (signedAmount > 0) dayService.addKirim(oid, d, mt, signedAmount);
             else dayService.addChiqim(oid, d, mt, -signedAmount);
@@ -455,7 +460,7 @@ public class LedgerService {
         else ob.fromOwnerType(ot).fromOwnerId(oid);
 
         Operation op = opRepo.save(ob.build());
-        audit.log(byUserId, type.name(), "operation", op.getId(),
+        audit.log(byUserId, system ? type.name() + "_AVTO" : type.name(), "operation", op.getId(),
                 ot + ":" + oid + " " + mt + " " + signedAmount + " | " + reason);
         return op;
     }

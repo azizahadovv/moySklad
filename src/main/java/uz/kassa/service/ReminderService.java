@@ -205,12 +205,16 @@ public class ReminderService {
         return sb.toString();
     }
 
+    /** Muddati o'tgan eslatma necha kunda bir takrorlanadi (T4: har kuni abadiy emas). */
+    public static final int OVERDUE_EVERY_DAYS = 3;
+
     /**
      * Har 10 daqiqada chaqiriladi: 09:00 dan keyin, har eslatma uchun kuniga BIR marta.
-     * Yuboriladi: tanlangan kunlar (remind_days), muddat kuni va o'tib ketgan har kun.
+     * Yuboriladi: tanlangan kunlar (remind_days), muddat kuni, keyin muddati o'tganda
+     * har OVERDUE_EVERY_DAYS kunda bir. MoySklad sinxroni Jobs'da alohida chaqiriladi
+     * (tick ichidan chaqirilsa @Transactional proxy chetlab o'tilardi).
      */
     public void tick() {
-        syncFromMoySklad();
         LocalDate today = LocalDate.now(props.zoneId());
         if (LocalTime.now(props.zoneId()).isBefore(NOTIFY_AT)) return;
         for (Reminder r : activeAll()) {
@@ -218,7 +222,9 @@ public class ReminderService {
                 if (r.isAuto()) continue;   // kunlik jamlama otgruzka nazoratida
                 if (today.equals(r.getLastNotified())) continue;
                 long left = ChronoUnit.DAYS.between(today, r.getDueDate());
-                boolean send = left <= 0 || r.remindDaySet().contains((int) left);
+                boolean send = left == 0
+                        || (left < 0 && (-left) % OVERDUE_EVERY_DAYS == 0)
+                        || (left > 0 && r.remindDaySet().contains((int) left));
                 if (!send) continue;
 
                 String text = "🔔 <b>Qarz eslatmasi</b>\n\n" + render(r, false)
@@ -226,10 +232,22 @@ public class ReminderService {
                             ? "" : "\n💬 " + TextUtil.esc(r.getComment()))
                         + "\n✍️ Kiritgan: " + TextUtil.esc(userRepo.findById(r.getCreatorUserId())
                             .map(AppUser::getFullName).orElse("?"));
+                int[] delivered = {0};
                 for (Long uid : r.recipientSet())
                     userRepo.findById(uid).ifPresent(x -> {
-                        if (x.getTelegramId() != null) notify.toUser(x.getTelegramId(), text);
+                        if (x.getTelegramId() != null) { notify.toUser(x.getTelegramId(), text); delivered[0]++; }
                     });
+                if (delivered[0] == 0) {
+                    // T4: «yuborildi» deb belgilanib, aslida hech kimga bormasin — zaxira kanal:
+                    // kiritgan odam (Telegram bo'lsa), aks holda SuperAdmin'lar.
+                    String warn = "⚠️ <b>Eslatma #" + r.getId() + " hech kimga yetib bormadi</b> — "
+                            + "qabul qiluvchilarda Telegram ulanmagan. Sizga yuborildi:\n\n" + text;
+                    AppUser creator = userRepo.findById(r.getCreatorUserId()).orElse(null);
+                    if (creator != null && creator.getTelegramId() != null && creator.isActive())
+                        notify.toUser(creator.getTelegramId(), warn);
+                    else notify.toRole(Role.SUPERADMIN, warn, null);
+                    log.warn("Eslatma #{}: qabul qiluvchilarda Telegram yo'q — zaxira kanalga yuborildi", r.getId());
+                }
                 r.setLastNotified(today);
                 repo.save(r);
             } catch (Exception e) {

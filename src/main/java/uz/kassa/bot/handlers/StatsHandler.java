@@ -236,16 +236,20 @@ public class StatsHandler {
         var k = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
         java.time.LocalDate from = ledger.today().withDayOfMonth(1);
 
-        long kirim = 0, chiqim = 0, boshl = 0;
+        long kirim = 0, chiqim = 0, boshl = 0, terminal = 0; int rasxodTotal = 0;
         List<String> rasxodLines = new ArrayList<>();
         for (Operation o : opRepo.byPeriod(from, ledger.today())) {
             boolean in = o.getToOwnerType() == OwnerType.BUXGALTERIYA;
             boolean out = o.getFromOwnerType() == OwnerType.BUXGALTERIYA;
             if (!in && !out) continue;
+            // Rad etilgan / yo'ldagi operatsiyalar pul emas
+            if (o.getStatus() != uz.kassa.domain.OpStatus.TASDIQLANGAN) continue;
+            // TERMINAL (karta) topshirig'i balansga kirmaydi — alohida qatorda ko'rsatiladi (N4)
+            if (o.getMoneyType() == MoneyType.TERMINAL) { if (in) terminal += o.getAmount(); continue; }
             if (o.getType() == OpType.BOSHLANGICH && in) boshl += o.getAmount();
             else if (in) kirim += o.getAmount();
             if (out) {
-                chiqim += o.getAmount();
+                chiqim += o.getAmount(); rasxodTotal++;
                 if (rasxodLines.size() < 15)
                     rasxodLines.add("• " + o.getOpDate().format(DF) + " — <b>"
                             + fmt(o.getAmount()) + "</b> so'm"
@@ -260,7 +264,8 @@ public class StatsHandler {
                 + "📲 Click balans: <b>" + fmt(k.getAmount()) + "</b> so'm\n\n"
                 + "⚙️ Boshlang'ich qoldiq: <b>" + fmt(boshl) + "</b>\n"
                 + "🟢 Kirimlar (shu oy): <b>" + fmt(kirim) + "</b>\n"
-                + "🔴 Chiqimlar (shu oy): <b>" + fmt(chiqim) + "</b>\n");
+                + "🔴 Chiqimlar (shu oy): <b>" + fmt(chiqim) + "</b>\n"
+                + (terminal > 0 ? "💳 Terminal topshiriqlari (balansga kirmaydi): <b>" + fmt(terminal) + "</b>\n" : ""));
 
         if (n.getAmount() < 0 || k.getAmount() < 0) {
             sb.append("\n⚠️ <b>Balans manfiy — bu QARZ EMAS.</b>\n");
@@ -271,8 +276,9 @@ public class StatsHandler {
         }
 
         if (!rasxodLines.isEmpty())
-            sb.append("\n💸 <b>Nimalarga chiqim bo'ldi</b> (oxirgi ")
-              .append(rasxodLines.size()).append(" ta):\n")
+            sb.append("\n💸 <b>Nimalarga chiqim bo'ldi</b> (")
+              .append(rasxodTotal > rasxodLines.size() ? rasxodLines.size() + " / " + rasxodTotal + " ta" : rasxodLines.size() + " ta")
+              .append("):\n")
               .append(String.join("\n", rasxodLines)).append("\n");
 
         List<Debt> oweTo = debtRepo.findByDebtorTypeAndDebtorIdAndStatus(
@@ -562,7 +568,7 @@ public class StatsHandler {
                 : auditRepo.findTop15ByUserIdOrderByIdDesc(userId);
         String who = userId == 0 ? "Ҳаммаси"
                 : userRepo.findById(userId).map(AppUser::getFullName).orElse("#" + userId);
-        StringBuilder sb = new StringBuilder("📋 <b>Аудит</b> — " + esc(who) + "\n");
+        StringBuilder sb = new StringBuilder("📋 <b>Аудит</b> — " + esc(who) + " <i>(oxirgi 15 ta; to'liq jurnal — 📊 Excel)</i>\n");
         if (logs.isEmpty()) sb.append("\nYozuvlar yo'q.");
         java.util.Map<Long, String> nameCache = new java.util.HashMap<>();
         for (AuditLog a : logs) {

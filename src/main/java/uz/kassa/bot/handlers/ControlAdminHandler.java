@@ -31,6 +31,7 @@ import static uz.kassa.bot.TextUtil.fmt;
  * xodim ↔ MoySklad bog'lash, otdel rahbarlari, test, hozir tekshirish. Callback: a:ct*.
  */
 @Component
+@lombok.extern.slf4j.Slf4j
 @RequiredArgsConstructor
 public class ControlAdminHandler {
 
@@ -45,6 +46,7 @@ public class ControlAdminHandler {
     private final AuditService audit;
     private final uz.kassa.repo.GuestRepo guestRepo;
     private final uz.kassa.bot.MenuSupport menus;
+    private final UserMergeService mergeSvc;
 
     private static final String BACK = "a:ct";
 
@@ -111,6 +113,10 @@ public class ControlAdminHandler {
             case "ctes" -> employeeSet(u, s, arg, chatId, msgId);
             case "ctex" -> employeeUnlink(u, s, Integer.parseInt(arg), chatId, msgId);
             case "ctu" -> userCard(s, Long.parseLong(arg), chatId, msgId);
+            case "ctmgp" -> mergePick(Long.parseLong(arg), chatId, msgId);
+            case "ctmg" -> mergeConfirm(arg, chatId, msgId);
+            case "ctmgy" -> mergeDo(u, s, arg, chatId, msgId);
+            case "ctlk" -> linkContact(u, s, arg, chatId, msgId);
             case "ctuk" -> userKassaPick(s, Long.parseLong(arg), chatId, msgId);
             case "ctuks" -> userKassaSet(u, s, arg, chatId, msgId);
             case "ctue" -> userEmpPick(s, Long.parseLong(arg), chatId, msgId);
@@ -140,8 +146,9 @@ public class ControlAdminHandler {
         sb.append("📅 Eski qarzlar: <b>").append(cfg.since()).append("</b> dan\n");
         sb.append("⏱ Kutish oynasi: <b>").append(cfg.graceMin()).append(" min</b> · 🔁 Balans tekshiruvi: <b>")
           .append(cfg.checkMin()).append(" min</b>\n");
-        sb.append("🕘 Kunlik jamlama: <b>").append(cfg.dailyTime()).append("</b> · ⏰ Eskalatsiya: <b>")
-          .append(cfg.escalateHours()).append(" soat</b>\n");
+        sb.append("🕘 Kunlik jamlama: <b>").append(cfg.dailyTime()).append("</b>\n");
+        sb.append("⏰ Xato zanjiri: xodim → <b>").append(cfg.esc1Min()).append(" min</b> rahbar → <b>")
+          .append(cfg.esc2Min()).append(" min</b> «tuzatilmadi» admin + rahbar\n");
         sb.append("🔔 Qarzdor eslatmasi: muddatdan <b>").append(cfg.remindBefore().isEmpty() ? "—" : cfg.remindBefore().toString())
           .append("</b> kun oldin · muddat kuni · o'tgach <b>")
           .append(cfg.remindRepeatDays() == 0 ? "takrorsiz" : "har " + cfg.remindRepeatDays() + " kunda").append("</b> · soat <b>")
@@ -154,15 +161,16 @@ public class ControlAdminHandler {
         long unlinked = userRepo.findByActiveTrueOrderByRoleAscIdAsc().stream()
                 .filter(x -> x.getMsUid() == null && x.getMsEmployeeId() == null).count();
         if (unlinked > 0) sb.append("👔 MoySklad'ga bog'lanmagan xodimlar: <b>").append(unlinked).append("</b>\n");
+        sb.append("👥 Xodimlar ro'yxati (bot + MoySklad, dublikatlar): <b>Настройка → 👥 Фойдаланувчилар</b>\n");
 
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:ctg"), btn("📅 Boshlanish sanasi", "a:ctv:since")));
         rows.add(irow(btn("⏱ Kutish (min)", "a:ctv:grace"), btn("🔁 Tekshiruv (min)", "a:ctv:check")));
-        rows.add(irow(btn("🕘 Kunlik vaqt", "a:ctv:daily"), btn("⏰ Eskalatsiya (soat)", "a:ctv:esc")));
+        rows.add(irow(btn("🕘 Kunlik vaqt", "a:ctv:daily"), btn("⏰ Rahbarga (min)", "a:ctv:esc"), btn("❌ Adminga (min)", "a:ctv:esc2")));
         rows.add(irow(btn("🔔 Qarzdor eslatmalari", "a:ctrm")));
         rows.add(irow(btn("👥 Oluvchilar", "a:ctr"), btn("📏 Qoidalar", "a:ctk")));
         rows.add(irow(btn("🏦 Jim statuslar (faqat ro'yxatda)", "a:ctq")));
-        rows.add(irow(btn("👔 Xodimlar (MoySklad)", "a:cte"), btn("🏪 Otdel rahbarlari", "a:cth")));
+        rows.add(irow(btn("🏪 Otdel rahbarlari", "a:cth")));   // xodimlar ro'yxati — Настройка → 👥 Фойдаланувчилар (bitta ekran)
         rows.add(irow(btn("🔄 Hammasini yangilash (MoySklad)", "a:ctn")));
         rows.add(irow(btn("🧪 Test (o'zimga)", "a:ctt")));
         rows.add(irow(btn("⬅️ Orqaga", "a:p:set")));
@@ -227,7 +235,8 @@ public class ControlAdminHandler {
             case "grace" -> "⏱ Otgruzkadan keyin necha daqiqa kutilsin? (5–43200)\nHozir: " + cfg.graceMin();
             case "check" -> "🔁 Qarzdorlar balansi necha daqiqada bir tekshirilsin? (2–1440)\nHozir: " + cfg.checkMin();
             case "daily" -> "🕘 Kunlik jamlama vaqti (HH:mm)\nHozir: " + cfg.dailyTime();
-            case "esc" -> "⏰ Kontragent xatosi necha soatdan keyin rahbar/SuperAdmin'ga chiqsin? (1–720)\nHozir: " + cfg.escalateHours();
+            case "esc" -> "⏰ Xato (kontragent/otgruzka) xodimga yuborilgach necha DAQIQADA tuzatilmasa otdel RAHBARIGA chiqsin? (1–43200)\nHozir: " + cfg.esc1Min();
+            case "esc2" -> "❌ Necha DAQIQADA ham tuzatilmasa «tuzatilmadi» xabari SuperAdmin + rahbarga chiqsin? (rahbar vaqtidan katta)\nHozir: " + cfg.esc2Min();
             case "rb" -> "🔔 Qarzdor eslatmasi muddatdan necha kun OLDIN yuborilsin? Vergul bilan, masalan <code>3,1</code> "
                     + "(muddat kuni har doim eslatiladi; <code>0</code> — faqat muddat kuni)\nHozir: "
                     + (cfg.remindBefore().isEmpty() ? "faqat muddat kuni" : cfg.remindBefore());
@@ -258,7 +267,8 @@ public class ControlAdminHandler {
                 case "grace" -> cfg.set(ControlConfig.GRACE_MIN, String.valueOf(range(t, 5, 43200)));
                 case "check" -> cfg.set(ControlConfig.CHECK_MIN, String.valueOf(range(t, 2, 1440)));
                 case "daily" -> cfg.set(ControlConfig.DAILY_TIME, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
-                case "esc" -> cfg.set(ControlConfig.ESCALATE_H, String.valueOf(range(t, 1, 720)));
+                case "esc" -> cfg.set(ControlConfig.ESC1_MIN, String.valueOf(range(t, 1, 43200)));
+                case "esc2" -> cfg.set(ControlConfig.ESC2_MIN, String.valueOf(range(t, 1, 43200)));
                 case "rb" -> {
                     java.util.TreeSet<Integer> days = new java.util.TreeSet<>();
                     for (String x : t.split("[,;\\s]+")) if (!x.isBlank()) { int v = Integer.parseInt(x.trim()); if (v > 0 && v <= 90) days.add(v); }
@@ -343,7 +353,7 @@ public class ControlAdminHandler {
 
     /* ---------- 👔 xodimlar: BARCHA bot foydalanuvchilari + botda yo'q MoySklad xodimlari ---------- */
 
-    private void employees(Session s, long chatId, int msgId) {
+    public void employees(Session s, long chatId, int msgId) {
         List<MoySkladClient.MsEmployeeFull> emps = link.employees();
         s.data.put("ctEmps", emps);
         List<AppUser> users = new ArrayList<>(userRepo.findByActiveTrueOrderByRoleAscIdAsc());
@@ -377,6 +387,14 @@ public class ControlAdminHandler {
         }
         if (emps.isEmpty()) sb.append("⚠️ MoySklad xodimlari o'qilmadi (API kaliti?).\n");
         else if (missing > 0) sb.append("❌ MoySklad'da bor, botda yo'q: <b>").append(missing).append("</b> ta — bosib bog'lang yoki 🔄 sinxron yaratadi.\n");
+        List<UserMergeService.Dup> dups = mergeSvc.duplicates();
+        if (!dups.isEmpty()) {
+            sb.append("⚠️ <b>Dublikat ehtimoli: ").append(dups.size()).append(" juft</b> — bitta odam ikki marta yaratilgan bo'lishi mumkin, 🔀 bosib birlashtiring:\n");
+            for (UserMergeService.Dup d : dups)
+                rows.add(irow(btn(cut("🔀 " + d.a().getFullName() + " ⇄ " + d.b().getFullName() + " (" + d.why() + ")", 60),
+                        "a:ctmg:" + d.a().getId() + "." + d.b().getId())));
+        }
+        rows.add(irow(btn("➕ Xodim qo'shish", "a:p:sunew")));
         rows.add(irow(btn("🔄 MoySklad bilan sinxron (otdel · yangi xodim · rahbar)", "a:ctey")));
         rows.add(irow(btn("⬅️ Orqaga", BACK)));
         show(chatId, msgId, sb.toString(), inline(rows));
@@ -427,8 +445,107 @@ public class ControlAdminHandler {
         rows.add(irow(btn("🏪 Otdel", "a:ctuk:" + userId), btn("👔 MoySklad xodimi", "a:ctue:" + userId)));
         rows.add(irow(btn("🎖 Rahbarlik (otdellar)", "a:ctuh:" + userId),
                 btn(x.getTelegramId() == null ? "🔗 Telegram ulash" : "📲 Telegram", "a:ctut:" + userId)));
+        // Bitta karta — hamma amal shu yerda (avval rol/o'chirish faqat Ҳуқуқлар va Фойдаланувчилар'da edi)
+        rows.add(irow(btn("🔐 Rol / huquqlar", "a:prc:" + userId), btn("🚫 Faolsizlantirish", "a:prx:" + userId)));
+        rows.add(irow(btn("🔀 Dublikat bilan birlashtirish", "a:ctmgp:" + userId)));
         rows.add(irow(btn("⬅️ Xodimlar", "a:cte")));
         show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    /* ---------- 🔀 dublikatlarni birlashtirish ---------- */
+
+    /** Kartadan: kim bilan birlashtirilsin — avval o'xshashlar, keyin qolganlar. */
+    private void mergePick(long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) return;
+        List<AppUser> all = new ArrayList<>(userRepo.findByActiveTrueOrderByRoleAscIdAsc());
+        all.removeIf(o -> o.getId().equals(userId));
+        all.sort(java.util.Comparator.comparing((AppUser o) -> mergeSvc.why(x, o) == null ? 1 : 0).thenComparing(AppUser::getId));
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        int n = 0;
+        for (AppUser o : all) {
+            if (n++ >= 20) break;
+            String why = mergeSvc.why(x, o);
+            rows.add(irow(btn(cut((why == null ? "👤 " : "⚠️ ") + o.getFullName() + (why == null ? "" : " (" + why + ")"), 60),
+                    "a:ctmg:" + userId + "." + o.getId())));
+        }
+        rows.add(irow(btn("⬅️ Karta", "a:ctu:" + userId)));
+        show(chatId, msgId, "🔀 <b>" + esc(x.getFullName()) + "</b> kim bilan bitta odam?\n"
+                + (n > 20 ? "<i>… yana " + (all.size() - 20) + " ta sig'madi</i>\n" : "")
+                + "\n⚠️ — o'xshashlik topilganlar. Tanlang:", inline(rows));
+    }
+
+    /** Tasdiq: qaysi biri QOLADI (ikkinchisi faolsizlanadi, hamma yozuvlari qolganiga ko'chadi). */
+    private void mergeConfirm(String arg, long chatId, int msgId) {
+        String[] p = arg.split("\\.");
+        if (p.length != 2) return;
+        AppUser a = userRepo.findById(Long.parseLong(p[0])).orElse(null);
+        AppUser b = userRepo.findById(Long.parseLong(p[1])).orElse(null);
+        if (a == null || b == null) return;
+        show(chatId, msgId, "🔀 <b>Birlashtirish</b>\n\n"
+                + mergeLine("A", a) + "\n" + mergeLine("B", b) + "\n\n"
+                + "Qolgan foydalanuvchiga ikkinchisining Telegram/telefon/MoySklad/otdel (bo'sh bo'lsa), rahbarligi va "
+                + "barcha otgruzka, kontragent, operatsiya, hisobot yozuvlari ko'chadi. Ikkinchisi faolsizlanadi. "
+                + "Qaytarib bo'lmaydi.\n\n<b>Qaysi biri qolsin?</b>", inline(List.of(
+                irow(btn("✅ A qolsin: " + cut(a.getFullName(), 25), "a:ctmgy:" + a.getId() + "." + b.getId())),
+                irow(btn("✅ B qolsin: " + cut(b.getFullName(), 25), "a:ctmgy:" + b.getId() + "." + a.getId())),
+                irow(btn("❌ Yo'q", "a:ctu:" + a.getId())))));
+    }
+
+    private String mergeLine(String tag, AppUser u) {
+        return tag + ") <b>" + esc(u.getFullName()) + "</b> #" + u.getId() + " · " + roleName(u.getRole())
+                + " · " + (u.getKassaId() == null ? "otdelsiz" : esc(kassaName(u.getKassaId())))
+                + " · 📱 " + (u.getTelegramId() == null ? "yo'q" : "bor")
+                + " · 📞 " + (u.getPhone() == null || u.getPhone().isBlank() ? "—" : esc(u.getPhone()))
+                + " · 👔 " + (u.getMsEmployeeId() == null && u.getMsUid() == null ? "yo'q" : "bor");
+    }
+
+    private void mergeDo(AppUser admin, Session s, String arg, long chatId, int msgId) {
+        String[] p = arg.split("\\.");
+        if (p.length != 2) return;
+        long keep = Long.parseLong(p[0]), drop = Long.parseLong(p[1]);
+        try {
+            String r = mergeSvc.merge(keep, drop, admin.getId());
+            sender.send(chatId, "✅ Birlashtirildi: #" + drop + " → #" + keep + "\n" + esc(r));
+        } catch (Exception e) {
+            sender.send(chatId, "⚠️ Birlashtirish xatosi: " + esc(e.getMessage()));
+        }
+        userCard(s, keep, chatId, msgId);
+    }
+
+    /* ---------- 📱 kontakt xabaridan: MoySklad xodimini shu Telegram'ga ulash ---------- */
+
+    /** arg: "<tgId>.<employeeId>" — kontakt yuborgan odam admin tanlagan MoySklad xodimi sifatida kiradi. */
+    private void linkContact(AppUser admin, Session s, String arg, long chatId, int msgId) {
+        int dot = arg.indexOf('.');
+        if (dot < 0) return;
+        long tgId = Long.parseLong(arg.substring(0, dot));
+        String empId = arg.substring(dot + 1);
+        MoySkladClient.MsEmployeeFull e = link.employeeById(empId).orElse(null);
+        if (e == null) { sender.send(chatId, "⚠️ MoySklad xodimi topilmadi (ro'yxat yangilangan bo'lishi mumkin)."); return; }
+        if (userRepo.findByTelegramId(tgId).filter(AppUser::isActive).isPresent()) {
+            sender.send(chatId, "ℹ️ Bu Telegram allaqachon faol foydalanuvchiga ulangan.");
+            return;
+        }
+        AppUser u = link.ensureUser(e, admin.getId());
+        if (u.getTelegramId() != null && !u.getTelegramId().equals(tgId)) {
+            sender.send(chatId, "⚠️ <b>" + esc(u.getFullName()) + "</b> allaqachon boshqa Telegram'ga ulangan. "
+                    + "Avval kartasida 📲 Telegram → uzing, keyin qayta bosing.", inline(List.of(irow(btn("👤 Karta", "a:ctu:" + u.getId())))));
+            return;
+        }
+        u.setTelegramId(tgId);
+        u.setActive(true);
+        userRepo.save(u);
+        guestRepo.deleteById(tgId);
+        audit.log(admin.getId(), "TELEGRAM_ULANDI", "user", u.getId(), admin.getFullName() + " kontaktdan uladi: " + e.name() + " ← tg " + tgId);
+        try {
+            sender.send(tgId, "✅ Xush kelibsiz, <b>" + esc(u.getFullName()) + "</b>!\n"
+                    + "Sizni admin MoySklad xodimi sifatida uladi.\n" + menus.otdelLabel(u), menus.menuFor(u));
+        } catch (Exception ex) { log.warn("Xush kelibsiz xabari: {}", ex.getMessage()); }
+        if (msgId > 0) sender.edit(chatId, msgId, "✅ <b>" + esc(u.getFullName()) + "</b> ulandi (" + esc(e.name())
+                + (e.groupName().isBlank() ? "" : " · " + esc(e.groupName())) + ") — unga menyu yuborildi.",
+                inline(List.of(irow(btn("👤 Karta", "a:ctu:" + u.getId())))));
+        else sender.send(chatId, "✅ <b>" + esc(u.getFullName()) + "</b> ulandi.");
     }
 
     /** 🏪 Otdel tanlash. */

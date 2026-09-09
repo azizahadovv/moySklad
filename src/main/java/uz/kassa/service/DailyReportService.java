@@ -45,9 +45,9 @@ public class DailyReportService {
     public static final String TIME_KEY = "notify.dailyTime";        // "22:00"
     public static final String LAST_SENT_KEY = "notify.dailyLastSent"; // "2026-09-02"
     private static final String CLICK_GROUPS_KEY = "notify.clickGroupChatId";
-    private static final ZoneId ZONE = ZoneId.of("Asia/Tashkent");
     private static final DateTimeFormatter D_UZ = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
+    private final uz.kassa.config.AppProps props;
     private final KassaRepo kassaRepo;
     private final DayRepo dayRepo;
     private final OperationRepo opRepo;
@@ -141,7 +141,7 @@ public class DailyReportService {
 
     /** Har 5 daqiqada chaqiriladi: sozlangan vaqt kelganda bugungi hisobot bir marta ketadi. */
     public void tick() {
-        LocalDateTime now = LocalDateTime.now(ZONE);
+        LocalDateTime now = LocalDateTime.now(props.zoneId());
         String hhmm = now.format(DateTimeFormatter.ofPattern("HH:mm"));
         if (!hhmm.equals(time())) return;
         LocalDate today = now.toLocalDate();
@@ -172,7 +172,7 @@ public class DailyReportService {
             sb.append("⚠️ MoySklad o'qilmadi — MoySklad ustunida bot qiymati\n");
         if (c != null)
             sb.append("✔️ Tasdiqladi: <b>").append(TextUtil.esc(c.getUserName() == null ? "?" : c.getUserName()))
-              .append("</b>, ").append(LocalDateTime.ofInstant(c.getConfirmedAt(), ZONE)
+              .append("</b>, ").append(LocalDateTime.ofInstant(c.getConfirmedAt(), props.zoneId())
                       .format(DateTimeFormatter.ofPattern("dd.MM HH:mm")));
         else sb.append("⏳ Moliya menejeri tasdig'i kutilmoqda");
         String s = sb.toString();
@@ -300,7 +300,7 @@ public class DailyReportService {
                 var cell = hr.createCell(i); cell.setCellValue(HEAD[i].replace('\n', ' ')); cell.setCellStyle(headSt);
             }
             String confirmTxt = c == null ? "—" : ("✔ " + (c.getUserName() == null ? "" : c.getUserName()) + " "
-                    + LocalDateTime.ofInstant(c.getConfirmedAt(), ZONE).format(DateTimeFormatter.ofPattern("dd.MM HH:mm")));
+                    + LocalDateTime.ofInstant(c.getConfirmedAt(), props.zoneId()).format(DateTimeFormatter.ofPattern("dd.MM HH:mm")));
             for (Row row : rows) {
                 var rr = sh.createRow(r++);
                 rr.createCell(0).setCellValue(d.format(D_UZ));

@@ -520,13 +520,16 @@ public class KassirHandler {
         for (Operation o : opRepo.byPeriod(ledger.today(), ledger.today())) {
             if (o.getType() != OpType.RASXOD) continue;
             if (o.getFromOwnerType() != OwnerType.KASSA || !kid.equals(o.getFromOwnerId())) continue;
-            if (shown++ >= 15) break;
+            // Boshqa rasxod ekranlari bilan bir xil: rad etilgan/bekor ko'rinmaydi, kutilayotgan belgili
+            if (o.getStatus() != OpStatus.TASDIQLANGAN && o.getStatus() != OpStatus.KUTILMOQDA) continue;
+            if (shown++ >= 15) continue;
             sb.append("\n• ").append(fmt(o.getAmount())).append(" so'm")
-              .append(o.getStatus() == OpStatus.KUTILMOQDA ? " ⏳" : "")
+              .append(o.getStatus() == OpStatus.KUTILMOQDA ? " ⏳ (tasdiq kutilmoqda, jamiga kirmagan)" : "")
               .append(o.getComment() == null || o.getComment().isEmpty()
                       ? "" : " — " + esc(o.getComment()));
         }
         if (shown == 0) sb.append("\nBugun rasxod yo'q");
+        else if (shown > 15) sb.append("\n<i>… yana ").append(shown - 15).append(" ta</i>");
         sender.send(chatId, sb.toString());
     }
 
@@ -537,7 +540,7 @@ public class KassirHandler {
             else sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan");
             return;
         }
-        java.time.LocalDate t = java.time.LocalDate.now();
+        java.time.LocalDate t = java.time.LocalDate.now(props.zoneId());
         java.time.LocalDate from = switch (code) {
             case "t" -> t; case "y" -> t.minusDays(1);
             case "7" -> t.minusDays(6); case "30" -> t.minusDays(29);
@@ -559,8 +562,9 @@ public class KassirHandler {
                 // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
                 if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
                         && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
-                if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                        || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+                if ((o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
+                        || o.getType() == OpType.TOPSHIRIQ)
+                        && o.getMoneyType() != MoneyType.TERMINAL) chiqim += o.getAmount();
             }
             if (lines.size() < 25) lines.add(opLine(o, u.getKassaId()));
         }

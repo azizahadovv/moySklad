@@ -189,6 +189,7 @@ public class OtdelHandler {
                       ? "" : " — " + esc(o.getComment()));
         }
         if (shown == 0) sb.append("\nBu davrda rasxod yo'q");
+        else if (shown > 20) sb.append("\n<i>… yana ").append(shown - 20).append(" ta</i>");
         sb.append("\n\n💵 Нақд: <b>").append(fmt(rn)).append("</b> · 📲 Клик: <b>")
           .append(fmt(rk)).append("</b>\n➕ <b>Жами: ").append(fmt(rn + rk)).append("</b> so'm");
         sup.sendContent(s, chatId, sb.toString(), null);
@@ -352,16 +353,19 @@ public class OtdelHandler {
         List<AppUser> own = userRepo.findByKassaIdAndActiveTrue(kassaId);
         for (AppUser x : own)
             rows.add(irow(btn("👤 " + x.getFullName(), "a:qbu:" + x.getId())));
+        int hidden = 0;
         for (AppUser x : userRepo.findByActiveTrueOrderByRoleAscIdAsc()) {
             if (own.stream().anyMatch(o -> o.getId().equals(x.getId()))) continue;
             if (x.getId().equals(u.getId())) continue;
-            if (rows.size() >= 12) break;
+            if (rows.size() >= 12) { hidden++; continue; }
             rows.add(irow(btn(x.getFullName(), "a:qbu:" + x.getId())));
         }
         rows.add(irow(btn("❌ Bekor", "cx")));
         sup.sendContent(s, chatId, "💰 Summa: <b>" + fmt(sum) + "</b> so'm ("
                 + mtLabel(MoneyType.valueOf(s.getStr("qbMt"))) + ")\n\n"
-                + "<b>Kim topshirdi?</b>", inline(rows));
+                + "<b>Kim topshirdi?</b>"
+                + (hidden > 0 ? "\n<i>… yana " + hidden + " ta xodim sig'madi — kassaga biriktirilgan kassirlar birinchi</i>" : ""),
+                inline(rows));
     }
 
 

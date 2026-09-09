@@ -423,7 +423,11 @@ public class Router {
                 case SUPERADMIN -> admin.onCallback(user, s, data, chatId, msgId)
                         || bux.onCallback(user, s, data, chatId, msgId);
             };
-            if (!handled) log.debug("Noma'lum callback: {}", data);
+            if (!handled) {
+                log.debug("Noma'lum callback: {}", data);
+                // UX-4: jim qolmasin — «bot qotib qoldi» taassuroti o'rniga aniq sabab
+                sender.answerAlert(cb.getId(), "⚠️ Bu tugma eskirgan yoki sizga tegishli emas — menyuni qayta oching (/start)");
+            }
         } catch (BusinessException e) {
             sender.send(chatId, "⚠️ " + esc(e.getMessage()));
         }

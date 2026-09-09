@@ -147,6 +147,15 @@ public class Shipment {
     @Column(name = "issues_notified_at")
     private Instant issuesNotifiedAt;
 
+    /** 1-bosqich eskalatsiya (otdel rahbari) yuborilgan vaqt. */
+    @Column(name = "issues_escalated_at")
+    private Instant issuesEscalatedAt;
+
+    /** 2-bosqich eskalatsiya («tuzatilmadi» — admin + rahbar) yuborilgan vaqt. */
+    @Column(name = "issues_escalated2_at")
+    private Instant issuesEscalated2At;
+
+
     public java.util.List<String> issueList() {
         java.util.List<String> out = new java.util.ArrayList<>();
         for (String p : issues.split(",")) if (!p.isBlank()) out.add(p.trim());

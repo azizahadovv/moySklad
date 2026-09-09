@@ -29,9 +29,9 @@ import java.util.*;
 @Slf4j
 public class AdminApiService {
 
-    private static final ZoneId ZONE = ZoneId.of("Asia/Tashkent");
     private static final DateTimeFormatter DT = DateTimeFormatter.ofPattern("dd.MM HH:mm");
 
+    private final uz.kassa.config.AppProps props;
     private final KassaRepo kassaRepo;
     private final DayRepo dayRepo;
     private final SubmissionRepo subRepo;
@@ -112,7 +112,7 @@ public class AdminApiService {
         Balance bk = ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK);
 
         return mapOf(
-                "asOf", DT.format(Instant.now().atZone(ZONE)),
+                "asOf", DT.format(Instant.now().atZone(props.zoneId())),
                 "today", today.toString(),
                 "naqdJami", naqd, "klikJami", klik,
                 "buxNaqd", bn.getAmount(), "buxKlik", bk.getAmount(),
@@ -223,14 +223,14 @@ public class AdminApiService {
                 "kassa", s.getKassaId() == null ? "" : kassaRepo.findById(s.getKassaId()).map(Kassa::getName).orElse("?"),
                 "naqd", s.getNaqd(), "klik", s.getKlik(), "days", s.getDayIds().size(),
                 "kassir", kassir,
-                "createdAt", s.getCreatedAt() == null ? "" : DT.format(s.getCreatedAt().atZone(ZONE)));
+                "createdAt", s.getCreatedAt() == null ? "" : DT.format(s.getCreatedAt().atZone(props.zoneId())));
     }
 
     /* ---------------- 💳 Click kartalari ---------------- */
 
     public Map<String, Object> cardsPage() {
         Cached<Map<String, Long>> ms = msBalances();
-        return mapOf("asOf", DT.format(Instant.now().atZone(ZONE)), "msKnown", ms.ok(),
+        return mapOf("asOf", DT.format(Instant.now().atZone(props.zoneId())), "msKnown", ms.ok(),
                 "xulosa", cardSummary(null, ms), "kartalar", cards(null, ms));
     }
 
@@ -247,7 +247,7 @@ public class AdminApiService {
                     "masul", nz(c.getCardResponsible()).replaceAll("\\{id=\\d+;([^}]+)\\}", "$1"),
                     "msTiyin", m, "kartaTiyin", karta == null ? 0 : karta,
                     "farqTiyin", karta == null ? 0 : m - karta, "holat", holat,
-                    "at", c.getCardBalanceAt() == null ? "" : DT.format(c.getCardBalanceAt().atZone(ZONE)),
+                    "at", c.getCardBalanceAt() == null ? "" : DT.format(c.getCardBalanceAt().atZone(props.zoneId())),
                     "by", nz(c.getCardBalanceBy()).replace("(tasdiqlangan)", "").trim()));
         }
         return out;

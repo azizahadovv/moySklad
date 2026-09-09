@@ -33,9 +33,9 @@ import static uz.kassa.webapp.AdminApiService.mapOf;
 @Slf4j
 public class AdminReportService {
 
-    private static final ZoneId ZONE = ZoneId.of("Asia/Tashkent");
     private static final DateTimeFormatter DT = DateTimeFormatter.ofPattern("dd.MM HH:mm");
 
+    private final uz.kassa.config.AppProps props;
     private final DailyReportService dailyReport;
     private final ExcelReportService excel;
     private final KassaRepo kassaRepo;
@@ -63,7 +63,7 @@ public class AdminReportService {
                 "msKnown", rows.stream().allMatch(DailyReportService.Row::msKnown),
                 "rows", out, "jamiMs", ms, "jamiBot", bot, "jamiFarq", ms - bot, "jamiTopshirilgan", top,
                 "confirm", c == null ? null : mapOf("userName", c.getUserName(),
-                        "at", c.getConfirmedAt() == null ? "" : DT.format(c.getConfirmedAt().atZone(ZONE))));
+                        "at", c.getConfirmedAt() == null ? "" : DT.format(c.getConfirmedAt().atZone(props.zoneId()))));
     }
 
     /** ✔ Moliya menejeri tasdig'i (bot dr:ok bilan bir xil). */

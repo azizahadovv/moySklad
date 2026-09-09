@@ -193,7 +193,26 @@ public class BalansService {
           .append("📲 Клик: <b>").append(fmt(totalKlik)).append("</b> so'm\n")
           .append("💰 <b>Жами: ").append(fmt(totalNaqd + totalKlik)).append("</b> so'm")
           .append("\n\n<i>💵 — topshirilmagan kunlar naqdi · 📲 — kassa klik hisobi</i>");
+        sb.append(inactiveNote());
         return sb.toString();
+    }
+
+    /**
+     * UX-6: nofaol kassalarda qoldiq bo'lsa (eski o'chirishlar, Sheets «Faol» katagi) —
+     * u УМУМИЙга kirmaydi, lekin izohsiz «yo'qolib» ham qolmasin.
+     */
+    private String inactiveNote() {
+        StringBuilder sb = new StringBuilder();
+        for (Kassa k : kassaRepo.findAll()) {
+            if (k.isActive()) continue;
+            long n = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).getAmount();
+            long kl = ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).getAmount();
+            if (n == 0 && kl == 0) continue;
+            sb.append("\n• ").append(esc(k.getName())).append(" (nofaol): 💵 ").append(fmt(n))
+              .append(" · 📲 ").append(fmt(kl));
+        }
+        if (sb.length() == 0) return "";
+        return "\n\n⚠️ <i>Nofaol kassalarda qoldiq bor — УМУМИЙга kirmagan:</i>" + sb;
     }
 
     /* ==================== Kassir: faqat o'z kassasi ==================== */

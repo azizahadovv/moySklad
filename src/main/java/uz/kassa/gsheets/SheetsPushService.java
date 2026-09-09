@@ -25,6 +25,7 @@ import java.util.Set;
 public class SheetsPushService {
 
     private final GoogleSheetsClient gs;
+    private final uz.kassa.config.AppProps props;
     private final KassaRepo kassaRepo;
     private final AppUserRepo userRepo;
     private final OperationRepo opRepo;
@@ -189,7 +190,7 @@ public class SheetsPushService {
     void pushSozlamalar() throws Exception {
         gs.overwrite("Sozlamalar", List.of(
                 List.of("Ko'rsatma", "Qiymat"),
-                List.of("Oxirgi sinxron", LocalDateTime.now().withNano(0).toString()),
+                List.of("Oxirgi sinxron", LocalDateTime.now(props.zoneId()).withNano(0).toString()),
                 List.of("Tahrir qilinadigan varaqlar", "Kassalar, Foydalanuvchilar, Shablon"),
                 List.of("Shablon", "Bildirishnomalar: Nomi / Kimga (group:-100123, rol:KASSIR, user:5, kassa:2, karta_masul, click_chats, mehmonlar) / Jadval (every:2;from:9;to:21;off:0 YOKI 09:00,13:00) / Hafta kunlari (1-7, bo'sh=har kuni) / Avto-o'chirish (min) / Faol / Shablon matni; yangi satr (ID bo'sh) = yangi bildirishnoma. O'rinbosarlar ro'yxati: bot -> Настройка -> Билдиришномалар -> 📖"),
                 List.of("Kassalar", "Nomi/Otdel (ID yoki nomi)/Faol; yangi satr (ID bo'sh) = yangi kassa"),

@@ -182,7 +182,32 @@ public class MembershipTracker {
                 + "\nTelefon: <code>" + esc(m.getContact().getPhoneNumber()) + "</code>"
                 + "\nTelegramID: <code>" + tgId + "</code>\n\n"
                 + "Raqam MoySklad xodimlarida yo'q. " + unlinkedEmployeesHint()
-                + "Yoki: ⚙️ Настройка → 🔗 MoySklad → 🕵️ Назорат → 👔 Xodimlar → xodim → 🔗 Telegram, yoxud jadvalga TelegramID yozing.", null);
+                + "\n<b>Bir tugma bilan:</b> quyidan MoySklad xodimini tanlang — shu odam o'sha xodim sifatida darhol kiradi "
+                + "(otdeli MoySklad'dan). Ro'yxatda yo'q bo'lsa — 👤 mehmon sifatida qo'shing.", contactLinkKb(tgId));
+    }
+
+    /** Kontakt xabari ostidagi tugmalar: hali ulanmagan MoySklad xodimlari (a:ctlk) + mehmon sifatida qo'shish (a:ctgu). */
+    private org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup contactLinkKb(long tgId) {
+        java.util.List<java.util.List<org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>> rows = new java.util.ArrayList<>();
+        try {
+            int n = 0;
+            for (var e : employeeLink.employees()) {
+                if (e.archived() || e.name().isBlank()) continue;
+                boolean linked = userRepo.findFirstByMsEmployeeIdAndActiveTrue(e.id())
+                        .or(() -> userRepo.findFirstByMsUidAndActiveTrue(e.uid() == null ? "" : e.uid()))
+                        .map(x -> x.getTelegramId() != null).orElse(false);
+                if (linked) continue;
+                if (n++ >= 10) break;
+                String label = "🔗 " + uz.kassa.service.control.EmployeeLinkService.cleanName(e.name())
+                        + (e.groupName().isBlank() ? "" : " · " + e.groupName().replace("Отдел ", ""));
+                rows.add(uz.kassa.bot.Keyboards.irow(uz.kassa.bot.Keyboards.btn(
+                        label.length() > 60 ? label.substring(0, 60) : label, "a:ctlk:" + tgId + "." + e.id())));
+            }
+        } catch (Exception e) {
+            log.warn("Kontakt tugmalari: {}", e.getMessage());
+        }
+        rows.add(uz.kassa.bot.Keyboards.irow(uz.kassa.bot.Keyboards.btn("👤 Mehmon sifatida qo'shish (rol/otdel tanlab)", "a:ctgu:" + tgId)));
+        return uz.kassa.bot.Keyboards.inline(rows);
     }
 
 

@@ -204,6 +204,9 @@ public class BuxgalterHandler {
         }
 
         if (shown == 0) sender.send(chatId, "📥 Kutilayotgan amallar yo'q ✅");
+        else if (subs.size() > 10 || transfers.size() > 10)
+            sender.send(chatId, "ℹ️ <i>… yana " + (Math.max(0, subs.size() - 10) + Math.max(0, transfers.size() - 10))
+                    + " ta kutilayotgan amal ko'rsatilmadi — bularni hal qilgach 📥 ni qayta oching</i>");
     }
 
     /* ============================ 🔁 O'TKAZMA (BUX -> KASSA) ============================ */
@@ -444,8 +447,9 @@ public class BuxgalterHandler {
                 // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
                 if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
                         && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
-                if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                        || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+                if ((o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
+                        || o.getType() == OpType.TOPSHIRIQ)
+                        && o.getMoneyType() != MoneyType.TERMINAL) chiqim += o.getAmount();
             }
             if (lines.size() < 25) lines.add(opText(o));
         }
@@ -530,7 +534,7 @@ public class BuxgalterHandler {
             sb.append("\n");
         }
 
-        long kirim = 0, chiqim = 0;
+        long kirim = 0, chiqim = 0; int opsTotal = 0;
         List<String> lines = new ArrayList<>();
         for (Operation o : opRepo.byPeriod(p[0], p[1])) {
             if (!touches(o, OwnerType.KASSA, id)) continue;
@@ -538,15 +542,19 @@ public class BuxgalterHandler {
                 // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
                 if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
                         && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
-                if (o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                        || o.getType() == OpType.TOPSHIRIQ) chiqim += o.getAmount();
+                if ((o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
+                        || o.getType() == OpType.TOPSHIRIQ)
+                        && o.getMoneyType() != MoneyType.TERMINAL) chiqim += o.getAmount();
             }
             if (lines.size() < 15) lines.add(opText(o));
+            opsTotal++;
         }
         sb.append("\n📜 <b>").append(periodLabel(code)).append("</b>\n")
           .append("🟢 Kirim: <b>").append(fmt(kirim)).append("</b> · 🔴 Chiqim: <b>")
           .append(fmt(chiqim)).append("</b> · ➕ Farq: <b>").append(fmt(kirim - chiqim)).append("</b>\n");
         if (!lines.isEmpty()) sb.append("\n").append(String.join("\n", lines));
+        if (opsTotal > lines.size())
+            sb.append("\n<i>… yana ").append(opsTotal - lines.size()).append(" ta. To'liq ro'yxat: 📊 Excel</i>");
 
         InlineKeyboardMarkup kb = inline(List.of(
                 irow(btn("📆 Bugun", "b:kh:" + id + ":t"), btn("7 kun", "b:kh:" + id + ":7"),

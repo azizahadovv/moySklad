@@ -97,6 +97,50 @@ public class EmployeeLinkService {
         return Optional.empty();
     }
 
+    /**
+     * MoySklad xodimiga mos FAOL bot foydalanuvchisi — HECH NARSA O'ZGARTIRMAYDI (resolve'dan farqli).
+     * Qo'shish ekranida «botda yo'q» deb ko'rsatiladigan nomzodlarni to'g'ri aniqlash uchun:
+     * ism aynan tengligi emas, id/uid/telefon/ism-o'xshashlik bo'yicha.
+     */
+    public Optional<AppUser> findMatch(MoySkladClient.MsEmployeeFull e) {
+        List<AppUser> all = userRepo.findByActiveTrueOrderByRoleAscIdAsc();
+        for (AppUser u : all) {
+            if (notBlank(e.id()) && e.id().equals(u.getMsEmployeeId())) return Optional.of(u);
+            if (notBlank(e.uid()) && e.uid().equalsIgnoreCase(u.getMsUid())) return Optional.of(u);
+        }
+        String np = TextUtil.normPhone(e.phone());
+        if (!np.isEmpty())
+            for (AppUser u : all) if (TextUtil.phoneEq(u.getPhone(), np)) return Optional.of(u);
+        AppUser best = null; int bestScore = 0;
+        for (AppUser u : all) {
+            int sc = nameScore(e.name(), u.getFullName());
+            if (sc > bestScore) { bestScore = sc; best = u; }
+        }
+        return bestScore >= 2 ? Optional.ofNullable(best) : Optional.empty();
+    }
+
+    /**
+     * MoySklad xodimi uchun bot foydalanuvchisi: mavjud (bog'lanadi) yoki faolsizlantirilgan dublikat
+     * (qaytariladi, chaqiruvchi tekshiradi) yoki YANGI (KASSIR, MoySklad otdeli). Otdel/rahbarlik qo'llanadi.
+     */
+    public AppUser ensureUser(MoySkladClient.MsEmployeeFull e, Long actorId) {
+        String np = TextUtil.normPhone(e.phone());
+        AppUser u = resolve(e.id(), e.uid(), e.name(), e.phone()).orElse(null);
+        if (u == null)
+            for (AppUser any : userRepo.findAll())   // faolsizlantirilgan bo'lsa — dublikat yaratmaymiz
+                if (!any.isActive() && ((!np.isEmpty() && TextUtil.phoneEq(any.getPhone(), np))
+                        || e.id().equals(any.getMsEmployeeId()) || (e.uid() != null && e.uid().equalsIgnoreCase(any.getMsUid()))))
+                    return any;
+        if (u == null) {
+            u = userRepo.save(AppUser.builder().fullName(cleanName(e.name())).phone(e.phone())
+                    .role(uz.kassa.domain.Role.KASSIR).kassaId(groupToKassa().get(e.groupId())).active(true)
+                    .msEmployeeId(e.id()).msUid(e.uid()).build());
+            audit.log(actorId, "XODIM_AVTO_YARATILDI", "user", u.getId(), e.name() + " · " + e.groupName());
+        }
+        applyDepartment(u, e, actorId);
+        return u;
+    }
+
     /** «Масъул» maydoni (ism) → bot foydalanuvchisi (bog'lanish saqlanmaydi). */
     public Optional<AppUser> byName(String name) {
         if (!notBlank(name)) return Optional.empty();
@@ -281,20 +325,7 @@ public class EmployeeLinkService {
         }
         for (MoySkladClient.MsEmployeeFull e : emps) {
             if (e.archived() || !TextUtil.phoneEq(e.phone(), np)) continue;
-            AppUser u = resolve(e.id(), e.uid(), e.name(), e.phone()).orElse(null);
-            if (u == null)
-                for (AppUser any : userRepo.findAll())   // faolsizlantirilgan bo'lsa — dublikat yaratmaymiz
-                    if (!any.isActive() && (TextUtil.phoneEq(any.getPhone(), np)
-                            || e.id().equals(any.getMsEmployeeId()) || (e.uid() != null && e.uid().equalsIgnoreCase(any.getMsUid()))))
-                        return Optional.of(any);
-            if (u == null) {
-                u = userRepo.save(AppUser.builder().fullName(cleanName(e.name())).phone(e.phone())
-                        .role(uz.kassa.domain.Role.KASSIR).kassaId(groupToKassa().get(e.groupId())).active(true)
-                        .msEmployeeId(e.id()).msUid(e.uid()).build());
-                audit.log(actorId, "XODIM_AVTO_YARATILDI", "user", u.getId(), e.name() + " · " + e.groupName() + " (kontakt)");
-            }
-            applyDepartment(u, e, actorId);
-            return Optional.of(u);
+            return Optional.of(ensureUser(e, actorId));
         }
         return Optional.empty();
     }

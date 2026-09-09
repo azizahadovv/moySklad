@@ -71,8 +71,8 @@ public class ControlWelcomeService {
         if (open.isEmpty() && issueText == null && debtText == null) return;
 
         sender.send(tg, "👋 Xush kelibsiz, <b>" + esc(u.getFullName()) + "</b>! Sizga tegishli nazorat xabarlari quyida — "
-                + "bundan keyin ular to'g'ridan-to'g'ri sizga keladi: avval sizga, " + cfg.escalateHours()
-                + " soatda tuzatilmasa rahbarga, har kuni " + cfg.dailyTime() + " da jamlama.", null);
+                + "bundan keyin ular to'g'ridan-to'g'ri sizga keladi: avval sizga, " + cfg.esc1Min()
+                + " daqiqada tuzatilmasa rahbarga, " + cfg.esc2Min() + " daqiqada admin'ga, har kuni " + cfg.dailyTime() + " da jamlama.", null);
         int n = 0;
         for (AgentCheck ac : open) {
             if (++n > MAX_SINGLE) break;

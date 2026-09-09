@@ -23,6 +23,7 @@ import java.util.List;
 @Slf4j
 public class Jobs {
 
+    private final uz.kassa.config.AppProps props;
     private final MoySkladSyncService syncService;
     private final uz.kassa.service.moysklad.MoySkladAuditService auditSvc;
     private final uz.kassa.service.ReminderService reminderService;
@@ -234,10 +235,18 @@ public class Jobs {
 
     /**
      * Qarz eslatmalari: 09:00 dan keyin tekshiriladi, har eslatma kuniga bir marta —
-     * tanlangan kunlarda, muddat kunida va muddati o'tganda yuboriladi.
+     * tanlangan kunlarda, muddat kunida va muddati o'tganda (3 kunda bir) yuboriladi.
+     * Kontragent balans sinxroni faqat ish soatlarida (07:00–22:00) — tunda MoySklad'ni
+     * har 10 daqiqada so'rashning ma'nosi yo'q (T4).
      */
     @Scheduled(fixedDelayString = "PT10M", initialDelayString = "PT2M")
     public void reminderTick() {
+        try {
+            int h = java.time.LocalTime.now(props.zoneId()).getHour();
+            if (h >= 7 && h < 22) reminderService.syncFromMoySklad();
+        } catch (Exception e) {
+            log.warn("Eslatma balans sinxroni xatosi: {}", e.getMessage());
+        }
         try {
             reminderService.tick();
         } catch (Exception e) {
@@ -358,15 +367,15 @@ public class Jobs {
      * Ro'yxat bo'sh bo'lsa — jim o'tadi.
      */
     /** 📋 Kunlik kassa solishtirish hisoboti — sozlangan vaqtda (standart 22:00) bir marta. */
-    @Scheduled(cron = "0 */5 * * * *", zone = "Asia/Tashkent")
+    @Scheduled(cron = "0 */5 * * * *", zone = "${app.zone:Asia/Tashkent}")
     public void dailyReportTick() {
         try { dailyReport.tick(); }
         catch (Exception e) { log.warn("Kunlik hisobot xatosi: {}", e.getMessage()); }
     }
 
-    @Scheduled(cron = "0 */5 * * * *", zone = "Asia/Tashkent")
+    @Scheduled(cron = "0 */5 * * * *", zone = "${app.zone:Asia/Tashkent}")
     public void clickHourlyReport() {
-        java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"));
+        java.time.LocalDateTime now = java.time.LocalDateTime.now(props.zoneId());
         java.time.LocalDateTime nominal = now.minusMinutes(clickOffsetMin());
         if (nominal.getMinute() != 0) return;   // bu 5 daqiqalik uyg'onish bizniki emas
         int h = nominal.getHour();
@@ -391,7 +400,7 @@ public class Jobs {
             try { ms = msClient.fetchAccountBalancesTiyin(); }   // TIYINDA — tiyin farqi ham ko'rinsin
             catch (Exception e) { ms = java.util.Map.of(); }
 
-            var zone = java.time.ZoneId.of("Asia/Tashkent");
+            var zone = props.zoneId();
             var nowDt = java.time.LocalDateTime.now(zone);
             StringBuilder sb = new StringBuilder();
             sb.append("📲 <b>CLICK ҚОЛДИҚЛАРИ</b>\n")
@@ -474,7 +483,7 @@ public class Jobs {
      * stat[] — xulosa hisoblagichi: 0 тенг, 1 фарқ, 2 киритилмаган.
      */
     private String cardBlock(java.util.Map<String, Long> ms, ClickAccount c, long botBal, int[] stat) {
-        var zone = java.time.ZoneId.of("Asia/Tashkent");
+        var zone = props.zoneId();
         String now = java.time.LocalTime.now(zone)
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
         StringBuilder b = new StringBuilder();
@@ -567,7 +576,7 @@ public class Jobs {
     }
 
     /** 00:00 Asia/Tashkent — o'tgan kunlarni yopish (TZ 7.2). */
-    @Scheduled(cron = "0 0 0 * * *", zone = "Asia/Tashkent")
+    @Scheduled(cron = "0 0 0 * * *", zone = "${app.zone:Asia/Tashkent}")
     public void closeDays() {
         try {
             List<DayRecord> closed = dayService.closeOpenDaysBefore(ledger.today());
@@ -589,7 +598,7 @@ public class Jobs {
     }
 
     /** 🔔 Bildirishnomalar (shablonli, jadvalli) — har daqiqa tekshiriladi. */
-    @Scheduled(cron = "0 * * * * *", zone = "Asia/Tashkent")
+    @Scheduled(cron = "0 * * * * *", zone = "${app.zone:Asia/Tashkent}")
     public void notifyTick() {
         try { notifySvc.tick(); }
         catch (Exception e) { log.warn("Bildirishnoma tick xatosi: {}", e.getMessage()); }
@@ -603,7 +612,7 @@ public class Jobs {
     }
 
     /** Har kuni app.reminder-hour (standart 21:00) — kassirlarga eslatma (TZ 7.2). */
-    @Scheduled(cron = "0 0 ${app.reminder-hour:21} * * *", zone = "Asia/Tashkent")
+    @Scheduled(cron = "0 0 ${app.reminder-hour:21} * * *", zone = "${app.zone:Asia/Tashkent}")
     public void reminder() {
         LocalDate today = ledger.today();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {

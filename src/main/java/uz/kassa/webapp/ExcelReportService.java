@@ -31,6 +31,7 @@ import java.util.Map;
 @Slf4j
 public class ExcelReportService {
 
+    private final uz.kassa.config.AppProps props;
     private final LedgerService ledger;
     private final KassaRepo kassaRepo;
     private final OperationRepo opRepo;
@@ -60,7 +61,7 @@ public class ExcelReportService {
                         (o.getFromOwnerType() == OwnerType.KASSA && kid.equals(o.getFromOwnerId()))
                      || (o.getToOwnerType() == OwnerType.KASSA && kid.equals(o.getToOwnerId()))).toList();
             }
-            summarySheet(wb, head, money, bold, ops, only);
+            summarySheet(wb, head, money, bold, ops, only, to);
             operationsSheet(wb, head, money, ops);
             moyskladSheet(wb, head, money, from, to, only);
 
@@ -199,7 +200,7 @@ public class ExcelReportService {
                 row.createCell(4).setCellValue(a.getKassaId() == null ? "" : kassaName.apply(a.getKassaId()));
                 row.createCell(5).setCellValue(String.join("; ", a.violationList().stream().map(ruleTitle).toList()));
                 row.createCell(6).setCellValue(a.getStatus().name());
-                row.createCell(7).setCellValue(a.getNotifiedAt() == null ? "" : dtf.format(a.getNotifiedAt().atZone(java.time.ZoneId.of("Asia/Tashkent"))));
+                row.createCell(7).setCellValue(a.getNotifiedAt() == null ? "" : dtf.format(a.getNotifiedAt().atZone(props.zoneId())));
             }
             for (int i = 0; i < cols.length; i++) sh.autoSizeColumn(i);
             wb.write(bos);
@@ -212,20 +213,26 @@ public class ExcelReportService {
 
     /* ---------------- 1: UMUMIY ---------------- */
 
+    /** Agregat kaliti — (tur, id). Nom faqat chiqarishda (H4: bir xil nomli kassalar qo'shilib ketmasin). */
+    private record OwnerKey(OwnerType ot, Long oid) { }
+
     private void summarySheet(Workbook wb, CellStyle head, CellStyle money, CellStyle bold,
-                              List<Operation> ops, Kassa only) {
+                              List<Operation> ops, Kassa only, LocalDate to) {
         Sheet sh = wb.createSheet("Umumiy");
+        boolean asOfToday = !to.isBefore(ledger.today());
+        String balLabel = asOfToday ? "Joriy balans" : "Balans " + to.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM"));
         String[] cols = {"Kassa", "Kirim Naqd", "Kirim Klik", "Kirim Terminal",
-                "Chiqim Naqd", "Chiqim Klik", "Farq",
-                "Joriy balans Naqd", "Joriy balans Klik"};
+                "Chiqim Naqd", "Chiqim Klik", "Chiqim Terminal", "Farq (naqd+klik)",
+                balLabel + " Naqd", balLabel + " Klik"};
         row(sh, 0, head, (Object[]) cols);
 
-        Map<String, long[]> agg = new LinkedHashMap<>();   // nom -> [kn,kk,kt,cn,ck]
-        if (only != null) agg.put(only.getName(), new long[5]);
+        // [kn,kk,kt,cn,ck,ct] — terminal alohida (H5: balansga kirmaydi, Farq'da yo'q)
+        Map<OwnerKey, long[]> agg = new LinkedHashMap<>();
+        if (only != null) agg.put(new OwnerKey(OwnerType.KASSA, only.getId()), new long[6]);
         else {
             for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
-                if (!k.isCashless()) agg.put(k.getName(), new long[5]);
-            agg.put("Отдел Основной", new long[5]);
+                if (!k.isCashless()) agg.put(new OwnerKey(OwnerType.KASSA, k.getId()), new long[6]);
+            agg.put(new OwnerKey(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID), new long[6]);
         }
 
         for (Operation o : ops) {
@@ -233,45 +240,51 @@ public class ExcelReportService {
             if (o.getStatus() != uz.kassa.domain.OpStatus.TASDIQLANGAN) continue;
             boolean in = o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH;
             boolean out = o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT;
+            int mtIdx = switch (o.getMoneyType()) { case NAQD -> 0; case KLIK -> 1; case TERMINAL -> 2; };
             if (in && o.getToOwnerType() != null) {
-                long[] a = agg.get(ownerName(o.getToOwnerType(), o.getToOwnerId()));
-                if (a != null) a[switch (o.getMoneyType()) {
-                    case NAQD -> 0; case KLIK -> 1; case TERMINAL -> 2;
-                }] += o.getAmount();
+                // H3: uchragan har ega qo'shiladi (nofaol/cashless kassa, Click hisob ham) — 1-varaq JAMI = 2-varaq yig'indisi
+                agg.computeIfAbsent(new OwnerKey(o.getToOwnerType(), o.getToOwnerId()), x -> new long[6])[mtIdx] += o.getAmount();
             }
             if (out && o.getFromOwnerType() != null) {
-                long[] a = agg.get(ownerName(o.getFromOwnerType(), o.getFromOwnerId()));
-                if (a != null) a[o.getMoneyType() == MoneyType.KLIK ? 4 : 3] += o.getAmount();
+                agg.computeIfAbsent(new OwnerKey(o.getFromOwnerType(), o.getFromOwnerId()), x -> new long[6])[3 + mtIdx] += o.getAmount();
             }
         }
 
-        int r = 1; long[] tot = new long[5]; long totBn = 0, totBk = 0;
-        for (Map.Entry<String, long[]> e : agg.entrySet()) {
-            long[] a = e.getValue();
-            for (int i = 0; i < 5; i++) tot[i] += a[i];
-            boolean bux = e.getKey().equals("Отдел Основной");
-            OwnerType ot = bux ? OwnerType.BUXGALTERIYA : OwnerType.KASSA;
-            Long oid = bux ? LedgerService.BUX_ID :
-                    kassaRepo.findByActiveTrueOrderByIdAsc().stream()
-                            .filter(k -> k.getName().equals(e.getKey()))
-                            .findFirst().map(Kassa::getId).orElse(null);
-            long bn = oid == null ? 0 : ledger.view(ot, oid, MoneyType.NAQD).getAmount();
-            long bk = oid == null ? 0 : ledger.view(ot, oid, MoneyType.KLIK).getAmount();
+        int r = 1; long[] tot = new long[6]; long totBn = 0, totBk = 0;
+        for (Map.Entry<OwnerKey, long[]> e : agg.entrySet()) {
+            OwnerKey k = e.getKey(); long[] a = e.getValue();
+            for (int i = 0; i < 6; i++) tot[i] += a[i];
+            // H6: davr hisobotida balans davr OXIRIDAGI holat, bugungi emas
+            long bn = asOfToday ? ledger.view(k.ot(), k.oid(), MoneyType.NAQD).getAmount()
+                                : ledger.balanceAsOf(k.ot(), k.oid(), MoneyType.NAQD, to);
+            long bk = asOfToday ? ledger.view(k.ot(), k.oid(), MoneyType.KLIK).getAmount()
+                                : ledger.balanceAsOf(k.ot(), k.oid(), MoneyType.KLIK, to);
             totBn += bn; totBk += bk;
             Row row = sh.createRow(r++);
-            cell(row, 0, e.getKey(), null);
+            cell(row, 0, ownerLabel(k), null);
             num(row, 1, a[0], money); num(row, 2, a[1], money); num(row, 3, a[2], money);
-            num(row, 4, a[3], money); num(row, 5, a[4], money);
-            num(row, 6, a[0] + a[1] + a[2] - a[3] - a[4], money);
-            num(row, 7, bn, money); num(row, 8, bk, money);
+            num(row, 4, a[3], money); num(row, 5, a[4], money); num(row, 6, a[5], money);
+            num(row, 7, a[0] + a[1] - a[3] - a[4], money);
+            num(row, 8, bn, money); num(row, 9, bk, money);
         }
         Row t = sh.createRow(r);
         cell(t, 0, "JAMI", bold);
         num(t, 1, tot[0], bold); num(t, 2, tot[1], bold); num(t, 3, tot[2], bold);
-        num(t, 4, tot[3], bold); num(t, 5, tot[4], bold);
-        num(t, 6, tot[0] + tot[1] + tot[2] - tot[3] - tot[4], bold);
-        num(t, 7, totBn, bold); num(t, 8, totBk, bold);
+        num(t, 4, tot[3], bold); num(t, 5, tot[4], bold); num(t, 6, tot[5], bold);
+        num(t, 7, tot[0] + tot[1] - tot[3] - tot[4], bold);
+        num(t, 8, totBn, bold); num(t, 9, totBk, bold);
         autos(sh, cols.length);
+    }
+
+    /** Qator nomi: nofaol / cashless kassalar belgi bilan (UX-6). */
+    private String ownerLabel(OwnerKey k) {
+        String name = ownerName(k.ot(), k.oid());
+        if (k.ot() != OwnerType.KASSA) return name;
+        Kassa kassa = kassaRepo.findById(k.oid()).orElse(null);
+        if (kassa == null) return name;
+        if (!kassa.isActive()) return name + " (nofaol)";
+        if (kassa.isCashless()) return name + " (cashless)";
+        return name;
     }
 
     /* ---------------- 2: TRANZAKSIYALAR ---------------- */

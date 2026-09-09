@@ -28,7 +28,11 @@ public class ControlConfig {
     public static final String GRACE_MIN = "control.grace_min";
     public static final String CHECK_MIN = "control.check_min";
     public static final String DAILY_TIME = "control.daily_time";
-    public static final String ESCALATE_H = "control.escalate_hours";
+    public static final String ESCALATE_H = "control.escalate_hours";   // eski (ishlatilmaydi)
+    /** 1-bosqich: xodimga xabardan necha daqiqadan keyin otdel rahbariga (standart 35). */
+    public static final String ESC1_MIN = "control.escalate1_min";
+    /** 2-bosqich: necha daqiqadan keyin «tuzatilmadi» — admin + rahbar (standart 60). */
+    public static final String ESC2_MIN = "control.escalate2_min";
     public static final String RECIPIENTS = "control.recipients";
     public static final String RULES_OFF = "control.rules_off";
     public static final String LAST_AGENT_SYNC = "control.last_agent_sync";
@@ -71,7 +75,8 @@ public class ControlConfig {
 
     public int graceMin() { return intOf(GRACE_MIN, 120, 5, 24 * 60 * 30); }
     public int checkMin() { return intOf(CHECK_MIN, 20, 2, 24 * 60); }
-    public int escalateHours() { return intOf(ESCALATE_H, 24, 1, 24 * 30); }
+    public int esc1Min() { return intOf(ESC1_MIN, 35, 1, 24 * 60 * 30); }
+    public int esc2Min() { return Math.max(esc1Min() + 1, intOf(ESC2_MIN, 60, 1, 24 * 60 * 30)); }
 
     /** Muddatdan necha kun oldin eslatiladi (muddat kuni har doim). Bo'sh — faqat muddat kuni. */
     public Set<Integer> remindBefore() {
