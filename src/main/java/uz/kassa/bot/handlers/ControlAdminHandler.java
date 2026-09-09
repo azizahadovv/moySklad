@@ -43,6 +43,8 @@ public class ControlAdminHandler {
     private final KassaRepo kassaRepo;
     private final KassaHeadRepo headRepo;
     private final AuditService audit;
+    private final uz.kassa.repo.GuestRepo guestRepo;
+    private final uz.kassa.bot.MenuSupport menus;
 
     private static final String BACK = "a:ct";
 
@@ -53,6 +55,25 @@ public class ControlAdminHandler {
             case "ct" -> menu(s, chatId, msgId);
             case "ctg" -> { cfg.setEnabled(!cfg.enabled()); audit.log(u.getId(), "NAZORAT_" + (cfg.enabled() ? "YOQILDI" : "OCHIRILDI"), "settings", null, ""); menu(s, chatId, msgId); }
             case "ctv" -> askValue(s, arg, chatId, msgId);
+            case "ctrm" -> remindSettings(chatId, msgId);
+            case "ctrmb" -> {
+                java.util.TreeSet<Integer> days = new java.util.TreeSet<>(cfg.remindBefore());
+                int d = Integer.parseInt(arg);
+                if (!days.remove(d)) days.add(d);
+                cfg.set(ControlConfig.REMIND_BEFORE, days.isEmpty() ? " " : String.join(",", days.stream().map(String::valueOf).toList()));
+                audit.log(u.getId(), "NAZORAT_SOZLAMA", "settings", null, "rb=" + days);
+                remindSettings(chatId, msgId);
+            }
+            case "ctrmr" -> {
+                cfg.set(ControlConfig.REMIND_REPEAT, String.valueOf(Integer.parseInt(arg)));
+                audit.log(u.getId(), "NAZORAT_SOZLAMA", "settings", null, "rr=" + arg);
+                remindSettings(chatId, msgId);
+            }
+            case "ctrmt" -> {
+                cfg.set(ControlConfig.REMIND_TIME, LocalTime.parse(arg).toString());
+                audit.log(u.getId(), "NAZORAT_SOZLAMA", "settings", null, "rt=" + arg);
+                remindSettings(chatId, msgId);
+            }
             case "ctr" -> recipients(chatId, msgId);
             case "ctrt" -> { cfg.toggleRecipient(Long.parseLong(arg)); recipients(chatId, msgId); }
             case "ctk" -> rules(chatId, msgId);
@@ -96,6 +117,11 @@ public class ControlAdminHandler {
             case "ctues" -> userEmpSet(u, s, arg, chatId, msgId);
             case "ctuex" -> userEmpUnlink(u, s, Long.parseLong(arg), chatId, msgId);
             case "ctuh" -> userHeadPick(s, Long.parseLong(arg), chatId, msgId);
+            case "ctut" -> userTgPick(s, Long.parseLong(arg), chatId, msgId);
+            case "ctutn" -> userTgPick(s, Long.parseLong(arg), chatId, 0);   // xabardagi tugma — xabar o'zgarmaydi
+            case "cten" -> employees(s, chatId, 0);
+            case "ctuts" -> userTgSet(u, s, arg, chatId, msgId);
+            case "ctutx" -> userTgUnlink(u, s, Long.parseLong(arg), chatId, msgId);
             case "ctuht" -> userHeadToggle(u, s, arg, chatId, msgId);
             case "cth" -> heads(chatId, msgId);
             case "cthk" -> headKassa(Long.parseLong(arg), chatId, msgId);
@@ -116,6 +142,10 @@ public class ControlAdminHandler {
           .append(cfg.checkMin()).append(" min</b>\n");
         sb.append("🕘 Kunlik jamlama: <b>").append(cfg.dailyTime()).append("</b> · ⏰ Eskalatsiya: <b>")
           .append(cfg.escalateHours()).append(" soat</b>\n");
+        sb.append("🔔 Qarzdor eslatmasi: muddatdan <b>").append(cfg.remindBefore().isEmpty() ? "—" : cfg.remindBefore().toString())
+          .append("</b> kun oldin · muddat kuni · o'tgach <b>")
+          .append(cfg.remindRepeatDays() == 0 ? "takrorsiz" : "har " + cfg.remindRepeatDays() + " kunda").append("</b> · soat <b>")
+          .append(cfg.remindTime()).append("</b>\n");
         sb.append("👥 Qo'shimcha oluvchilar: <b>").append(cfg.recipientIds().size()).append("</b> ta · 📏 Qoidalar: <b>")
           .append(ControlConfig.ALL_RULES.size() - cfg.rulesOff().size()).append("/8</b>\n\n");
         sb.append("🧾 Qarzda: <b>").append(ships.debtCount()).append("</b> ta otgruzka · <b>").append(fmt(ships.debtSum()))
@@ -129,12 +159,61 @@ public class ControlAdminHandler {
         rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:ctg"), btn("📅 Boshlanish sanasi", "a:ctv:since")));
         rows.add(irow(btn("⏱ Kutish (min)", "a:ctv:grace"), btn("🔁 Tekshiruv (min)", "a:ctv:check")));
         rows.add(irow(btn("🕘 Kunlik vaqt", "a:ctv:daily"), btn("⏰ Eskalatsiya (soat)", "a:ctv:esc")));
+        rows.add(irow(btn("🔔 Qarzdor eslatmalari", "a:ctrm")));
         rows.add(irow(btn("👥 Oluvchilar", "a:ctr"), btn("📏 Qoidalar", "a:ctk")));
         rows.add(irow(btn("🏦 Jim statuslar (faqat ro'yxatda)", "a:ctq")));
         rows.add(irow(btn("👔 Xodimlar (MoySklad)", "a:cte"), btn("🏪 Otdel rahbarlari", "a:cth")));
         rows.add(irow(btn("🔄 Hammasini yangilash (MoySklad)", "a:ctn")));
         rows.add(irow(btn("🧪 Test (o'zimga)", "a:ctt")));
         rows.add(irow(btn("⬅️ Orqaga", "a:p:set")));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+
+    /* ---------- 🔔 qarzdor eslatmalari — tugmalar bilan ---------- */
+
+    private static final int[] BEFORE_CHOICES = {1, 2, 3, 5, 7, 14};
+    private static final int[] REPEAT_CHOICES = {0, 1, 2, 3, 7, 14};
+    private static final String[] TIME_CHOICES = {"08:00", "09:00", "10:00", "12:00", "15:00", "18:00"};
+
+    private void remindSettings(long chatId, int msgId) {
+        Set<Integer> before = cfg.remindBefore();
+        int repeat = cfg.remindRepeatDays();
+        String time = cfg.remindTime().toString();
+        StringBuilder sb = new StringBuilder("🔔 <b>Qarzdor eslatmalari</b>\n\n");
+        sb.append("Xodimga (otgruzka egasi + Масъул) har eslatma kunida <b>bitta guruhlangan xabar</b> boradi. "
+                + "Muddat — otgruzkadagi «Тўлов муддати» sanasi (kiritilmagan bo'lsa hujjat sanasi); soati yo'q, "
+                + "shuning uchun eslatma kun hisobida, yuborish soati pastda tanlanadi.\n\n");
+        sb.append("📅 Muddatdan oldin: <b>").append(before.isEmpty() ? "faqat muddat kuni" : before + " kun").append("</b>\n");
+        sb.append("🔁 Muddat o'tgach: <b>").append(repeat == 0 ? "takrorlanmaydi" : repeat == 1 ? "har kuni" : "har " + repeat + " kunda").append("</b>\n");
+        sb.append("🕙 Yuborish soati: <b>").append(time).append("</b> · kunlik jamlama alohida: ").append(cfg.dailyTime()).append("\n\n");
+        sb.append("Tanlang (bosib yoqish/o'chirish):");
+
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("📅 Muddatdan necha kun OLDIN", "a:ctrm")));
+        List<InlineKeyboardButton> r = new ArrayList<>();
+        for (int d : BEFORE_CHOICES) {
+            r.add(btn((before.contains(d) ? "✅ " : "▫️ ") + d + " kun", "a:ctrmb:" + d));
+            if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+        }
+        if (!r.isEmpty()) rows.add(r);
+        rows.add(irow(btn("🔁 Muddat o'tgach takror", "a:ctrm")));
+        r = new ArrayList<>();
+        for (int n : REPEAT_CHOICES) {
+            String label = n == 0 ? "yo'q" : n == 1 ? "har kuni" : "har " + n + " kun";
+            r.add(btn((repeat == n ? "✅ " : "▫️ ") + label, "a:ctrmr:" + n));
+            if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+        }
+        if (!r.isEmpty()) rows.add(r);
+        rows.add(irow(btn("🕙 Yuborish soati", "a:ctrm")));
+        r = new ArrayList<>();
+        for (String t : TIME_CHOICES) {
+            r.add(btn((time.equals(t) ? "✅ " : "▫️ ") + t, "a:ctrmt:" + t));
+            if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+        }
+        if (!r.isEmpty()) rows.add(r);
+        rows.add(irow(btn("✍️ Boshqa soat (yozib)", "a:ctv:rt")));
+        rows.add(irow(btn("⬅️ Назорат", BACK)));
         show(chatId, msgId, sb.toString(), inline(rows));
     }
 
@@ -149,6 +228,12 @@ public class ControlAdminHandler {
             case "check" -> "🔁 Qarzdorlar balansi necha daqiqada bir tekshirilsin? (2–1440)\nHozir: " + cfg.checkMin();
             case "daily" -> "🕘 Kunlik jamlama vaqti (HH:mm)\nHozir: " + cfg.dailyTime();
             case "esc" -> "⏰ Kontragent xatosi necha soatdan keyin rahbar/SuperAdmin'ga chiqsin? (1–720)\nHozir: " + cfg.escalateHours();
+            case "rb" -> "🔔 Qarzdor eslatmasi muddatdan necha kun OLDIN yuborilsin? Vergul bilan, masalan <code>3,1</code> "
+                    + "(muddat kuni har doim eslatiladi; <code>0</code> — faqat muddat kuni)\nHozir: "
+                    + (cfg.remindBefore().isEmpty() ? "faqat muddat kuni" : cfg.remindBefore());
+            case "rr" -> "🔁 Muddat o'tgach har necha kunda takror eslatilsin? (0 — takrorlanmaydi, 1–90)\n"
+                    + "Xodimga kuniga bitta guruhlangan xabar boradi (ega + Масъул).\nHozir: " + cfg.remindRepeatDays();
+            case "rt" -> "🕙 Qarzdor eslatmalari soati (HH:mm), masalan <code>10:30</code>\nHozir: " + cfg.remindTime();
             default -> null;
         };
         if (prompt == null) { menu(s, chatId, msgId); return; }
@@ -174,6 +259,13 @@ public class ControlAdminHandler {
                 case "check" -> cfg.set(ControlConfig.CHECK_MIN, String.valueOf(range(t, 2, 1440)));
                 case "daily" -> cfg.set(ControlConfig.DAILY_TIME, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
                 case "esc" -> cfg.set(ControlConfig.ESCALATE_H, String.valueOf(range(t, 1, 720)));
+                case "rb" -> {
+                    java.util.TreeSet<Integer> days = new java.util.TreeSet<>();
+                    for (String x : t.split("[,;\\s]+")) if (!x.isBlank()) { int v = Integer.parseInt(x.trim()); if (v > 0 && v <= 90) days.add(v); }
+                    cfg.set(ControlConfig.REMIND_BEFORE, days.isEmpty() ? " " : String.join(",", days.stream().map(String::valueOf).toList()));
+                }
+                case "rr" -> cfg.set(ControlConfig.REMIND_REPEAT, String.valueOf(range(t, 0, 90)));
+                case "rt" -> cfg.set(ControlConfig.REMIND_TIME, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
                 default -> { sender.send(chatId, "⚠️ Noma'lum sozlama"); return; }
             }
             audit.log(u.getId(), "NAZORAT_SOZLAMA", "settings", null, key + "=" + t);
@@ -328,9 +420,13 @@ public class ControlAdminHandler {
                 : esc(e.name()) + (e.groupName().isBlank() ? "" : " · " + esc(e.groupName()))
                     + (e.position() == null || e.position().isBlank() ? "" : " · " + esc(e.position()))).append("\n");
         sb.append("🎖 Rahbar: ").append(headOf.isEmpty() ? "—" : esc(String.join(", ", headOf))).append("\n");
+        sb.append("📲 Telegram: ").append(x.getTelegramId() == null
+                ? "✖ <b>ulanmagan</b> — nazorat xabarlari unga bormaydi (SuperAdmin'ga tushadi)"
+                : "✅ ulangan").append("\n");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("🏪 Otdel", "a:ctuk:" + userId), btn("👔 MoySklad xodimi", "a:ctue:" + userId)));
-        rows.add(irow(btn("🎖 Rahbarlik (otdellar)", "a:ctuh:" + userId)));
+        rows.add(irow(btn("🎖 Rahbarlik (otdellar)", "a:ctuh:" + userId),
+                btn(x.getTelegramId() == null ? "🔗 Telegram ulash" : "📲 Telegram", "a:ctut:" + userId)));
         rows.add(irow(btn("⬅️ Xodimlar", "a:cte")));
         show(chatId, msgId, sb.toString(), inline(rows));
     }
@@ -404,6 +500,81 @@ public class ControlAdminHandler {
         });
         userCard(s, userId, chatId, msgId);
     }
+
+    /* ---------- 🔗 Telegram: botga kirib kontakt yuborgan (lekin telefon mos kelmagan) mehmonni shu xodimga ulash ---------- */
+
+    private void userTgPick(Session s, long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) { employees(s, chatId, msgId); return; }
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        StringBuilder sb = new StringBuilder("🔗 <b>" + esc(x.getFullName()) + "</b> — Telegram\n");
+        if (x.getTelegramId() != null) {
+            sb.append("Hozir ulangan: <code>").append(x.getTelegramId()).append("</code>\n\n");
+            rows.add(irow(btn("✖ Telegram'ni uzish", "a:ctutx:" + userId)));
+        }
+        List<uz.kassa.domain.Guest> guests = guestRepo.findAllByOrderByLastSeenDesc();
+        guests.removeIf(g -> userRepo.findByTelegramId(g.getTelegramId()).filter(AppUser::isActive).isPresent());
+        if (guests.isEmpty()) {
+            sb.append("\nBotga kirgan, lekin hali ro'yxatda yo'q odamlar yo'q.\n"
+                    + "Xodim botga kirib 📱 kontakt yuborsin — telefoni MoySklad'dagi bilan bir xil bo'lsa o'zi ulanadi, "
+                    + "bo'lmasa shu ro'yxatda paydo bo'ladi va bu yerdan bir bosishda ulaysiz.");
+        } else {
+            sb.append("\nBotga kirganlar — qaysi biri shu xodim? (oxirgi kirgan birinchi)");
+            int n = 0;
+            for (uz.kassa.domain.Guest g : guests) {
+                if (++n > 25) break;
+                String label = (g.getName() == null || g.getName().isBlank() ? "#" + g.getTelegramId() : g.getName())
+                        + (g.getUsername() == null ? "" : " @" + g.getUsername())
+                        + (g.getPhone() == null || g.getPhone().isBlank() ? "" : " · " + g.getPhone());
+                rows.add(irow(btn(cut(label, 55), "a:ctuts:" + userId + "." + g.getTelegramId())));
+            }
+        }
+        rows.add(irow(btn("⬅️ Orqaga", "a:ctu:" + userId)));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    private void userTgSet(AppUser admin, Session s, String arg, long chatId, int msgId) {
+        String[] p = arg.split("\\.");
+        long userId = Long.parseLong(p[0]);
+        long tgId = Long.parseLong(p[1]);
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) { employees(s, chatId, msgId); return; }
+        var busy = userRepo.findByTelegramId(tgId).filter(o -> !o.getId().equals(userId));
+        if (busy.isPresent()) {
+            sender.send(chatId, "⚠️ Bu Telegram allaqachon <b>" + esc(busy.get().getFullName()) + "</b>"
+                    + (busy.get().isActive() ? "" : " (nofaol)") + "ga ulangan — avval o'shanikini uzing.");
+            userTgPick(s, userId, chatId, msgId);
+            return;
+        }
+        x.setTelegramId(tgId);
+        x.setControlWelcomeAt(null);   // ochiq xatolari/qarzdorlari 2 daqiqada unga boradi (ControlWelcomeService)
+        userRepo.save(x);
+        guestRepo.findById(tgId).ifPresent(g -> {
+            if ((x.getPhone() == null || x.getPhone().isBlank()) && g.getPhone() != null && !g.getPhone().isBlank()) {
+                x.setPhone(g.getPhone()); userRepo.save(x);
+            }
+            guestRepo.delete(g);
+        });
+        audit.log(admin.getId(), "TELEGRAM_ULANDI", "user", x.getId(), x.getFullName() + " tg=" + tgId);
+        try {
+            sender.send(tgId, "✅ Xush kelibsiz, <b>" + esc(x.getFullName()) + "</b>! SuperAdmin sizni tizimga uladi.\n"
+                    + menus.otdelLabel(x), menus.menuFor(x));
+        } catch (Exception e) {
+            sender.send(chatId, "ℹ️ Ulandi, lekin xodimga xabar ketmadi (u botga /start bosmagan bo'lishi mumkin).");
+        }
+        userCard(s, userId, chatId, msgId);
+    }
+
+    private void userTgUnlink(AppUser admin, Session s, long userId, long chatId, int msgId) {
+        userRepo.findById(userId).ifPresent(x -> {
+            if (x.getRole() == Role.SUPERADMIN) { sender.send(chatId, "⚠️ SuperAdmin'ning Telegram'ini bu yerdan uzib bo'lmaydi."); return; }
+            x.setTelegramId(null);
+            userRepo.save(x);
+            audit.log(admin.getId(), "TELEGRAM_UZILDI", "user", x.getId(), x.getFullName());
+        });
+        userCard(s, userId, chatId, msgId);
+    }
+
 
     /** 🎖 Rahbarlik: qaysi otdellarda rahbar (bir nechta bo'lishi mumkin). */
     private void userHeadPick(Session s, long userId, long chatId, int msgId) {

@@ -24,6 +24,8 @@ public class EmployeeLinkService {
     private final uz.kassa.repo.KassaRepo kassaRepo;
     private final uz.kassa.repo.KassaHeadRepo headRepo;
     private final uz.kassa.service.AuditService audit;
+    private final uz.kassa.repo.ShipmentRepo shipmentRepo;
+    private final uz.kassa.repo.AgentCheckRepo agentCheckRepo;
 
     private volatile List<MoySkladClient.MsEmployeeFull> empCache = List.of();
     private volatile long empCacheAt = 0;
@@ -107,18 +109,53 @@ public class EmployeeLinkService {
         return bestScore >= 2 ? Optional.ofNullable(best) : Optional.empty();
     }
 
-    /** Qo'lda/avtomatik bog'lash — bo'sh bo'lmagan qiymatlar yoziladi. */
+    /**
+     * Qo'lda/avtomatik bog'lash — bo'sh bo'lmagan qiymatlar yoziladi. Bog'lanish o'zgarsa shu xodimning
+     * ESKI otgruzkalari va kontragent tekshiruvlari ham shu foydalanuvchiga ko'chadi (xabarlar unga borsin)
+     * va nazorat «xush kelibsiz» xabari qayta yoqiladi (Telegram ulangan bo'lsa ochiq xatolari yuboriladi).
+     */
     public void link(AppUser u, String employeeId, String uid) {
         boolean ch = false;
         if (notBlank(employeeId) && !employeeId.equals(u.getMsEmployeeId())) { u.setMsEmployeeId(employeeId); ch = true; }
         if (notBlank(uid) && !uid.equals(u.getMsUid())) { u.setMsUid(uid); ch = true; }
-        if (ch) userRepo.save(u);
+        if (!ch) return;
+        u.setControlWelcomeAt(null);
+        userRepo.save(u);
+        try {
+            int n = 0;
+            if (notBlank(employeeId)) n += shipmentRepo.remapOwnerByMsId(employeeId, u.getId());
+            if (notBlank(uid)) { n += shipmentRepo.remapOwnerByUid(uid, u.getId()); n += agentCheckRepo.remapCreatorByUid(uid, u.getId()); }
+            if (n > 0) log.info("Xodim bog'landi: {} <- {} / {} - {} ta yozuv ko'chdi", u.getFullName(), employeeId, uid, n);
+        } catch (Exception e) {
+            log.warn("Bog'lanishda yozuvlarni ko'chirish xatosi ({}): {}", u.getFullName(), e.getMessage());
+        }
     }
 
+    /**
+     * Soatlik tekislash: har bog'langan foydalanuvchining otgruzka/kontragent yozuvlari uning o'ziga ko'chiriladi
+     * (bog'lanish eski kodda o'zgargan yoki qo'lda SQL bilan tuzatilgan bo'lsa ham — «kim otgruzka qilsa o'shaniki»).
+     */
+    public int reconcileLinks() {
+        int n = 0;
+        for (AppUser u : userRepo.findByActiveTrueOrderByRoleAscIdAsc()) {
+            try {
+                if (notBlank(u.getMsEmployeeId())) n += shipmentRepo.remapOwnerByMsId(u.getMsEmployeeId(), u.getId());
+                if (notBlank(u.getMsUid())) { n += shipmentRepo.remapOwnerByUid(u.getMsUid(), u.getId()); n += agentCheckRepo.remapCreatorByUid(u.getMsUid(), u.getId()); }
+            } catch (Exception e) {
+                log.warn("Tekislash xatosi ({}): {}", u.getFullName(), e.getMessage());
+            }
+        }
+        if (n > 0) log.info("Xodim ↔ yozuvlar tekislandi: {} ta yozuv egasi tuzatildi", n);
+        return n;
+    }
+
+    /** Uzish: shu foydalanuvchiga biriktirilgan otgruzka/kontragent yozuvlari bo'shatiladi (keyin qayta aniqlanadi). */
     public void unlink(AppUser u) {
         u.setMsEmployeeId(null);
         u.setMsUid(null);
         userRepo.save(u);
+        try { shipmentRepo.clearOwner(u.getId()); agentCheckRepo.clearCreator(u.getId()); }
+        catch (Exception e) { log.warn("Uzishda yozuvlarni bo'shatish xatosi ({}): {}", u.getFullName(), e.getMessage()); }
     }
 
     /* ---------------- 🔄 MoySklad bilan sinxron: otdel, yangi xodim, rahbar ---------------- */
@@ -236,7 +273,13 @@ public class EmployeeLinkService {
     public Optional<AppUser> registerByPhone(String phone, Long actorId) {
         String np = TextUtil.normPhone(phone);
         if (np.isEmpty()) return Optional.empty();
-        for (MoySkladClient.MsEmployeeFull e : employees()) {
+        List<MoySkladClient.MsEmployeeFull> emps = employees();
+        // keshda yo'q bo'lsa — MoySklad'ga hozirgina telefon yozilgan bo'lishi mumkin: bir marta yangilab qaraymiz
+        if (emps.stream().noneMatch(e -> !e.archived() && TextUtil.phoneEq(e.phone(), np))) {
+            empCacheAt = 0;
+            emps = employees();
+        }
+        for (MoySkladClient.MsEmployeeFull e : emps) {
             if (e.archived() || !TextUtil.phoneEq(e.phone(), np)) continue;
             AppUser u = resolve(e.id(), e.uid(), e.name(), e.phone()).orElse(null);
             if (u == null)

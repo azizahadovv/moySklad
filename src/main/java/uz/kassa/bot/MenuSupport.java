@@ -34,7 +34,7 @@ public class MenuSupport {
 
 
     /** Salomlashishda rol o'rniga foydalanuvchining O'Z otdeli ko'rsatiladi. */
-    String otdelLabel(AppUser u) {
+    public String otdelLabel(AppUser u) {
         if (u.getKassaId() != null)
             return "🏪 Отдел " + esc(names.owner(OwnerType.KASSA, u.getKassaId()));
         return "🏪 Отдел основной";

@@ -47,6 +47,11 @@ public class ControlConfig {
     public static final String ISSUES_BACKFILLED = "control.issues_backfilled";
     /** Jim statuslar: qarz ro'yxatiga tushadi, lekin XABAR YO'Q (bank orqali to'lanadigan byudjet tashkilotlari). */
     public static final String QUIET_STATES = "control.quiet_states";
+    /** Qarzdor eslatmalari: muddatdan necha kun OLDIN (CSV, "3,1"), muddatdan KEYIN har necha kunda takror (0 — yo'q), vaqti. */
+    public static final String REMIND_BEFORE = "control.remind_before";
+    public static final String REMIND_REPEAT = "control.remind_repeat_days";
+    public static final String REMIND_TIME = "control.remind_time";
+    public static final String REMIND_SENT = "control.remind_sent";
     public static final String QUIET_DEFAULT = "Перечисление,Карз перечисление";
 
     private final SettingsService settings;
@@ -67,6 +72,22 @@ public class ControlConfig {
     public int graceMin() { return intOf(GRACE_MIN, 120, 5, 24 * 60 * 30); }
     public int checkMin() { return intOf(CHECK_MIN, 20, 2, 24 * 60); }
     public int escalateHours() { return intOf(ESCALATE_H, 24, 1, 24 * 30); }
+
+    /** Muddatdan necha kun oldin eslatiladi (muddat kuni har doim). Bo'sh — faqat muddat kuni. */
+    public Set<Integer> remindBefore() {
+        Set<Integer> out = new java.util.TreeSet<>();
+        for (String p : settings.get(REMIND_BEFORE).orElse("3,1").split("[,;\\s]+"))
+            if (!p.isBlank()) try { int v = Integer.parseInt(p.trim()); if (v > 0 && v <= 90) out.add(v); } catch (NumberFormatException ignored) { }
+        return out;
+    }
+
+    /** Muddat o'tgach har necha kunda takror eslatiladi; 0 — takrorlanmaydi. */
+    public int remindRepeatDays() { return intOf(REMIND_REPEAT, 3, 0, 90); }
+
+    public LocalTime remindTime() {
+        try { return LocalTime.parse(settings.get(REMIND_TIME).orElse("10:00").trim()); }
+        catch (Exception e) { return LocalTime.of(10, 0); }
+    }
 
     public LocalTime dailyTime() {
         try { return LocalTime.parse(settings.get(DAILY_TIME).orElse("09:00").trim()); }

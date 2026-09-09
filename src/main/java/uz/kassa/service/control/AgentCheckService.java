@@ -83,7 +83,43 @@ public class AgentCheckService {
             }
         }
         cfg.set(ControlConfig.LAST_AGENT_SYNC, now);
+        verifyOpen(now);
         escalate(now);
+    }
+
+
+    private volatile long lastVerify = 0;
+
+    /**
+     * O'chirilgan kontragent «o'zgargan» ro'yxatiga tushmaydi — shuning uchun OCHIQ xatolar 10 daqiqada bir
+     * MoySklad'dan alohida o'qiladi: 404 → OCHIRILDI (xato yopiladi, dublikat indeksidan chiqadi);
+     * bor bo'lsa qayta baholanadi (tuzatilgan bo'lsa ✅). Ko'pi bilan 30 ta / marta (429 limiti).
+     */
+    private void verifyOpen(LocalDateTime now) {
+        if (System.currentTimeMillis() - lastVerify < 600_000L) return;
+        lastVerify = System.currentTimeMillis();
+        int n = 0;
+        for (AgentCheck ac : repo.findByStatusOrderByIdDesc(AgentCheck.Status.OCHIQ)) {
+            if (++n > 30) break;
+            try {
+                MsAgentFull a = msClient.fetchAgent(ac.getAgentMsId());
+                if (a == null) markDeleted(ac);
+                else { index(a); process(a, now); }
+            } catch (Exception e) {
+                log.warn("Kontragent {} tekshirilmadi: {}", ac.getAgentName(), e.getMessage());
+                break;   // limit/tarmoq — keyingi safar
+            }
+        }
+    }
+
+    /** Kontragent MoySklad'da o'chirilgan: xato yopiladi, indeksdan chiqadi (dublikat K5 uchun). */
+    public void markDeleted(AgentCheck ac) {
+        ac.setStatus(AgentCheck.Status.OCHIRILDI);
+        ac.setFixedAt(Instant.now());
+        repo.save(ac);
+        try { indexRepo.deleteById(ac.getAgentMsId()); } catch (Exception ignored) { }
+        audit.log(ac.getCreatorUserId(), "KG_OCHIRILDI", "agent_check", ac.getId(), ac.getAgentName());
+        log.info("Kontragent o'chirilgan, xato yopildi: {}", ac.getAgentName());
     }
 
 
@@ -138,8 +174,8 @@ public class AgentCheckService {
                 if (v.isEmpty()) fixed(ac, now);
                 else { ac.setViolations(codes(v)); repo.save(ac); }
             }
-            case OK, TUZATILDI -> {
-                if (v.isEmpty()) repo.save(ac);
+            case OK, TUZATILDI, OCHIRILDI -> {   // OCHIRILDI: savatdan qaytarilgan bo'lsa qayta baholanadi
+                if (v.isEmpty()) { if (ac.getStatus() == AgentCheck.Status.OCHIRILDI) ac.setStatus(AgentCheck.Status.OK); repo.save(ac); }
                 else open(ac, a, v, now, false);   // tahrirda buzilgan
             }
         }
@@ -175,8 +211,8 @@ public class AgentCheckService {
             notifier.sendOne(creator, text, agentKb(a.id()));
         } else {
             notifier.send(notifier.superadmins(), "⚠️ <i>Xodim botga bog'lanmagan: " + esc(who(ac))
-                    + " — xabar sizga keldi (⚙️ Настройка → 🕵️ Назорат → 👔 Xodimlar)</i>\n\n" + text,
-                    agentKb(a.id()));
+                    + " — xabar sizga keldi. Pastdagi tugma bilan ulang, keyingi xabarlar unga boradi.</i>\n\n" + text,
+                    ControlNotifier.withLink(agentKb(a.id()), creator));
         }
     }
 
@@ -227,20 +263,59 @@ public class AgentCheckService {
         for (var e : byUser.entrySet()) {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (u == null || u.getTelegramId() == null) continue;
-            StringBuilder sb = new StringBuilder("⚠️ <b>Tuzatilmagan kontragentlar</b> — " + e.getValue().size() + " ta\n");
-            int n = 0;
-            for (AgentCheck ac : e.getValue()) {
-                if (++n > 20) { sb.append("… yana ").append(e.getValue().size() - 20).append(" ta\n"); break; }
-                sb.append(n).append(". <b>").append(esc(ac.getAgentName())).append("</b> · ")
-                  .append(ac.getMsCreatedAt() == null ? "" : ac.getMsCreatedAt().format(DTF)).append(" · ")
-                  .append(String.join(", ", ac.violationList().stream().map(AgentCheckService::shortTitle).toList()))
-                  .append("\n");
-                ac.setLastDaily(today);
-                repo.save(ac);
-            }
-            sb.append("\nMoySklad'da tuzating — bot o'zi tekshiradi. Ro'yxat: 🤝 КОНТРАГЕНТ → ⚠️ Хатолар");
-            notifier.sendOne(u, sb.toString(), null);
+            for (AgentCheck ac : e.getValue()) { ac.setLastDaily(today); repo.save(ac); }
+            notifier.sendOne(u, openListText(e.getValue()), null);
         }
+    }
+
+
+    /** Xodim yaratgan, hali tuzatilmagan kontragentlar — Telegram ulanganda bir marta yuborish uchun. Bo'sh bo'lsa null. */
+    public String openText(AppUser u) {
+        List<AgentCheck> list = repo.findByStatusAndCreatorUserIdOrderByIdDesc(AgentCheck.Status.OCHIQ, u.getId());
+        return list.isEmpty() ? null : openListText(list);
+    }
+
+
+    /** Xodimning ochiq (OCHIQ) tekshiruvlari — eskidan yangiga (kelish tartibi). */
+    public List<AgentCheck> openFor(AppUser u) {
+        List<AgentCheck> l = new ArrayList<>(repo.findByStatusAndCreatorUserIdOrderByIdDesc(AgentCheck.Status.OCHIQ, u.getId()));
+        Collections.reverse(l);
+        return l;
+    }
+
+    /** Saqlangan ma'lumotdan standart xato xabari (MoySklad'ga murojaatsiz) — xodim keyin ulanganda ham o'sha ko'rinish. */
+    public String storedErrorMessage(AgentCheck ac) {
+        StringBuilder sb = new StringBuilder("⚠️ <b>Контрагент хато киритилди</b>\n");
+        sb.append("👤 Xodim: ").append(esc(who(ac)));
+        if (ac.getKassaId() != null) sb.append(" · ").append(esc(notifier.kassaName(ac.getKassaId())));
+        sb.append("\n🏢 Kontragent: <b>").append(esc(ac.getAgentName())).append("</b>\n");
+        sb.append("🕒 Yaratildi: ").append(ac.getMsCreatedAt() == null ? "—" : ac.getMsCreatedAt().format(DTF)).append(" (MoySklad)\n\n");
+        sb.append("<b>Tuzatish kerak:</b>\n").append(bullets(ac.violationList()));
+        sb.append("\nℹ️ MoySklad'da tuzating — bot o'zi tekshiradi va «✅» yuboradi. ")
+          .append(cfg.escalateHours()).append(" soatda tuzatilmasa rahbarga xabar boradi.");
+        return sb.toString();
+    }
+
+    /** Xodim xabarni HAQIQATAN olgan paytdan tartib qayta boshlanadi: eskalatsiya soati shu ondan hisoblanadi. */
+    public void restartTimeline(AgentCheck ac) {
+        ac.setNotifiedAt(Instant.now());
+        ac.setEscalatedAt(null);
+        repo.save(ac);
+    }
+
+
+    String openListText(List<AgentCheck> list) {
+        StringBuilder sb = new StringBuilder("⚠️ <b>Tuzatilmagan kontragentlar</b> — " + list.size() + " ta\n");
+        int n = 0;
+        for (AgentCheck ac : list) {
+            if (++n > 20) { sb.append("… yana ").append(list.size() - 20).append(" ta\n"); break; }
+            sb.append(n).append(". <b>").append(esc(ac.getAgentName())).append("</b> · ")
+              .append(ac.getMsCreatedAt() == null ? "" : ac.getMsCreatedAt().format(DTF)).append(" · ")
+              .append(String.join(", ", ac.violationList().stream().map(AgentCheckService::shortTitle).toList()))
+              .append("\n");
+        }
+        sb.append("\nMoySklad'da tuzating — bot o'zi tekshiradi. Ro'yxat: 🤝 КОНТРАГЕНТ → ⚠️ Хатолар");
+        return sb.toString();
     }
 
 

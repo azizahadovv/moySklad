@@ -13,4 +13,6 @@ public interface AppUserRepo extends JpaRepository<AppUser, Long> {
     List<AppUser> findByActiveTrueOrderByRoleAscIdAsc();
     Optional<AppUser> findFirstByMsUidAndActiveTrue(String msUid);
     Optional<AppUser> findFirstByMsEmployeeIdAndActiveTrue(String msEmployeeId);
+    /** Telegram ulangan, lekin nazorat xabarlari hali yuborilmaganlar. */
+    List<AppUser> findByActiveTrueAndTelegramIdIsNotNullAndControlWelcomeAtIsNull();
 }

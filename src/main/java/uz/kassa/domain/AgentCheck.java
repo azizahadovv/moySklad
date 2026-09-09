@@ -14,7 +14,8 @@ import java.time.LocalDateTime;
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class AgentCheck {
 
-    public enum Status { OK, OCHIQ, TUZATILDI, ETIBORSIZ }
+    /** OCHIRILDI — kontragent MoySklad'da o'chirib tashlangan (xato yopiq, ro'yxatda ko'rinmaydi). */
+    public enum Status { OK, OCHIQ, TUZATILDI, ETIBORSIZ, OCHIRILDI }
 
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

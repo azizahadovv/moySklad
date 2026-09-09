@@ -47,6 +47,7 @@ public class Jobs {
     private final uz.kassa.service.control.ShipmentControlService shipmentSvc;
     private final uz.kassa.service.control.ControlConfig controlCfg;
     private final uz.kassa.service.control.EmployeeLinkService employeeLink;
+    private final uz.kassa.service.control.ControlWelcomeService controlWelcome;
     private volatile long lastBalanceTick = 0;
 
     /**
@@ -244,6 +245,61 @@ public class Jobs {
         }
     }
 
+    /** kassaId → {farq, ketma-ket necha tekshiruvda ko'rildi, oxirgi xabar vaqti (ms)}. */
+    private final java.util.Map<Long, long[]> dayMismatchSeen = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long DAY_ALERT_REPEAT_MS = 6 * 3600_000L;
+
+    /**
+     * Kunlar kesimi ≠ balans: sinxron/pul qabul o'rtasidagi bir lahzalik holat xabar bo'lmasin —
+     * faqat BIR XIL farq ketma-ket 2 tekshiruvda (30 daqiqa) turganda; takror xabar 6 soatda bir;
+     * tuzalganda «✅» bir marta. Xabarda qaysi kunlarda qoldiq turgani ko'rsatiladi.
+     */
+    private void dayMismatchAlert(List<LedgerService.DayMismatch> dayIssues) {
+        long now = System.currentTimeMillis();
+        java.util.Set<Long> current = new java.util.HashSet<>();
+        StringBuilder sb = new StringBuilder();
+        int alerts = 0;
+        for (LedgerService.DayMismatch m : dayIssues) {
+            current.add(m.kassaId());
+            long[] st = dayMismatchSeen.get(m.kassaId());
+            if (st == null || st[0] != m.diff()) { st = new long[]{m.diff(), 1, 0}; dayMismatchSeen.put(m.kassaId(), st); continue; }
+            st[1]++;
+            if (st[1] < 2) continue;
+            if (st[2] != 0 && now - st[2] < DAY_ALERT_REPEAT_MS) continue;
+            st[2] = now;
+            alerts++;
+            sb.append("\n<b>").append(TextUtil.esc(names.owner(OwnerType.KASSA, m.kassaId())))
+              .append("</b>: balans ").append(TextUtil.fmt(m.balance()))
+              .append(" · kunlar ").append(TextUtil.fmt(m.daysRemain()))
+              .append(" · farq <b>").append(TextUtil.fmt(m.diff())).append("</b> so'm\n");
+            int n = 0;
+            for (uz.kassa.domain.DayRecord d : dayRepo.findByKassaIdAndStatusInOrderByDateAsc(m.kassaId(),
+                    List.of(uz.kassa.domain.DayStatus.OCHIQ, uz.kassa.domain.DayStatus.YOPILGAN))) {
+                if (d.remainNaqd() == 0) continue;
+                if (++n > 8) { sb.append("   …\n"); break; }
+                sb.append("   • ").append(d.getDate().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM")))
+                  .append(": ").append(TextUtil.fmt(d.remainNaqd())).append(" so'm topshirilmagan\n");
+            }
+        }
+        // tuzalganlar — bir marta ✅ (faqat oldin xabar berilgan bo'lsa)
+        for (var it = dayMismatchSeen.entrySet().iterator(); it.hasNext(); ) {
+            var e = it.next();
+            if (current.contains(e.getKey())) continue;
+            if (e.getValue()[2] != 0)
+                notify.toRole(Role.SUPERADMIN, "✅ <b>" + TextUtil.esc(names.owner(OwnerType.KASSA, e.getKey()))
+                        + "</b>: kunlar kesimi balansga mos keldi.", null);
+            it.remove();
+        }
+        if (alerts == 0) return;
+        notify.toRole(Role.SUPERADMIN, "⚠️ <b>Kunlar kesimi balansga mos emas!</b>\n"
+                + "Kassa naqd balansi va kunlar qoldig'i yig'indisi 30 daqiqadan beri farq qiladi "
+                + "(pul qabulida kunlarga tushmagan qoldiq yoki yo'qolgan yozuv):\n" + sb
+                + "\nTuzatish: 🛠 Корректировка — farq summasini o'sha kun sanasi bilan kiriting "
+                + "(shunda ham balans, ham o'sha kun birga o'zgaradi), yoki ♻️ Нол бошлаш. "
+                + "Tekshiruv 30 daqiqada bir; tuzalsa «✅» keladi.", null);
+        log.warn("Kunlar kesimi nomuvofiqligi: {} ta kassa", alerts);
+    }
+
     /**
      * ✅ Balans yaxlitligi: har bir balans qatorini operatsiyalar tarixidan qayta
      * hisoblab, saqlangan qiymat bilan solishtiradi — kod xatosi yoki qo'lda
@@ -257,17 +313,7 @@ public class Jobs {
             List<LedgerService.DayMismatch> dayIssues = ledger.verifyDays();
             if (issues.isEmpty() && dayIssues.isEmpty()) return;
             if (issues.isEmpty()) {
-                StringBuilder sb = new StringBuilder("⚠️ <b>Kunlar kesimi balansga mos emas!</b>\n"
-                        + "Kassa naqd balansi va kunlar qoldig'i yig'indisi farq qiladi "
-                        + "(pul qabulida kunlarga tushmagan qoldiq yoki yo'qolgan yozuv):\n");
-                for (LedgerService.DayMismatch m : dayIssues)
-                    sb.append("\n<b>").append(TextUtil.esc(names.owner(OwnerType.KASSA, m.kassaId())))
-                      .append("</b>: balans ").append(TextUtil.fmt(m.balance()))
-                      .append(" · kunlar ").append(TextUtil.fmt(m.daysRemain()))
-                      .append(" · farq <b>").append(TextUtil.fmt(m.diff())).append("</b> so'm");
-                sb.append("\n\nTuzatish: 🛠 Корректировка (farq sanasi bilan) yoki ♻️ Нол бошлаш.");
-                notify.toRole(Role.SUPERADMIN, sb.toString(), null);
-                log.warn("Kunlar kesimi nomuvofiqligi: {} ta kassa", dayIssues.size());
+                dayMismatchAlert(dayIssues);
                 return;
             }
             StringBuilder sb = new StringBuilder("⚠️ <b>Balans nomuvofiqligi topildi!</b>\n"
@@ -602,6 +648,13 @@ public class Jobs {
         catch (Exception e) { log.warn("Otgruzka nazorati xatosi: {}", e.getMessage()); }
     }
 
+    /** Telegram'ga endigina ulangan xodimga ochiq xatolari/qarzdorlari bir marta (har 2 daqiqa). */
+    @Scheduled(fixedDelayString = "PT2M", initialDelayString = "PT2M")
+    public void controlWelcome() {
+        try { controlWelcome.tick(); }
+        catch (Exception e) { log.warn("Nazorat xush kelibsiz xabari xatosi: {}", e.getMessage()); }
+    }
+
     /** Qarzdorlar balansi — control.check_min (standart 20) daqiqada bir. */
     @Scheduled(fixedDelayString = "PT1M", initialDelayString = "PT3M")
     public void controlBalances() {
@@ -618,6 +671,8 @@ public class Jobs {
         if (!controlCfg.enabled()) return;
         try { employeeLink.syncEmployees(true, null); }
         catch (Exception e) { log.warn("Xodimlar sinxroni xatosi: {}", e.getMessage()); }
+        try { employeeLink.reconcileLinks(); }
+        catch (Exception e) { log.warn("Xodim yozuvlarini tekislash xatosi: {}", e.getMessage()); }
     }
 
     /** Kunlik jamlamalar (daily_time dan keyin, kuniga bir marta). */
@@ -625,6 +680,8 @@ public class Jobs {
     public void controlDaily() {
         try { shipmentSvc.dailyTick(); }
         catch (Exception e) { log.warn("Qarz kunlik jamlama xatosi: {}", e.getMessage()); }
+        try { shipmentSvc.remindTick(); }
+        catch (Exception e) { log.warn("Qarzdor eslatmalari xatosi: {}", e.getMessage()); }
         try { agentCheckSvc.dailyTick(); }
         catch (Exception e) { log.warn("Kontragent kunlik jamlama xatosi: {}", e.getMessage()); }
     }

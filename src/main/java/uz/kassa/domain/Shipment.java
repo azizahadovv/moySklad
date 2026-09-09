@@ -46,6 +46,15 @@ public class Shipment {
     @Column(name = "agent_phone", nullable = false)
     private String agentPhone = "";
 
+    /** Qarzdor eslatmasi oxirgi yuborilgan kun (takror eslatmalar — kuniga bir). */
+    @Column(name = "remind_sent")
+    private LocalDate remindSent;
+
+    /** MoySklad companyType: legal | entrepreneur | individual; "" — hali o'qilmagan. */
+    @Builder.Default
+    @Column(name = "agent_type", nullable = false)
+    private String agentType = "";
+
     @Column(name = "owner_ms_id")
     private String ownerMsId;
 

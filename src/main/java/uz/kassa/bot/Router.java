@@ -143,9 +143,10 @@ public class Router {
             kb.setKeyboard(java.util.List.of(row));
             kb.setResizeKeyboard(true);
             kb.setOneTimeKeyboard(true);
-            sender.send(chatId, "⛔ Sizga hali ruxsat berilmagan.\n\n"
-                    + "Pastdagi tugma orqali <b>telefon raqamingizni yuboring</b> — "
-                    + "SuperAdmin sizni raqam orqali topib tizimga qo'shadi.", kb);
+            sender.send(chatId, "👋 Xush kelibsiz! Sizni hali tanimadim.\n\n"
+                    + "Pastdagi tugma orqali <b>telefon raqamingizni yuboring</b>.\n"
+                    + "MoySklad xodimi bo'lsangiz (telefoningiz MoySklad'da yozilgan bo'lsa) — "
+                    + "<b>darhol, ruxsatsiz</b> kirasiz. Aks holda SuperAdmin sizni raqam orqali topib qo'shadi.", kb);
             return;
         }
         AppUser user = uo.get();

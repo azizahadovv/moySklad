@@ -37,6 +37,10 @@ public class AppUser {
     @Column(name = "ms_uid")
     private String msUid;
 
+    /** 🕵️ Назорат: Telegram ulangach ochiq xatolar bir marta yuborilgan vaqti (NULL — hali yuborilmagan). */
+    @Column(name = "control_welcome_at")
+    private Instant controlWelcomeAt;
+
     @Builder.Default
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();

@@ -128,4 +128,22 @@ public class ControlNotifier {
     public static InlineKeyboardButton urlBtn(String text, String url) {
         return InlineKeyboardButton.builder().text(text).url(url).build();
     }
+
+    /**
+     * SuperAdmin'ga ketgan «xodim bog'lanmagan» xabari uchun tugma: bot foydalanuvchisi bor, lekin Telegram'i yo'q —
+     * «🔗 … Telegram ulash» (mehmonlar ro'yxati, yangi xabar); umuman bog'lanmagan — «👔 Xodimni bog'lash».
+     */
+    public static InlineKeyboardButton linkBtn(AppUser u) {
+        if (u == null) return InlineKeyboardButton.builder().text("👔 Xodimni MoySklad'ga bog'lash").callbackData("a:cten").build();
+        String name = u.getFullName().length() > 30 ? u.getFullName().substring(0, 30) : u.getFullName();
+        return InlineKeyboardButton.builder().text("🔗 " + name + " — Telegram ulash").callbackData("a:ctutn:" + u.getId()).build();
+    }
+
+    /** Mavjud klaviaturaga (yoki bo'shga) bog'lash tugmasi qatori qo'shiladi. */
+    public static InlineKeyboardMarkup withLink(InlineKeyboardMarkup kb, AppUser u) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        if (kb != null && kb.getKeyboard() != null) rows.addAll(kb.getKeyboard());
+        rows.add(List.of(linkBtn(u)));
+        return InlineKeyboardMarkup.builder().keyboard(rows).build();
+    }
 }

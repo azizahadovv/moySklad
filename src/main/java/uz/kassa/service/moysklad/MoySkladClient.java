@@ -544,7 +544,7 @@ public class MoySkladClient {
     /** Otgruzka (demand). Summalar SO'MDA. dueAt — «Тўлов муддати», masul — «Масъул». */
     public record MsDemand(String id, String docNo, LocalDateTime moment, LocalDateTime created,
                            LocalDateTime updated, long sumSom, long payedSom, String agentId,
-                           String agentName, String agentPhone, String ownerId, String ownerName,
+                           String agentName, String agentPhone, String agentType, String ownerId, String ownerName,
                            String ownerUid, String groupId, String stateName, String description,
                            LocalDate dueAt, String masul, boolean applicable) {}
 
@@ -681,6 +681,7 @@ public class MoySkladClient {
                 agent.path("id").asText(lastSegment(agent.path("meta").path("href").asText(""))),
                 agent.path("name").asText(""),
                 agent.path("phone").asText(""),
+                agent.path("companyType").asText(""),
                 owner.path("id").asText(lastSegment(owner.path("meta").path("href").asText(""))),
                 owner.path("name").asText(""),
                 owner.path("uid").asText(""),

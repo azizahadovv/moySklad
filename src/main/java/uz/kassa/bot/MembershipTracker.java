@@ -171,18 +171,45 @@ public class MembershipTracker {
                 log.warn("MoySklad bo'yicha avto-ro'yxat xatosi: {}", e.getMessage());
             }
         }
-        sender.send(chatId, "✅ Telefon raqamingiz qabul qilindi: <b>"
-                + esc(m.getContact().getPhoneNumber()) + "</b>\n\n"
-                + "SuperAdmin sizni shu raqam orqali topib tizimga qo'shadi.\n"
-                + "ℹ️ MoySklad xodimlari ro'yxatida bo'lganlar avtomatik ulanadi — buning uchun MoySklad'dagi telefon "
-                + "raqamingiz shu raqam bilan bir xil bo'lishi kerak.");
+        sender.send(chatId, "📱 Raqamingiz qabul qilindi: <b>" + esc(m.getContact().getPhoneNumber()) + "</b>\n\n"
+                + "⚠️ Bu raqam MoySklad xodimlari ro'yxatida topilmadi, shuning uchun avtomatik kira olmadingiz.\n"
+                + "MoySklad'da xodim kartangizga aynan shu raqam yozilsa — tugmani qayta bosing, darhol kirasiz. "
+                + "Yoki SuperAdmin sizni qo'lda qo'shadi — unga xabar ketdi.");
         String who = m.getFrom().getFirstName() == null ? "" : m.getFrom().getFirstName();
         if (m.getFrom().getLastName() != null) who += " " + m.getFrom().getLastName();
         notify.toRole(Role.SUPERADMIN, "📱 <b>Yangi kontakt:</b> " + esc(who.trim())
                 + (m.getFrom().getUserName() == null ? "" : " (@" + esc(m.getFrom().getUserName()) + ")")
                 + "\nTelefon: <code>" + esc(m.getContact().getPhoneNumber()) + "</code>"
                 + "\nTelegramID: <code>" + tgId + "</code>\n\n"
-                + "Jadvalda shu odam qatoriga Telefon yoki TelegramID ni yozsangiz — ulanadi.", null);
+                + "Raqam MoySklad xodimlarida yo'q. " + unlinkedEmployeesHint()
+                + "Yoki: ⚙️ Настройка → 🔗 MoySklad → 🕵️ Назорат → 👔 Xodimlar → xodim → 🔗 Telegram, yoxud jadvalga TelegramID yozing.", null);
+    }
+
+
+    /** Botga hali ulanmagan MoySklad xodimlari (telefonsiz — alohida): admin kimni bog'lashni bilsin. */
+    private String unlinkedEmployeesHint() {
+        try {
+            java.util.List<String> noPhone = new java.util.ArrayList<>(), withPhone = new java.util.ArrayList<>();
+            for (var e : employeeLink.employees()) {
+                if (e.archived() || e.name().isBlank()) continue;
+                boolean linked = userRepo.findFirstByMsEmployeeIdAndActiveTrue(e.id())
+                        .or(() -> userRepo.findFirstByMsUidAndActiveTrue(e.uid() == null ? "" : e.uid()))
+                        .map(x -> x.getTelegramId() != null).orElse(false);
+                if (linked) continue;
+                (TextUtil.normPhone(e.phone()).isEmpty() ? noPhone : withPhone)
+                        .add(uz.kassa.service.control.EmployeeLinkService.cleanName(e.name()));
+            }
+            StringBuilder sb = new StringBuilder();
+            if (!noPhone.isEmpty())
+                sb.append("MoySklad'da <b>telefoni yo'q</b> xodimlar (kartasiga raqam yozilsa o'zi ulanadi): ")
+                  .append(esc(String.join(", ", noPhone.subList(0, Math.min(10, noPhone.size()))))).append(".\n");
+            if (!withPhone.isEmpty())
+                sb.append("Telefoni bor, lekin hali ulanmaganlar: ")
+                  .append(esc(String.join(", ", withPhone.subList(0, Math.min(10, withPhone.size()))))).append(".\n");
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
 

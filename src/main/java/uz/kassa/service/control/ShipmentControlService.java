@@ -189,6 +189,7 @@ public class ShipmentControlService {
         s.setAgentMsId(d.agentId());
         s.setAgentName(cut(d.agentName(), 400));
         s.setAgentPhone(cut(d.agentPhone(), 160));
+        if (d.agentType() != null && !d.agentType().isBlank()) s.setAgentType(cut(d.agentType(), 20));
         s.setOwnerMsId(d.ownerId());
         s.setOwnerUid(cut(d.ownerUid(), 80));
         s.setOwnerName(cut(d.ownerName(), 200));
@@ -266,9 +267,19 @@ public class ShipmentControlService {
         if (silent || s.isSilent() || quiet) return;
         String text = "🧾 <b>Отгрузка тўлови тўлиқ эмас — қарздорлар рўйхатига қўшилди</b>\n" + render(s, true);
         Set<AppUser> to = notifier.forShipment(s, true);
-        if (s.getOwnerUserId() == null)
-            text += "\n\n⚠️ <i>Xodim botga bog'lanmagan: " + esc(s.getOwnerName())
-                    + " (⚙️ Настройка → 🕵️ Назорат → 👔 Xodimlar)</i>";
+        AppUser owner = s.getOwnerUserId() == null ? null : userRepo.findById(s.getOwnerUserId()).orElse(null);
+        if (owner == null || owner.getTelegramId() == null) {
+            String warn = "\n\n⚠️ <i>Xodim " + (owner == null ? "botga bog'lanmagan: " + esc(s.getOwnerName())
+                    : esc(owner.getFullName()) + " Telegram'ga ulanmagan") + " — pastdagi tugma bilan ulang.</i>";
+            // xodimsiz oluvchilar — oddiy tugmalar; SuperAdmin'larga — ulash tugmasi bilan
+            Set<AppUser> admins = notifier.superadmins();
+            Set<Long> adminIds = new HashSet<>();
+            for (AppUser a : admins) adminIds.add(a.getId());
+            to.removeIf(x -> adminIds.contains(x.getId()));
+            notifier.send(to, text, kb(s));
+            notifier.send(admins, text + warn, ControlNotifier.withLink(kb(s), owner));
+            return;
+        }
         notifier.send(to, text, kb(s));
     }
 
@@ -283,6 +294,7 @@ public class ShipmentControlService {
         s.setClosedBy(by == null ? null : by.getId());
         s.setCheckAt(null);
         repo.save(s);
+        updateIssues(s);
         reminderRepo.findFirstByShipmentId(s.getId()).ifPresent(r -> {
             if (r.getStatus() == Reminder.Status.FAOL) {
                 r.setRepaid(Math.max(r.getRepaid(), r.getAmount()));
@@ -309,6 +321,7 @@ public class ShipmentControlService {
         s.setCloseReason(reason);
         s.setCheckAt(null);
         repo.save(s);
+        updateIssues(s);   // o'chirilgan/bekor otgruzka kamchiliklar ro'yxatida qolmasin
         reminderRepo.findFirstByShipmentId(s.getId()).ifPresent(r -> {
             if (r.getStatus() == Reminder.Status.FAOL) { r.setStatus(Reminder.Status.BEKOR); reminderRepo.save(r); }
         });
@@ -404,19 +417,31 @@ public class ShipmentControlService {
         List<Shipment> debts = repo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ);
         if (debts.isEmpty()) return;
 
-        // 1) navbat bilan 40 tasi qayta o'qiladi — o'chirilgan/to'langan hujjatni sezish
+        // 1) qayta o'qish — o'chirilgan/to'langan hujjatni sezish: avval OXIRGI 3 KUN otgruzkalari (yangi hujjat
+        //    o'chirilishi/tuzatilishi ko'p — har tickda), so'ng eskilar navbat bilan; jami 40 ta (429 limiti)
         int n = debts.size();
-        for (int i = 0; i < Math.min(40, n); i++) {
+        LocalDateTime recentFrom = LocalDateTime.now(cfg.zone()).minusDays(3);
+        List<Shipment> batch = new ArrayList<>();
+        Set<Long> picked = new HashSet<>();
+        for (Shipment s : debts)
+            if (s.getMsCreated() != null && s.getMsCreated().isAfter(recentFrom) && batch.size() < 20) { batch.add(s); picked.add(s.getId()); }
+        int step = 0;
+        for (int i = 0; i < n && batch.size() < 40; i++) {
             Shipment s = debts.get((refreshCursor + i) % n);
+            step = i + 1;
+            if (picked.add(s.getId())) batch.add(s);
+        }
+        for (Shipment s : batch) {
             try {
                 MsDemand d = msClient.fetchDemand(s.getMsId());
                 if (d == null) { cancel(s, "MoySklad'da o'chirilgan", false); continue; }
                 apply(d, false, null, false);
             } catch (Exception e) {
                 log.warn("Qarz №{} qayta o'qilmadi: {}", s.getDocNo(), e.getMessage());
+                if (String.valueOf(e.getMessage()).contains("429")) break;   // limit — qolgani keyingi tick
             }
         }
-        refreshCursor = (refreshCursor + 40) % Math.max(1, n);
+        refreshCursor = (refreshCursor + Math.max(1, step)) % Math.max(1, n);
 
         // 2) balanslar — to'plam bilan
         debts = repo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ);
@@ -526,6 +551,80 @@ public class ShipmentControlService {
     }
 
 
+    /* ==================== 🔔 QARZDOR ESLATMALARI (takror, davr) ==================== */
+
+    /**
+     * Har 10 daqiqada (Jobs): remind_time dan keyin, kuniga bir. Har qarzdor otgruzka uchun eslatma kuni:
+     * muddatdan N kun oldin (remind_before), muddat kuni, muddat o'tgach har remind_repeat kunda — to'languncha.
+     * Muddatsiz otgruzkada hujjat sanasi muddat o'rnida. Xodim (ega + Масъул) ga kuniga BITTA guruhlangan xabar;
+     * jim statuslar va Telegram'siz xodimlar o'tkaziladi (ular kunlik jamlamada).
+     */
+    public void remindTick() {
+        if (!cfg.enabled()) return;
+        LocalDate today = LocalDate.now(cfg.zone());
+        if (LocalTime.now(cfg.zone()).isBefore(cfg.remindTime())) return;
+        if (today.toString().equals(cfg.get(ControlConfig.REMIND_SENT).orElse(""))) return;
+        cfg.set(ControlConfig.REMIND_SENT, today.toString());
+
+        Set<Integer> before = cfg.remindBefore();
+        int repeat = cfg.remindRepeatDays();
+        Map<Long, List<Shipment>> byUser = new LinkedHashMap<>();
+        for (Shipment s : repo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ)) {
+            if (s.isSilent() || cfg.isQuietState(s.getState())) continue;
+            if (today.equals(s.getRemindSent())) continue;
+            LocalDate due = s.getDueAt() != null ? s.getDueAt() : s.getMoment() != null ? s.getMoment().toLocalDate() : null;
+            if (due == null) continue;
+            long left = ChronoUnit.DAYS.between(today, due);
+            boolean send = left == 0 || (left > 0 && before.contains((int) left))
+                    || (left < 0 && repeat > 0 && (-left) % repeat == 0);
+            if (!send) continue;
+            boolean any = false;
+            if (s.getOwnerUserId() != null) { byUser.computeIfAbsent(s.getOwnerUserId(), k -> new ArrayList<>()).add(s); any = true; }
+            if (s.getMasulUserId() != null && !s.getMasulUserId().equals(s.getOwnerUserId())) {
+                byUser.computeIfAbsent(s.getMasulUserId(), k -> new ArrayList<>()).add(s); any = true;
+            }
+            if (any) { s.setRemindSent(today); repo.save(s); }
+        }
+        int sent = 0;
+        for (var e : byUser.entrySet()) {
+            AppUser u = userRepo.findById(e.getKey()).orElse(null);
+            if (u == null || u.getTelegramId() == null) continue;
+            List<Shipment> list = e.getValue();
+            long overdue = list.stream().filter(x -> x.getDueAt() != null && x.getDueAt().isBefore(today)).count();
+            String text = "🔔 <b>Qarz eslatmasi</b> — " + today.format(DF) + digestLines(list, 30, false)
+                    + (overdue > 0 ? "⚠️ Muddati o'tgan: <b>" + overdue + "</b> ta" + (repeat > 0 ? " — har " + repeat + " kunda eslatiladi" : "") + "\n" : "")
+                    + "\nMijoz bilan bog'lanib to'lovni undiring. To'langach bot o'zi yopadi.\n"
+                    + "Ro'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар";
+            notifier.sendOne(u, text, null);
+            sent++;
+        }
+        if (sent > 0) log.info("Qarzdor eslatmalari: {} xodimga yuborildi", sent);
+    }
+
+
+    /** Xodimning barcha ochiq qarzdorlari (ega + Масъул), kunlik jamlama ko'rinishida — Telegram ulanganda. Bo'sh — null. */
+    public String debtorsDigest(AppUser u) {
+        List<Shipment> list = new ArrayList<>(repo.findByControlStatusAndOwnerUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()));
+        for (Shipment s : repo.findByControlStatusAndMasulUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()))
+            if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
+        long quietN = 0, quietSum = 0;
+        List<Shipment> loud = new ArrayList<>();
+        for (Shipment s : list) {
+            if (cfg.isQuietState(s.getState())) { quietN++; quietSum += s.remain(); } else loud.add(s);
+        }
+        if (loud.isEmpty() && quietN == 0) return null;
+        loud.sort(Comparator.comparing((Shipment s) -> s.getDueAt() == null ? LocalDate.MAX : s.getDueAt())
+                .thenComparing(s -> s.getMoment() == null ? LocalDateTime.MIN : s.getMoment()));
+        LocalDate today = LocalDate.now(cfg.zone());
+        return "🧾 <b>Qarzdorlaringiz</b> — " + today.format(DF)
+                + (loud.isEmpty() ? " (0 ta)\n" : digestLines(loud, 25, false))
+                + (quietN == 0 ? "" : "🏦 Перечисление (bank): " + quietN + " ta · " + fmt(quietSum) + " so'm — faqat ro'yxatda\n")
+                + "\nEslatmalar: muddatdan " + (cfg.remindBefore().isEmpty() ? "" : cfg.remindBefore() + " kun oldin, ")
+                + "muddat kuni" + (cfg.remindRepeatDays() > 0 ? ", o'tgach har " + cfg.remindRepeatDays() + " kunda" : "")
+                + " · kunlik jamlama " + cfg.dailyTime() + "\nRo'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар";
+    }
+
+
     private String digestLines(List<Shipment> list, int max, boolean withOwner) {
         StringBuilder sb = new StringBuilder();
         long total = 0;
@@ -608,7 +707,8 @@ public class ShipmentControlService {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (u != null && u.getTelegramId() != null) notifier.sendOne(u, issuesMessage(e.getValue()), null);
             else notifier.send(notifier.superadmins(), "⚠️ <i>Xodim " + esc(u == null ? "#" + e.getKey() : u.getFullName())
-                    + " Telegram'ga ulanmagan</i>\n\n" + issuesMessage(e.getValue()), null);
+                    + " Telegram'ga ulanmagan — pastdagi tugma bilan ulang.</i>\n\n" + issuesMessage(e.getValue()),
+                    ControlNotifier.withLink(null, u));
             for (Shipment s : e.getValue()) { s.setIssuesNotifiedAt(now); repo.save(s); }
         }
         if (!unlinked.isEmpty()) {
@@ -618,9 +718,32 @@ public class ShipmentControlService {
                   .append(issueSummary(e.getValue())).append("\n");
                 for (Shipment s : e.getValue()) { s.setIssuesNotifiedAt(now); repo.save(s); }
             }
-            sb.append("\n⚙️ Настройка → 🕵️ Назорат → 👔 Xodimlar orqali bog'lang — xabar xodimning o'ziga boradi.");
-            notifier.send(notifier.superadmins(), sb.toString(), null);
+            sb.append("\nPastdagi tugma orqali bog'lang — xabar xodimning o'ziga boradi.");
+            notifier.send(notifier.superadmins(), sb.toString(), ControlNotifier.withLink(null, null));
         }
+    }
+
+
+    /**
+     * Xodimga tegishli (ega yoki Масъул) kamchilikli otgruzkalar — Telegram ulanganda bir marta yuborish uchun.
+     * Jim statuslar chiqarib tashlanadi. Bo'sh bo'lsa null.
+     */
+    public String pendingIssuesText(AppUser u) {
+        List<Shipment> list = new ArrayList<>(repo.findByIssuesNotAndOwnerUserIdOrderByMomentDesc("", u.getId()));
+        for (Shipment s : repo.findByIssuesNotAndMasulUserIdOrderByMomentDesc("", u.getId()))
+            if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
+        list.removeIf(s -> cfg.isQuietState(s.getState()));
+        return list.isEmpty() ? null : issuesMessage(list);
+    }
+
+    /** Xodimning ochiq qarzdorlari (ega yoki Масъул): [soni, qoldiq summa]. */
+    public long[] debtSummary(AppUser u) {
+        List<Shipment> list = new ArrayList<>(repo.findByControlStatusAndOwnerUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()));
+        for (Shipment s : repo.findByControlStatusAndMasulUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()))
+            if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
+        long sum = 0;
+        for (Shipment s : list) sum += s.remain();
+        return new long[]{list.size(), sum};
     }
 
 
@@ -697,6 +820,27 @@ public class ShipmentControlService {
         String key = MoySkladClient.normAttr(state);
         return all.stream().filter(s -> MoySkladClient.normAttr(s.getState()).equals(key)).toList();
     }
+
+    /** Kontragent turi filtri: 0 — hammasi, 1 — Юр. лицо, 2 — ИП, 3 — Физ. лицо. */
+    public static final String[] TYPE_KEYS = {"", "legal", "entrepreneur", "individual"};
+
+    public static String typeLabel(String companyType) {
+        if (companyType == null) return "";
+        if (companyType.startsWith("legal")) return "🏢 Юр. лицо";
+        if (companyType.startsWith("entrepreneur")) return "🧑‍💼 ИП";
+        if (companyType.startsWith("individual")) return "👤 Физ. лицо";
+        return "";
+    }
+
+    public static boolean typeMatches(Shipment s, int type) {
+        if (type <= 0 || type >= TYPE_KEYS.length) return true;
+        return s.getAgentType().startsWith(TYPE_KEYS[type]);
+    }
+
+    public static long countType(List<Shipment> list, int type) {
+        return list.stream().filter(s -> typeMatches(s, type)).count();
+    }
+
 
     /** Ro'yxatdagi statuslar — soni bo'yicha kamayib (Перечисление, Карз, Накд …). */
     public static List<String> distinctStates(List<Shipment> list) {
@@ -812,7 +956,8 @@ public class ShipmentControlService {
         StringBuilder sb = new StringBuilder();
         sb.append("👤 Xodim: <b>").append(esc(ownerLabel(s))).append("</b>");
         if (s.getKassaId() != null) sb.append(" · ").append(esc(notifier.kassaName(s.getKassaId())));
-        sb.append("\n🏢 Klient: <b>").append(esc(s.getAgentName())).append("</b>\n");
+        sb.append("\n🏢 Klient: <b>").append(esc(s.getAgentName())).append("</b>")
+          .append(s.getAgentType().isBlank() ? "" : " · " + typeLabel(s.getAgentType())).append("\n");
         sb.append("📞 Telefon: ").append(s.getAgentPhone().isBlank() ? "—" : esc(s.getAgentPhone())).append("\n");
         sb.append("📦 Otgruzka: <b>№").append(esc(s.getDocNo())).append("</b>");
         if (s.getMoment() != null) sb.append(" · ").append(s.getMoment().format(DTF));

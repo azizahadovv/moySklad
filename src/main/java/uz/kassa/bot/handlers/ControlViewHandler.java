@@ -58,7 +58,8 @@ public class ControlViewHandler {
             case "ol" -> issueList(u, arg, chatId, msgId);
             case "rf" -> refresh(u, arg, chatId, msgId);
             case "es" -> statsView(u, arg, chatId, msgId);
-            case "ee" -> errorExcel(u, chatId);
+            case "ee" -> errorExcel(u, arg, chatId);
+            case "ox" -> issueExcel(u, arg, chatId);
             default -> { return false; }
         }
         return true;
@@ -67,23 +68,30 @@ public class ControlViewHandler {
 
     /* ==================== 🧾 ҚАРЗДОРЛАР ==================== */
 
-    /** arg: "" | "<kassaId|0>.<page>[.<statusIdx|-1>]" — status indeksi distinctStates ro'yxati bo'yicha. */
+    /** arg: "" | "<kassaId|0>.<page>[.<statusIdx|-1>[.<tur 0-3>]]" — status indeksi distinctStates ro'yxati bo'yicha,
+     *  tur: 0 hammasi · 1 Юр · 2 ИП · 3 Физ. */
     void debtList(AppUser u, Session s, String arg, long chatId, int msgId) {
-        long kassa = 0; int page = 0; int st = -1;
+        long kassa = 0; int page = 0; int st = -1; int type = 0;
         if (!arg.isBlank()) {
             String[] p = arg.split("\\.");
             try {
                 kassa = Long.parseLong(p[0]);
                 page = p.length > 1 ? Integer.parseInt(p[1]) : 0;
                 st = p.length > 2 ? Integer.parseInt(p[2]) : -1;
+                type = p.length > 3 ? Integer.parseInt(p[3]) : 0;
             } catch (NumberFormatException ignored) { }
         }
+        if (type < 0 || type >= ShipmentControlService.TYPE_KEYS.length) type = 0;
         boolean admin = u.getRole() == Role.SUPERADMIN || u.getRole() == Role.BUXGALTER;
         List<Shipment> all = ships.visibleFor(u, kassa > 0 ? kassa : null);
         List<String> states = ShipmentControlService.distinctStates(all);
         String stName = st >= 0 && st < states.size() ? states.get(st) : null;
         if (stName == null) st = -1;
         List<Shipment> list = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+        final int typeF = type;
+        long unknownType = list.stream().filter(x -> x.getAgentType().isBlank()).count();
+        if (type > 0) list = list.stream().filter(x -> ShipmentControlService.typeMatches(x, typeF)).toList();
+        final String tail = "." + type;
         long total = 0;
         LocalDate today = LocalDate.now(ks.zone());
         long overdue = 0, noDue = 0;
@@ -96,6 +104,7 @@ public class ControlViewHandler {
         if (kassa > 0) sb.append(" — ").append(esc(kassaRepo.findById(kassa).map(Kassa::getName).orElse("?")));
         else if (admin) sb.append(" (hammasi)");
         if (stName != null) sb.append(" · ").append(esc(stName)).append(ships.isQuietState(stName) ? " 🏦" : "");
+        if (type > 0) sb.append(" · ").append(ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[type]));
         sb.append("\n");
         if (list.isEmpty()) sb.append("\nQarzdor otgruzkalar yo'q ✅");
         else {
@@ -116,50 +125,69 @@ public class ControlViewHandler {
             rows.add(irow(btn(label, "kg:dv:" + x.getId())));
         }
         List<InlineKeyboardButton> nav = new ArrayList<>();
-        if (page > 0) nav.add(btn("⬅️ Oldingi", "kg:dl:" + kassa + "." + (page - 1) + "." + st));
-        if (from + PAGE < list.size()) nav.add(btn("Keyingi ➡️", "kg:dl:" + kassa + "." + (page + 1) + "." + st));
+        if (page > 0) nav.add(btn("⬅️ Oldingi", "kg:dl:" + kassa + "." + (page - 1) + "." + st + tail));
+        if (from + PAGE < list.size()) nav.add(btn("Keyingi ➡️", "kg:dl:" + kassa + "." + (page + 1) + "." + st + tail));
         if (!nav.isEmpty()) rows.add(nav);
+        // 🏢/👤 kontragent turi filtri
+        {
+            List<Shipment> base = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn((type == 0 ? "✅ " : "") + "Barcha tur", "kg:dl:" + kassa + ".0." + st + ".0"));
+            for (int t = 1; t < ShipmentControlService.TYPE_KEYS.length; t++)
+                r.add(btn((type == t ? "✅ " : "") + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[t])
+                        + " (" + ShipmentControlService.countType(base, t) + ")", "kg:dl:" + kassa + ".0." + st + "." + t));
+            rows.add(r);
+            if (unknownType > 0 && type > 0) sb.append("\n❔ ").append(unknownType).append(" ta otgruzkada kontragent turi hali o'qilmagan (bir necha soatda to'ldiriladi)");
+        }
         // 🏷 status filtri
         if (!states.isEmpty()) {
             List<InlineKeyboardButton> r = new ArrayList<>();
-            r.add(btn((st < 0 ? "✅ " : "") + "Hammasi (" + all.size() + ")", "kg:dl:" + kassa + ".0.-1"));
+            r.add(btn((st < 0 ? "✅ " : "") + "Hammasi (" + all.size() + ")", "kg:dl:" + kassa + ".0.-1" + tail));
             for (int i = 0; i < states.size(); i++) {
                 String name = states.get(i);
                 r.add(btn((st == i ? "✅ " : "") + (ships.isQuietState(name) ? "🏦 " : "") + name + " ("
-                        + ShipmentControlService.countState(all, name) + ")", "kg:dl:" + kassa + ".0." + i));
+                        + ShipmentControlService.countState(all, name) + ")", "kg:dl:" + kassa + ".0." + i + tail));
                 if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
             }
             if (!r.isEmpty()) rows.add(r);
         }
         if (admin) {
             List<InlineKeyboardButton> r = new ArrayList<>();
-            r.add(btn(kassa == 0 ? "✅ Hammasi" : "Hammasi", "kg:dl:0.0." + st));
+            r.add(btn(kassa == 0 ? "✅ Hammasi" : "Hammasi", "kg:dl:0.0." + st + tail));
             for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
                 if (k.isCashless()) continue;
-                r.add(btn((kassa == k.getId() ? "✅ " : "🏪 ") + k.getName(), "kg:dl:" + k.getId() + ".0." + st));
+                r.add(btn((kassa == k.getId() ? "✅ " : "🏪 ") + k.getName(), "kg:dl:" + k.getId() + ".0." + st + tail));
                 if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
             }
             if (!r.isEmpty()) rows.add(r);
-            if (!list.isEmpty()) rows.add(irow(btn("📥 Excel", "kg:dx:" + kassa + "." + st)));
         }
+        if (!list.isEmpty()) rows.add(irow(btn("📥 Excel (shu filtr bilan)", "kg:dx:" + kassa + "." + st + tail)));
         rows.add(tools(u, "dl." + kassa));
         rows.add(irow(ks.bk("kg:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
     }
 
 
-    /** arg: "<kassa>[.<statusIdx>]" */
+    /** arg: "<kassa>[.<statusIdx>[.<tur>]]" — ro'yxatdagi filtrlar bilan bir xil. */
     void debtExcel(AppUser u, String arg, long chatId) {
-        long kassa = 0; int st = -1;
+        long kassa = 0; int st = -1; int type = 0;
         String[] p = arg.split("\\.");
-        try { kassa = Long.parseLong(p[0]); st = p.length > 1 ? Integer.parseInt(p[1]) : -1; } catch (NumberFormatException ignored) { }
+        try {
+            kassa = Long.parseLong(p[0]);
+            st = p.length > 1 ? Integer.parseInt(p[1]) : -1;
+            type = p.length > 2 ? Integer.parseInt(p[2]) : 0;
+        } catch (NumberFormatException ignored) { }
         List<Shipment> all = ships.visibleFor(u, kassa > 0 ? kassa : null);
         List<String> states = ShipmentControlService.distinctStates(all);
         String stName = st >= 0 && st < states.size() ? states.get(st) : null;
         List<Shipment> list = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+        final int typeF = type;
+        if (type > 0) list = list.stream().filter(x -> ShipmentControlService.typeMatches(x, typeF)).toList();
         byte[] xlsx = excel.buildDebts(list, notifier::userName, notifier::kassaName, ks.zone());
         sender.sendDocument(chatId, xlsx, "qarzdorlar_" + ks.today() + ".xlsx",
-                "🧾 Qarzdorlar: " + list.size() + " ta" + (stName == null ? "" : " · " + stName));
+                "🧾 Qarzdorlar: " + list.size() + " ta" + (kassa > 0 ? " · " + notifier.kassaName(kassa) : "")
+                + (stName == null ? "" : " · " + stName)
+                + (type > 0 ? " · " + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[type]) : ""));
     }
 
 
@@ -318,16 +346,45 @@ public class ControlViewHandler {
 
     /* ==================== ⚠️ ХАТОЛАР ==================== */
 
+    /** Kontragent xatolari filtri: arg "<page>[.<kassa|0>[.<kod|->]]" — kod K1..K8 yoki "-" (hammasi). */
+    private record ErrFilter(int page, long kassa, String code) {
+        static ErrFilter parse(String arg) {
+            int page = 0; long kassa = 0; String code = "-";
+            if (arg != null && !arg.isBlank()) {
+                String[] p = arg.split("\\.");
+                try {
+                    page = Integer.parseInt(p[0]);
+                    kassa = p.length > 1 ? Long.parseLong(p[1]) : 0;
+                    code = p.length > 2 && !p[2].isBlank() ? p[2] : "-";
+                } catch (NumberFormatException ignored) { }
+            }
+            return new ErrFilter(page, kassa, code);
+        }
+        String tail() { return "." + kassa + "." + code; }
+    }
+
+    private List<AgentCheck> filteredErrors(AppUser u, ErrFilter f) {
+        List<AgentCheck> list = new ArrayList<>(agents.visibleFor(u));
+        if (f.kassa() > 0) list.removeIf(ac -> !Long.valueOf(f.kassa()).equals(ac.getKassaId()));
+        if (!f.code().equals("-")) list.removeIf(ac -> !ac.violationList().contains(f.code()));
+        return list;
+    }
+
     void errorList(AppUser u, String arg, long chatId, int msgId) {
-        int page = 0;
-        try { if (!arg.isBlank()) page = Integer.parseInt(arg); } catch (NumberFormatException ignored) { }
-        List<AgentCheck> list = agents.visibleFor(u);
+        ErrFilter f = ErrFilter.parse(arg);
+        int page = f.page();
+        boolean admin = u.getRole() == Role.SUPERADMIN || u.getRole() == Role.BUXGALTER;
+        List<AgentCheck> base = filteredErrors(u, new ErrFilter(0, f.kassa(), "-"));
+        List<AgentCheck> list = filteredErrors(u, f);
         StringBuilder sb = new StringBuilder("⚠️ <b>Контрагент хатолари</b>"
-                + (u.getRole() == Role.KASSIR ? "" : " (hammasi)") + "\n");
+                + (u.getRole() == Role.KASSIR ? "" : " (hammasi)"));
+        if (f.kassa() > 0) sb.append(" — ").append(esc(notifier.kassaName(f.kassa())));
+        if (!f.code().equals("-")) sb.append(" · ").append(AgentCheckService.shortTitle(f.code()));
+        sb.append("\n");
         if (list.isEmpty()) sb.append("\nTuzatilmagan kontragentlar yo'q ✅");
         else sb.append("Tuzatilmagan: <b>").append(list.size()).append("</b> ta\n\nTanlang:");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        rows.add(irow(btn("✅ 🏢 Kontragentlar (" + list.size() + ")", "kg:el"),
+        rows.add(irow(btn("✅ 🏢 Kontragentlar (" + agents.visibleFor(u).size() + ")", "kg:el"),
                       btn("📦 Otgruzkalar (" + ships.visibleIssuesFor(u, null).size() + ")", "kg:ol")));
         int from = page * PAGE;
         for (int i = from; i < Math.min(list.size(), from + PAGE); i++) {
@@ -338,39 +395,101 @@ public class ControlViewHandler {
             rows.add(irow(btn(label, "kg:ev:" + ac.getId())));
         }
         List<InlineKeyboardButton> nav = new ArrayList<>();
-        if (page > 0) nav.add(btn("⬅️ Oldingi", "kg:el:" + (page - 1)));
-        if (from + PAGE < list.size()) nav.add(btn("Keyingi ➡️", "kg:el:" + (page + 1)));
+        if (page > 0) nav.add(btn("⬅️ Oldingi", "kg:el:" + (page - 1) + f.tail()));
+        if (from + PAGE < list.size()) nav.add(btn("Keyingi ➡️", "kg:el:" + (page + 1) + f.tail()));
         if (!nav.isEmpty()) rows.add(nav);
-        if (!list.isEmpty() && u.getRole() != Role.KASSIR) rows.add(irow(btn("📥 Excel", "kg:ee")));
+        // 🏷 xato turi filtri (faqat uchraydiganlar)
+        java.util.Map<String, Integer> byCode = new java.util.LinkedHashMap<>();
+        for (AgentCheck ac : base) for (String c : ac.violationList()) byCode.merge(c, 1, Integer::sum);
+        if (!byCode.isEmpty()) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn((f.code().equals("-") ? "✅ " : "") + "Hammasi (" + base.size() + ")", "kg:el:0." + f.kassa() + ".-"));
+            for (var e : byCode.entrySet()) {
+                r.add(btn((f.code().equals(e.getKey()) ? "✅ " : "") + AgentCheckService.shortTitle(e.getKey()) + " (" + e.getValue() + ")",
+                        "kg:el:0." + f.kassa() + "." + e.getKey()));
+                if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+            }
+            if (!r.isEmpty()) rows.add(r);
+        }
+        if (admin) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn(f.kassa() == 0 ? "✅ Hammasi" : "Hammasi", "kg:el:0.0." + f.code()));
+            for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+                if (k.isCashless()) continue;
+                r.add(btn((f.kassa() == k.getId() ? "✅ " : "🏪 ") + k.getName(), "kg:el:0." + k.getId() + "." + f.code()));
+                if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+            }
+            if (!r.isEmpty()) rows.add(r);
+        }
+        if (!list.isEmpty()) rows.add(irow(btn("📥 Excel (shu filtr bilan)", "kg:ee:" + f.kassa() + "." + f.code())));
         rows.add(tools(u, "el"));
         rows.add(irow(ks.bk("kg:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
     }
 
 
-    void errorExcel(AppUser u, long chatId) {
-        List<AgentCheck> list = agents.visibleFor(u);
+    /** arg: "<kassa>.<kod>" (ro'yxat filtri). */
+    void errorExcel(AppUser u, String arg, long chatId) {
+        String[] p = (arg == null ? "" : arg).split("\\.");
+        long kassa = 0; String code = "-";
+        try { if (p.length > 0 && !p[0].isBlank()) kassa = Long.parseLong(p[0]); } catch (NumberFormatException ignored) { }
+        if (p.length > 1 && !p[1].isBlank()) code = p[1];
+        List<AgentCheck> list = filteredErrors(u, new ErrFilter(0, kassa, code));
         byte[] xlsx = excel.buildAgentErrors(list, notifier::userName, notifier::kassaName,
                 uz.kassa.service.control.ControlConfig::ruleTitle);
         sender.sendDocument(chatId, xlsx, "kontragent_xatolari_" + ks.today() + ".xlsx",
-                "⚠️ Tuzatilmagan kontragentlar: " + list.size() + " ta");
+                "⚠️ Tuzatilmagan kontragentlar: " + list.size() + " ta"
+                + (kassa > 0 ? " · " + notifier.kassaName(kassa) : "")
+                + (code.equals("-") ? "" : " · " + AgentCheckService.shortTitle(code)));
     }
 
 
-    /** 📦 Kamchilikli (qarzdagi) otgruzkalar: muddat/masul/status/izoh/telefon. arg: page. */
+    /** Otgruzka kamchiliklari filtri: arg "<page>[.<kassa|0>[.<tur 0-3>[.<kod|->]]]" — kod O1..O5. */
+    private record IssFilter(int page, long kassa, int type, String code) {
+        static IssFilter parse(String arg) {
+            int page = 0; long kassa = 0; int type = 0; String code = "-";
+            if (arg != null && !arg.isBlank()) {
+                String[] p = arg.split("\\.");
+                try {
+                    page = Integer.parseInt(p[0]);
+                    kassa = p.length > 1 ? Long.parseLong(p[1]) : 0;
+                    type = p.length > 2 ? Integer.parseInt(p[2]) : 0;
+                    code = p.length > 3 && !p[3].isBlank() ? p[3] : "-";
+                } catch (NumberFormatException ignored) { }
+            }
+            if (type < 0 || type >= ShipmentControlService.TYPE_KEYS.length) type = 0;
+            return new IssFilter(page, kassa, type, code);
+        }
+        String tail() { return "." + kassa + "." + type + "." + code; }
+    }
+
+    private List<Shipment> filteredIssues(AppUser u, IssFilter f) {
+        List<Shipment> list = new ArrayList<>(ships.visibleIssuesFor(u, f.kassa() > 0 ? f.kassa() : null));
+        if (f.type() > 0) list.removeIf(x -> !ShipmentControlService.typeMatches(x, f.type()));
+        if (!f.code().equals("-")) list.removeIf(x -> !x.issueList().contains(f.code()));
+        return list;
+    }
+
+    /** 📦 Kamchilikli (qarzdagi) otgruzkalar: muddat/masul/status/izoh/telefon — otdel, tur, kamchilik filtri bilan. */
     void issueList(AppUser u, String arg, long chatId, int msgId) {
-        int page = 0;
-        try { if (!arg.isBlank()) page = Integer.parseInt(arg); } catch (NumberFormatException ignored) { }
-        List<Shipment> list = ships.visibleIssuesFor(u, null);
+        IssFilter f = IssFilter.parse(arg);
+        int page = f.page();
+        boolean admin = u.getRole() == Role.SUPERADMIN || u.getRole() == Role.BUXGALTER;
+        List<Shipment> base = filteredIssues(u, new IssFilter(0, f.kassa(), 0, "-"));
+        List<Shipment> list = filteredIssues(u, f);
         StringBuilder sb = new StringBuilder("📦 <b>Otgruzka kamchiliklari</b>"
-                + (u.getRole() == Role.KASSIR ? "" : " (hammasi)") + "\n");
+                + (u.getRole() == Role.KASSIR ? "" : " (hammasi)"));
+        if (f.kassa() > 0) sb.append(" — ").append(esc(notifier.kassaName(f.kassa())));
+        if (f.type() > 0) sb.append(" · ").append(ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[f.type()]));
+        if (!f.code().equals("-")) sb.append(" · ").append(ShipmentControlService.issueShort(f.code()));
+        sb.append("\n");
         if (list.isEmpty()) sb.append("\nKamchilikli otgruzkalar yo'q ✅");
         else sb.append("Qarzdagi otgruzkalar: <b>").append(list.size()).append("</b> ta — ")
                .append(ShipmentControlService.issueSummary(list))
                .append("\nMoySklad'da otgruzkani ochib to'ldiring, bot o'zi tekshiradi. Tanlang:");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("🏢 Kontragentlar (" + agents.visibleFor(u).size() + ")", "kg:el"),
-                      btn("✅ 📦 Otgruzkalar (" + list.size() + ")", "kg:ol")));
+                      btn("✅ 📦 Otgruzkalar (" + ships.visibleIssuesFor(u, null).size() + ")", "kg:ol")));
         int from = page * PAGE;
         for (int i = from; i < Math.min(list.size(), from + PAGE); i++) {
             Shipment x = list.get(i);
@@ -379,13 +498,58 @@ public class ControlViewHandler {
             rows.add(irow(btn(label, "kg:dv:" + x.getId())));
         }
         List<InlineKeyboardButton> nav = new ArrayList<>();
-        if (page > 0) nav.add(btn("⬅️ Oldingi", "kg:ol:" + (page - 1)));
-        if (from + PAGE < list.size()) nav.add(btn("Keyingi ➡️", "kg:ol:" + (page + 1)));
+        if (page > 0) nav.add(btn("⬅️ Oldingi", "kg:ol:" + (page - 1) + f.tail()));
+        if (from + PAGE < list.size()) nav.add(btn("Keyingi ➡️", "kg:ol:" + (page + 1) + f.tail()));
         if (!nav.isEmpty()) rows.add(nav);
-        if (!list.isEmpty() && u.getRole() != Role.KASSIR) rows.add(irow(btn("📥 Excel (qarzdorlar, kamchilik ustuni bilan)", "kg:dx:0")));
+        // ❗ kamchilik turi filtri
+        java.util.Map<String, Integer> byCode = new java.util.LinkedHashMap<>();
+        for (Shipment x : base) for (String c : x.issueList()) byCode.merge(c, 1, Integer::sum);
+        if (!byCode.isEmpty()) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn((f.code().equals("-") ? "✅ " : "") + "Hammasi (" + base.size() + ")", "kg:ol:0." + f.kassa() + "." + f.type() + ".-"));
+            for (var e : byCode.entrySet()) {
+                r.add(btn((f.code().equals(e.getKey()) ? "✅ " : "") + ShipmentControlService.issueShort(e.getKey()) + " (" + e.getValue() + ")",
+                        "kg:ol:0." + f.kassa() + "." + f.type() + "." + e.getKey()));
+                if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+            }
+            if (!r.isEmpty()) rows.add(r);
+        }
+        // 🏢/👤 kontragent turi
+        {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn((f.type() == 0 ? "✅ " : "") + "Barcha tur", "kg:ol:0." + f.kassa() + ".0." + f.code()));
+            for (int t = 1; t < ShipmentControlService.TYPE_KEYS.length; t++)
+                r.add(btn((f.type() == t ? "✅ " : "") + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[t])
+                        + " (" + ShipmentControlService.countType(base, t) + ")", "kg:ol:0." + f.kassa() + "." + t + "." + f.code()));
+            rows.add(r);
+        }
+        if (admin) {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            r.add(btn(f.kassa() == 0 ? "✅ Hammasi" : "Hammasi", "kg:ol:0.0." + f.type() + "." + f.code()));
+            for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
+                if (k.isCashless()) continue;
+                r.add(btn((f.kassa() == k.getId() ? "✅ " : "🏪 ") + k.getName(), "kg:ol:0." + k.getId() + "." + f.type() + "." + f.code()));
+                if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+            }
+            if (!r.isEmpty()) rows.add(r);
+        }
+        if (!list.isEmpty()) rows.add(irow(btn("📥 Excel (shu filtr bilan)", "kg:ox:" + f.kassa() + "." + f.type() + "." + f.code())));
         rows.add(tools(u, "ol"));
         rows.add(irow(ks.bk("kg:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+
+    /** arg: "<kassa>.<tur>.<kod>" — kamchilikli otgruzkalar Excel (kamchilik ustuni bilan). */
+    void issueExcel(AppUser u, String arg, long chatId) {
+        IssFilter f = IssFilter.parse("0." + (arg == null ? "" : arg));
+        List<Shipment> list = filteredIssues(u, f);
+        byte[] xlsx = excel.buildDebts(list, notifier::userName, notifier::kassaName, ks.zone());
+        sender.sendDocument(chatId, xlsx, "otgruzka_kamchiliklari_" + ks.today() + ".xlsx",
+                "📦 Kamchilikli otgruzkalar: " + list.size() + " ta"
+                + (f.kassa() > 0 ? " · " + notifier.kassaName(f.kassa()) : "")
+                + (f.type() > 0 ? " · " + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[f.type()]) : "")
+                + (f.code().equals("-") ? "" : " · " + ShipmentControlService.issueShort(f.code())));
     }
 
 
@@ -398,13 +562,17 @@ public class ControlViewHandler {
             try {
                 v = agents.recheck(ac);
                 ac = agents.find(id).orElse(ac);
-                if (v == null) note = "\n\n🗑 Kontragent MoySklad'da topilmadi (o'chirilgan).";
+                if (v == null) {
+                    note = "\n\n🗑 Kontragent MoySklad'da topilmadi (o'chirilgan) — xato yopildi.";
+                    if (ac.getStatus() == AgentCheck.Status.OCHIQ) agents.markDeleted(ac);
+                }
                 else if (v.isEmpty()) note = "\n\n✅ Hozir xato yo'q.";
             } catch (Exception e) { note = "\n\n⚠️ MoySklad'dan o'qilmadi: " + esc(String.valueOf(e.getMessage())); }
         }
         StringBuilder sb = new StringBuilder("⚠️ <b>Kontragent xatosi</b> · ");
         sb.append(switch (ac.getStatus()) {
-            case OCHIQ -> "🔴 tuzatilmagan"; case TUZATILDI -> "✅ tuzatildi"; case ETIBORSIZ -> "🙈 e'tiborsiz"; case OK -> "✅ ok"; });
+            case OCHIQ -> "🔴 tuzatilmagan"; case TUZATILDI -> "✅ tuzatildi"; case ETIBORSIZ -> "🙈 e'tiborsiz"; case OK -> "✅ ok";
+            case OCHIRILDI -> "🗑 o'chirilgan"; });
         sb.append("\n\n🏢 <b>").append(esc(ac.getAgentName())).append("</b>\n👤 Yaratgan: ").append(esc(agents.who(ac)));
         if (ac.getKassaId() != null) sb.append(" · ").append(esc(kassaRepo.findById(ac.getKassaId()).map(Kassa::getName).orElse("")));
         sb.append("\n🕒 ").append(ac.getMsCreatedAt() == null ? "—" : ac.getMsCreatedAt().format(DTF)).append("\n\n");
