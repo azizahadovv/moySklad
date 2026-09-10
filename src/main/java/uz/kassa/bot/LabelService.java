@@ -88,10 +88,6 @@ public class LabelService {
         return toDisplay.getOrDefault(canonical, canonical);
     }
 
-    public List<String> displayAll(List<String> canonicals) {
-        return canonicals.stream().map(this::display).toList();
-    }
-
     /** Kelgan tugma matnini kanonik nomga qaytarish (mos kelmasa — o'zi). */
     public String canonical(String text) {
         return toCanonical.getOrDefault(text, text);

@@ -14,6 +14,10 @@ public class Session {
         RJ_SUB_REASON, SBP_NAQD, SBP_KLIK,
         // Admin oqimlari
         ADM_AU_PICK, ADM_AU_TGID, ADM_AU_NAME, ADM_AU_ROLE, ADM_AU_KASSA, ADM_AU_FORCE,
+        // ✍️ Yangi xodim (MoySklad'da yo'q): ism → telefon → lavozim → rol → otdel
+        ADM_AU_NNAME, ADM_AU_NPHONE, ADM_AU_NPOS,
+        // 💼 Xodim kartasida lavozimni o'zgartirish
+        ADM_CT_POS,
         ADM_AK_NAME, ADM_AK_MSID, ADM_AK_GROUP,
         ADM_IB_OWNER, ADM_IB_NAQD, ADM_IB_KLIK, ADM_IB_SANA,
         // Korrektirovka: otdel (kassa/buxgalteriya) tanlash -> pul turi -> summa -> sabab -> sana -> soat

@@ -6,15 +6,11 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import uz.kassa.bot.*;
 import uz.kassa.domain.*;
-import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.KassaRepo;
 import uz.kassa.service.LedgerService;
-import uz.kassa.service.NotificationService;
-import uz.kassa.service.moysklad.MoySkladClient;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import static uz.kassa.bot.Keyboards.*;
 import static uz.kassa.bot.TextUtil.*;
 import static uz.kassa.bot.handlers.AdminSupport.*;
@@ -147,13 +143,6 @@ public class AdminSupport {
         if (d == null || !d.free()) { navMenu(u, s, "sozlash", chatId); return; }
         navTo(u, s, "m:" + key, chatId, "<b>" + esc(d.title()) + "</b>\n\nBo'limni tanlang:", schema.current(key));
     }
-
-    /** Eski nom — guruh sahifasi (endi sxemali menyu). */
-    void navGroup(AppUser u, Session s, String group, long chatId) {
-        String key = MenuSchemaService.SUBMENUS.get(group);
-        navMenu(u, s, key == null ? "sozlash" : key, chatId);
-    }
-
 
     /** Tugma qaysi guruhga tegishli (guruhga «Orqaga» uchun). */
     static String groupOf(String item) {

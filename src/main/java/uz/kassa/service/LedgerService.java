@@ -74,11 +74,6 @@ public class LedgerService {
                 .orElseGet(() -> Balance.builder().ownerType(ot).ownerId(oid).moneyType(mt).build());
     }
 
-    @Transactional(readOnly = true)
-    public List<Balance> balancesOf(OwnerType ot, Long oid) {
-        return balanceRepo.findByOwnerTypeAndOwnerId(ot, oid);
-    }
-
     private void touch(Balance b) {
         b.setUpdatedAt(Instant.now());
         balanceRepo.save(b);

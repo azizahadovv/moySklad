@@ -15,7 +15,6 @@ import java.awt.image.BufferedImage;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,7 +56,6 @@ public class DailyReportService {
     private final SettingsService settings;
     private final DailyReportConfirmRepo confirmRepo;
     private final Sender sender;
-    private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
     private final uz.kassa.service.moysklad.MoySkladAuditService auditSvc;
 
     public record Row(String nuqta, String kassir, long msSavdo, boolean msKnown, long botSavdo,

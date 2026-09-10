@@ -18,6 +18,10 @@ public class Guest {
     /** «Kontakt ulashish» tugmasi orqali kelgan telefon raqami. */
     private String phone;
 
+    /** 🔗 Taklif havolasi bilan kirgan bo'lsa — token (kontakt kelganda shu xodimga ulanadi). */
+    @Column(name = "invite_token")
+    private String inviteToken;
+
     @Builder.Default
     @Column(name = "first_seen", nullable = false)
     private Instant firstSeen = Instant.now();

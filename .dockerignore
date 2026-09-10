@@ -1,0 +1,13 @@
+# Build kontekstiga faqat pom.xml + src kerak — qolgani yuborilmaydi (tezroq, kichikroq)
+.git
+target
+logs
+bot.log
+backups
+docs
+tahlil
+*.md
+.env*
+.idea
+.vscode
+.claude

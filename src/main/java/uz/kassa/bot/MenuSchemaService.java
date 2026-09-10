@@ -146,7 +146,6 @@ public class MenuSchemaService {
 
     public boolean customized(String key) { return order.containsKey(key) || cols.containsKey(key); }
     public int cols(String key) { return cols.getOrDefault(key, 2); }
-    public static boolean isFree(String key) { MenuDef d = MENUS.get(key); return d != null && d.free(); }
 
     /** Menyu tugmalari joriy tartibda. */
     public List<String> current(String key) {

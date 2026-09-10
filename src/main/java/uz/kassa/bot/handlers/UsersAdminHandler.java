@@ -8,13 +8,10 @@ import uz.kassa.bot.*;
 import uz.kassa.domain.*;
 import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.KassaRepo;
-import uz.kassa.service.LedgerService;
 import uz.kassa.service.NotificationService;
 import uz.kassa.service.moysklad.MoySkladClient;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import static uz.kassa.bot.Keyboards.*;
 import static uz.kassa.bot.TextUtil.*;
 import static uz.kassa.bot.handlers.AdminSupport.*;
@@ -32,12 +29,12 @@ public class UsersAdminHandler {
     private final AppUserRepo userRepo;
     private final KassaRepo kassaRepo;
     private final uz.kassa.repo.GuestRepo guestRepo;
-    private final MoySkladClient msClient;
     private final NotificationService notify;
     private final uz.kassa.service.AuditService audit;
     private final AdminSupport sup;
     private final uz.kassa.service.control.EmployeeLinkService link;
     private final uz.kassa.service.control.UserMergeService merge;
+    private final uz.kassa.service.control.InviteService invite;
 
 
     /* ---------- 🔄 ROL O'ZGARTIRISH ---------- */
@@ -173,12 +170,15 @@ public class UsersAdminHandler {
             rows.add(irow(btn("👔 " + label, "a:me:" + i)));
         }
         rows.add(irow(btn("✍️ Telefon raqam bilan qidirish", "a:gu:m")));
+        rows.add(irow(btn("➕ Yangi xodim (MoySklad'da ham, botda ham yo'q)", "a:aun")));
         rows.add(irow(btn("❌ Bekor", "cx")));
         sender.send(chatId, "👥 <b>Yangi foydalanuvchi</b>\n\n"
                 + (guests.isEmpty() ? "" : "👤 — botga yozgan odamlar\n")
                 + (emps.isEmpty() ? "" : "👔 — MoySklad xodimlari (Владелец-сотрудник): "
                     + "tanlansangiz Telegram'siz yaratiladi, odam botga kirib telefonini "
                     + "yuborsa avtomatik ulanadi\n")
+                + "➕ — hech qayerda yo'q odam: ism, telefon, lavozim, rol, otdel qo'lda; "
+                + "so'ng 🔗 taklif havolasi chiqadi (24 soat) — xodim bosib telefonini yuborsa tasdiqsiz ulanadi\n"
                 + "\nBirini tanlang:", inline(rows));
     }
 
@@ -208,6 +208,66 @@ public class UsersAdminHandler {
                 irow(btn("❌ Bekor", "cx")))));
     }
 
+
+    /* ---------- ➕ Yangi xodim (hech qayerda yo'q): ism → telefon → lavozim → rol → otdel ---------- */
+
+    void auNewStart(Session s, long chatId, int msgId) {
+        s.reset();
+        s.data.put("auNew", true);
+        s.state = Session.State.ADM_AU_NNAME;
+        sender.edit(chatId, msgId, "➕ <b>Yangi xodim</b>\n\n1/3 · Ism-familiyasini kiriting:");
+    }
+
+    void auNewName(Session s, String text, long chatId) {
+        String name = text.trim();
+        if (name.length() < 3 || name.length() > 120) {
+            sender.send(chatId, "⚠️ Ism-familiya 3–120 belgi bo'lsin. Qayta kiriting:");
+            return;
+        }
+        s.data.put("name", name);
+        s.state = Session.State.ADM_AU_NPHONE;
+        sender.send(chatId, "2/3 · 📞 Telefon raqami (masalan <code>+998901234567</code>), "
+                + "yoki «<b>-</b>» — hozircha yo'q.\n"
+                + "<i>Telefon yozilsa taklif havolasi faqat shu raqamga ishlaydi; "
+                + "yozilmasa xodim yuborgan raqam kartaga yoziladi.</i>");
+    }
+
+    void auNewPhone(Session s, String text, long chatId) {
+        String t = text.trim();
+        String phone = t.equals("-") ? "" : t.replaceAll("\\D", "");
+        if (!phone.isEmpty() && (phone.length() < 9 || phone.length() > 15)) {
+            sender.send(chatId, "⚠️ Raqam noto'g'ri. <code>+998901234567</code> ko'rinishida yoki «-» kiriting:");
+            return;
+        }
+        if (!phone.isEmpty()) {
+            var dup = userRepo.findAll().stream()
+                    .filter(x -> x.getPhone() != null && uz.kassa.bot.TextUtil.phoneEq(x.getPhone(), phone))
+                    .findFirst();
+            if (dup.isPresent()) {
+                sender.send(chatId, "⚠️ Bu raqam allaqachon <b>" + esc(dup.get().getFullName()) + "</b>"
+                        + (dup.get().isActive() ? "" : " (nofaol)") + "da yozilgan.\nBoshqa raqam kiriting yoki «-»:",
+                        inline(List.of(irow(btn("👤 Kartasini ochish", "a:ctu:" + dup.get().getId())),
+                                irow(btn("❌ Bekor", "cx")))));
+                return;
+            }
+        }
+        s.data.put("empPhone", phone);
+        s.state = Session.State.ADM_AU_NPOS;
+        sender.send(chatId, "3/3 · 💼 Lavozimi (masalan <i>Sotuv menejeri</i>), yoki «<b>-</b>»:");
+    }
+
+    void auNewPos(Session s, String text, long chatId) {
+        String t = text.trim();
+        if (t.length() > 120) t = t.substring(0, 120);
+        s.data.put("auPos", t.equals("-") ? "" : t);
+        s.state = Session.State.ADM_AU_ROLE;
+        sender.send(chatId, "👤 <b>" + esc(s.getStr("name")) + "</b>"
+                + (s.getStr("empPhone").isEmpty() ? "" : " · " + esc(s.getStr("empPhone")))
+                + (t.equals("-") ? "" : " · " + esc(t)) + "\n\nRolini tanlang:", inline(List.of(
+                irow(btn("👤 Kassir", "a:rl:K")),
+                irow(btn("🧮 Buxgalter", "a:rl:B"), btn("👑 SuperAdmin", "a:rl:S")),
+                irow(btn("❌ Bekor", "cx")))));
+    }
 
     void auPick(Session s, String arg, long chatId, int msgId) {
         if (s.state != Session.State.ADM_AU_PICK) return;
@@ -349,6 +409,7 @@ public class UsersAdminHandler {
         String phoneRaw = s.getStr("empPhone");
         String phone = phoneRaw == null ? "" : phoneRaw.replaceAll("\\D", "");
         String empId = s.getStr("empId"), empUid = s.getStr("empUid");
+        String pos = s.getStr("auPos");
         // Dublikat himoyasi: MoySklad id/uid, telefon yoki ism-familiya o'xshash FAOL foydalanuvchi bormi?
         if (!Boolean.TRUE.equals(s.data.get("auForce"))) {
             AppUser ex = merge.findExisting(name, phone, empId, empUid);
@@ -392,6 +453,7 @@ public class UsersAdminHandler {
                 .phone(phone.isEmpty() ? null : phone)
                 .msEmployeeId(empId == null || empId.isBlank() ? null : empId)
                 .msUid(empUid == null || empUid.isBlank() ? null : empUid)
+                .jobTitle(pos == null || pos.isBlank() ? null : pos)
                 .active(true).build());
         audit.log(null, "USER_QOSHILDI", "user", created.getId(), name + " (" + role + ")"
                 + (empId == null || empId.isBlank() ? "" : " · MoySklad " + empId));
@@ -399,14 +461,30 @@ public class UsersAdminHandler {
             try { link.applyDepartment(created, null); } catch (Exception ignored) { }   // MoySklad otdeli/rahbarligi
         if (tgId != null) guestRepo.deleteById(tgId);   // ro'yxatga olindi — mehmonlardan chiqadi
         String where = kassaId == null ? "" : "\nKassa: " + esc(names.owner(OwnerType.KASSA, kassaId));
+        if (tgId != null) {
+            sender.edit(chatId, msgId, "✅ Foydalanuvchi qo'shildi:\n<b>" + esc(name) + "</b> ("
+                    + role + ")" + where
+                    + "\nTelegram ID: <code>" + tgId + "</code>\n\n"
+                    + "Endi u botga <b>/start</b> yozsa — menyusi ochiladi.", cardKb(created));
+            return;
+        }
+        // Telegram'siz yaratildi — 🔗 taklif havolasi darhol (24 soat, bir martalik, tasdiqsiz)
+        String url = invite.linkFor(created, null);
         sender.edit(chatId, msgId, "✅ Foydalanuvchi qo'shildi:\n<b>" + esc(name) + "</b> ("
                 + role + ")" + where
-                + (tgId != null
-                    ? "\nTelegram ID: <code>" + tgId + "</code>\n\n"
-                      + "Endi u botga <b>/start</b> yozsa — menyusi ochiladi."
-                    : (phone.isEmpty() ? "" : "\nTelefon: <code>" + esc(phone) + "</code>")
-                      + "\n\nℹ️ Telegram hali ulanmagan — u botga kirib «📱 Telefon raqamni "
-                      + "yuborish»ni bossa avtomatik ulanadi."));
+                + (phone.isEmpty() ? "" : "\nTelefon: <code>" + esc(phone) + "</code>")
+                + (created.getJobTitle() == null ? "" : "\nLavozim: " + esc(created.getJobTitle()))
+                + "\n\n🔗 <b>Taklif havolasi</b> (" + invite.expiresText(created) + " gacha, bir martalik):\n"
+                + "<code>" + esc(url) + "</code>\n\n"
+                + "Xodimga yuboring — havolani bosib 📱 telefonini yuborsa <b>tasdiqsiz</b> ulanadi"
+                + (phone.isEmpty() ? " (yuborgan raqami kartaga yoziladi)."
+                    : " (raqam kartadagi bilan bir xil bo'lishi shart).")
+                + "\nHavolasiz ham bo'ladi: botga kirib kontakt yuborsa, telefoni mos kelsa o'zi ulanadi.",
+                cardKb(created));
+    }
+
+    private static InlineKeyboardMarkup cardKb(AppUser u) {
+        return inline(List.of(irow(btn("👤 Karta (otdel · rahbarlik · lavozim)", "a:ctu:" + u.getId()))));
     }
 
 

@@ -2,11 +2,9 @@ package uz.kassa.bot.handlers;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import uz.kassa.bot.*;
 import uz.kassa.domain.*;
-import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.KassaRepo;
 import uz.kassa.service.LedgerService;
 import uz.kassa.service.NotificationService;

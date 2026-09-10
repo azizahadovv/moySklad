@@ -45,7 +45,5 @@ public class ControlRefreshService {
         return 0;
     }
 
-    public boolean isRunning() { return running.get(); }
-
     public String lastResult() { return lastResult; }
 }

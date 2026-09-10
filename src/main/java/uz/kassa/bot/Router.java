@@ -6,7 +6,6 @@ import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import uz.kassa.bot.handlers.AdminHandler;
 import uz.kassa.bot.handlers.BuxgalterHandler;
 import uz.kassa.bot.handlers.KassirHandler;
@@ -50,7 +49,6 @@ public class Router {
     private final AuditService audit;
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
-    private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
     private final uz.kassa.service.moysklad.MoySkladAuditService auditSvc;
     private final uz.kassa.service.DailyReportService dailyReport;
     private final MenuSupport menus;
@@ -134,15 +132,12 @@ public class Router {
         Optional<AppUser> uo = userRepo.findByTelegramId(tgId);
         if (uo.isEmpty() || !uo.get().isActive()) {
             members.rememberGuest(m);
-            var shareBtn = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton(
-                    "📱 Telefon raqamni yuborish");
-            shareBtn.setRequestContact(true);
-            var row = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow();
-            row.add(shareBtn);
-            var kb = new ReplyKeyboardMarkup();
-            kb.setKeyboard(java.util.List.of(row));
-            kb.setResizeKeyboard(true);
-            kb.setOneTimeKeyboard(true);
+            // 🔗 Taklif havolasi: /start inv_<token> — kontakt yuborsa tasdiqsiz shu xodimga ulanadi
+            if (text.startsWith("/start ")) {
+                String tok = uz.kassa.service.control.InviteService.tokenOf(text.substring(7));
+                if (tok != null) { members.onStartInvite(m, tok); return; }
+            }
+            var kb = MembershipTracker.contactKb();
             sender.send(chatId, "👋 Xush kelibsiz! Sizni hali tanimadim.\n\n"
                     + "Pastdagi tugma orqali <b>telefon raqamingizni yuboring</b>.\n"
                     + "MoySklad xodimi bo'lsangiz (telefoningiz MoySklad'da yozilgan bo'lsa) — "
@@ -312,7 +307,7 @@ public class Router {
             return;
         }
 
-        if (text.equals("/start") || text.equals("/menu")) {
+        if (text.equals("/start") || text.startsWith("/start ") || text.equals("/menu")) {
             s.reset();
             sender.send(chatId, "Assalomu alaykum, <b>" + esc(user.getFullName()) + "</b>!\n"
                     + menus.otdelLabel(user), menus.menuFor(user));

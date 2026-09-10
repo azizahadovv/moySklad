@@ -2,17 +2,10 @@ package uz.kassa.bot.handlers;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import uz.kassa.bot.*;
 import uz.kassa.domain.*;
-import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.KassaRepo;
-import uz.kassa.service.LedgerService;
-import uz.kassa.service.NotificationService;
-import uz.kassa.service.moysklad.MoySkladClient;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +25,6 @@ public class AdminHandler {
     private final BuxgalterHandler bux;
     private final uz.kassa.service.moysklad.MoySkladSyncService syncService;
     private final uz.kassa.service.AuditService audit;
-    private final PermService permSvc;
     private final uz.kassa.config.AppProps props;
     private final uz.kassa.service.BalansService balansSvc;
     private final uz.kassa.service.SettingsService settings;
@@ -66,6 +58,10 @@ public class AdminHandler {
         if (u.getRole() == Role.SUPERADMIN) switch (s.state) {
             case ADM_AU_TGID -> { usersH.auTgId(s, text, chatId); return true; }
             case ADM_AU_NAME -> { usersH.auName(s, text, chatId); return true; }
+            case ADM_AU_NNAME -> { usersH.auNewName(s, text, chatId); return true; }
+            case ADM_AU_NPHONE -> { usersH.auNewPhone(s, text, chatId); return true; }
+            case ADM_AU_NPOS -> { usersH.auNewPos(s, text, chatId); return true; }
+            case ADM_CT_POS -> { controlAdmin.onPosText(u, s, text, chatId); return true; }
             case ADM_AK_NAME -> { kassaH.akName(u, s, text, chatId); return true; }
             case ADM_AK_MSID -> { kassaH.akFinish(u, s, text, chatId); return true; }
             case ADM_IB_NAQD -> { balanceH.ibNaqd(s, text, chatId); return true; }
@@ -312,6 +308,7 @@ public class AdminHandler {
             case "rl" -> usersH.auRole(s, arg, chatId, msgId);
             case "ks" -> usersH.auKassa(s, arg, chatId, msgId);
             case "auf" -> usersH.saveUserForce(s, chatId, msgId);
+            case "aun" -> usersH.auNewStart(s, chatId, msgId);
             case "gr" -> kassaH.akGroup(u, s, arg, chatId, msgId);
             case "ib" -> balanceH.ibOwner(s, arg, chatId, msgId);
             case "ibd" -> balanceH.ibSanaBtn(u, s, arg, chatId, msgId);

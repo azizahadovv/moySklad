@@ -47,6 +47,7 @@ public class ControlAdminHandler {
     private final uz.kassa.repo.GuestRepo guestRepo;
     private final uz.kassa.bot.MenuSupport menus;
     private final UserMergeService mergeSvc;
+    private final InviteService invite;
 
     private static final String BACK = "a:ct";
 
@@ -129,6 +130,10 @@ public class ControlAdminHandler {
             case "ctuts" -> userTgSet(u, s, arg, chatId, msgId);
             case "ctutx" -> userTgUnlink(u, s, Long.parseLong(arg), chatId, msgId);
             case "ctuht" -> userHeadToggle(u, s, arg, chatId, msgId);
+            case "ctui" -> inviteLink(u, s, Long.parseLong(arg), chatId, msgId, false);
+            case "ctuin" -> inviteLink(u, s, Long.parseLong(arg), chatId, msgId, true);
+            case "ctuil" -> inviteLink(u, s, Long.parseLong(arg), chatId, 0, false);   // xabardagi tugma
+            case "ctup" -> posAsk(s, Long.parseLong(arg), chatId, msgId);
             case "cth" -> heads(chatId, msgId);
             case "cthk" -> headKassa(Long.parseLong(arg), chatId, msgId);
             case "ctht" -> headToggle(u, arg, chatId, msgId);
@@ -438,13 +443,23 @@ public class ControlAdminHandler {
                 : esc(e.name()) + (e.groupName().isBlank() ? "" : " · " + esc(e.groupName()))
                     + (e.position() == null || e.position().isBlank() ? "" : " · " + esc(e.position()))).append("\n");
         sb.append("🎖 Rahbar: ").append(headOf.isEmpty() ? "—" : esc(String.join(", ", headOf))).append("\n");
+        boolean hasPos = x.getJobTitle() != null && !x.getJobTitle().isBlank();
+        sb.append("💼 Lavozim: ").append(hasPos ? esc(x.getJobTitle()) : "—").append("\n");
         sb.append("📲 Telegram: ").append(x.getTelegramId() == null
                 ? "✖ <b>ulanmagan</b> — nazorat xabarlari unga bormaydi (SuperAdmin'ga tushadi)"
                 : "✅ ulangan").append("\n");
+        if (x.getTelegramId() == null)
+            sb.append("🔗 Taklif havolasi: ").append(invite.valid(x)
+                    ? "amalda, " + invite.expiresText(x) + " gacha (bir martalik, tasdiqsiz)"
+                    : "yo'q — 🔗 tugmasini bosing, xodimga yuboring").append("\n");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("🏪 Otdel", "a:ctuk:" + userId), btn("👔 MoySklad xodimi", "a:ctue:" + userId)));
-        rows.add(irow(btn("🎖 Rahbarlik (otdellar)", "a:ctuh:" + userId),
-                btn(x.getTelegramId() == null ? "🔗 Telegram ulash" : "📲 Telegram", "a:ctut:" + userId)));
+        rows.add(irow(btn("🎖 Rahbarlik (otdellar)", "a:ctuh:" + userId), btn("💼 Lavozim", "a:ctup:" + userId)));
+        if (x.getTelegramId() == null)
+            rows.add(irow(btn("🔗 Taklif havolasi (24 soat)", "a:ctui:" + userId),
+                    btn("👥 Mehmonlardan ulash", "a:ctut:" + userId)));
+        else
+            rows.add(irow(btn("📲 Telegram", "a:ctut:" + userId)));
         // Bitta karta — hamma amal shu yerda (avval rol/o'chirish faqat Ҳуқуқлар va Фойдаланувчилар'da edi)
         rows.add(irow(btn("🔐 Rol / huquqlar", "a:prc:" + userId), btn("🚫 Faolsizlantirish", "a:prx:" + userId)));
         rows.add(irow(btn("🔀 Dublikat bilan birlashtirish", "a:ctmgp:" + userId)));
@@ -692,6 +707,66 @@ public class ControlAdminHandler {
         userCard(s, userId, chatId, msgId);
     }
 
+
+    /* ---------- 🔗 Taklif havolasi: ulanmagan xodimga — tasdiqsiz, faqat telefon tekshiriladi ---------- */
+
+    private void inviteLink(AppUser admin, Session s, long userId, long chatId, int msgId, boolean renew) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) { employees(s, chatId, msgId); return; }
+        if (x.getTelegramId() != null) {
+            sender.send(chatId, "ℹ️ <b>" + esc(x.getFullName())
+                    + "</b> allaqachon Telegram'ga ulangan — havola kerak emas.");
+            userCard(s, userId, chatId, msgId);
+            return;
+        }
+        String url = renew ? invite.renew(x, admin.getId()) : invite.linkFor(x, admin.getId());
+        boolean hasPhone = x.getPhone() != null && !uz.kassa.bot.TextUtil.normPhone(x.getPhone()).isEmpty();
+        sender.send(chatId, "🔗 <b>" + esc(x.getFullName()) + "</b> — taklif havolasi\n"
+                + "<code>" + esc(url) + "</code>\n\n"
+                + "⏳ " + invite.expiresText(x) + " gacha amal qiladi · bir martalik · tasdiq so'ralmaydi.\n"
+                + (hasPhone
+                    ? "📞 Kartada raqam bor (<code>" + esc(x.getPhone()) + "</code>) — "
+                        + "xodim yuborgan raqam aynan shu bo'lishi shart."
+                    : "📞 Kartada raqam yo'q — xodim qaysi raqamni yubormasin, u kartaga yoziladi.")
+                + "\n\nHavolani nusxalab xodimga (Telegram, SMS, WhatsApp) yuboring. "
+                + "U bosib «📱 Telefon raqamni yuborish»ni bossa — darhol menyusi ochiladi, "
+                + "ochiq xatolari 2 daqiqada keladi.",
+                inline(List.of(irow(btn("🔄 Yangi havola (eskisini bekor qiladi)", "a:ctuin:" + userId)),
+                        irow(btn("👤 Karta", "a:ctu:" + userId)))));
+        if (msgId > 0) userCard(s, userId, chatId, msgId);
+    }
+
+    /* ---------- 💼 Lavozim (matn, faqat ko'rsatish uchun) ---------- */
+
+    private void posAsk(Session s, long userId, long chatId, int msgId) {
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) { employees(s, chatId, msgId); return; }
+        s.reset();
+        s.state = Session.State.ADM_CT_POS;
+        s.data.put("ctUser", userId);
+        boolean hasPos = x.getJobTitle() != null && !x.getJobTitle().isBlank();
+        sender.send(chatId, "💼 <b>" + esc(x.getFullName()) + "</b> — lavozimini kiriting "
+                + "(masalan <i>Sotuv menejeri</i>).\n"
+                + "Hozir: " + (hasPos ? esc(x.getJobTitle()) : "—")
+                + "\n«<b>-</b>» — o'chirish.", inline(List.of(irow(btn("❌ Bekor", "a:ctu:" + userId)))));
+    }
+
+    public void onPosText(AppUser admin, Session s, String text, long chatId) {
+        Long userId = s.data.get("ctUser") == null ? null : s.getLong("ctUser");
+        s.reset();
+        if (userId == null) return;
+        AppUser x = userRepo.findById(userId).orElse(null);
+        if (x == null) return;
+        String t = text.trim();
+        if (t.length() > 120) t = t.substring(0, 120);
+        String old = x.getJobTitle();
+        x.setJobTitle(t.equals("-") || t.isBlank() ? null : t);
+        userRepo.save(x);
+        String now = x.getJobTitle() == null ? "—" : x.getJobTitle();
+        audit.log(admin.getId(), "LAVOZIM", "user", x.getId(),
+                x.getFullName() + ": " + (old == null ? "—" : old) + " -> " + now);
+        userCard(s, userId, chatId, 0);
+    }
 
     /** 🎖 Rahbarlik: qaysi otdellarda rahbar (bir nechta bo'lishi mumkin). */
     private void userHeadPick(Session s, long userId, long chatId, int msgId) {

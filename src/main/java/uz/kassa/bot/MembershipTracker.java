@@ -3,17 +3,10 @@ package uz.kassa.bot;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.Message;
-import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
-import uz.kassa.bot.handlers.AdminHandler;
-import uz.kassa.bot.handlers.BuxgalterHandler;
-import uz.kassa.bot.handlers.KassirHandler;
 import uz.kassa.domain.*;
 import uz.kassa.repo.AppUserRepo;
-import uz.kassa.repo.OperationRepo;
-import uz.kassa.repo.SubmissionRepo;
 import uz.kassa.service.*;
 import java.util.Optional;
 import static uz.kassa.bot.TextUtil.*;
@@ -37,6 +30,49 @@ public class MembershipTracker {
     private final uz.kassa.service.DailyReportService dailyReport;
     private final MenuSupport menus;
     private final uz.kassa.service.control.EmployeeLinkService employeeLink;
+    private final uz.kassa.service.control.InviteService invite;
+
+    /** «📱 Telefon raqamni yuborish» tugmali klaviatura. */
+    static ReplyKeyboardMarkup contactKb() {
+        var shareBtn = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton(
+                "📱 Telefon raqamni yuborish");
+        shareBtn.setRequestContact(true);
+        var row = new org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow();
+        row.add(shareBtn);
+        var kb = new ReplyKeyboardMarkup();
+        kb.setKeyboard(java.util.List.of(row));
+        kb.setResizeKeyboard(true);
+        kb.setOneTimeKeyboard(true);
+        return kb;
+    }
+
+    /**
+     * 🔗 Taklif havolasi bilan kirdi (/start inv_<token>). Token mehmonda eslab qolinadi;
+     * kontakt kelganda {@link #onContact} shu xodimga tasdiqsiz ulaydi.
+     */
+    void onStartInvite(Message m, String token) {
+        long chatId = m.getChatId();
+        long tgId = m.getFrom().getId();
+        Optional<AppUser> owner = invite.byToken(token);
+        if (owner.isEmpty()) {
+            sender.send(chatId, "⚠️ Bu taklif havolasi <b>eskirgan yoki ishlatilgan</b> (24 soat, bir martalik).\n"
+                    + "SuperAdmin'dan yangi havola so'rang — yoki pastdagi tugma orqali telefon raqamingizni "
+                    + "yuboring: raqamingiz ro'yxatda bo'lsa o'zi ulanadi.", contactKb());
+            return;
+        }
+        AppUser x = owner.get();
+        if (x.getTelegramId() != null && !x.getTelegramId().equals(tgId)) {
+            sender.send(chatId, "⚠️ Bu havola allaqachon boshqa Telegram hisobiga ishlatilgan. "
+                    + "SuperAdmin'ga murojaat qiling.");
+            return;
+        }
+        guestRepo.findById(tgId).ifPresent(g -> { g.setInviteToken(token); guestRepo.save(g); });
+        boolean hasPhone = x.getPhone() != null && !TextUtil.normPhone(x.getPhone()).isEmpty();
+        sender.send(chatId, "👋 Assalomu alaykum! Siz <b>" + esc(x.getFullName()) + "</b> sifatida taklif qilindingiz"
+                + (x.getKassaId() == null ? "" : " · " + esc(menus.otdelLabel(x))) + ".\n\n"
+                + "Pastdagi tugma orqali <b>telefon raqamingizni yuboring</b> — tasdiqsiz darhol kirasiz"
+                + (hasPhone ? " (raqam kartangizdagi bilan bir xil bo'lishi kerak)." : "."), contactKb());
+    }
 
 
     /**
@@ -119,10 +155,51 @@ public class MembershipTracker {
             g.setPhone(m.getContact().getPhoneNumber());
             guestRepo.save(g);
         }
+        String contactPhone = m.getContact().getPhoneNumber();
+        // 🔗 Taklif havolasi bilan kirgan — token egasiga tasdiqsiz ulanadi (faqat telefon tekshiriladi)
+        if (g != null && g.getInviteToken() != null) {
+            var out = invite.accept(g.getInviteToken(), tgId, contactPhone);
+            AppUser x = out.user();
+            switch (out.result()) {
+                case LINKED -> {
+                    sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(x.getFullName()) + "</b>!\n"
+                            + menus.otdelLabel(x), menus.menuFor(x));
+                    notify.toRole(Role.SUPERADMIN, "🔗 <b>" + esc(x.getFullName())
+                            + "</b> taklif havolasi orqali botga ulandi · " + menus.otdelLabel(x)
+                            + "\nTelefon: <code>" + esc(contactPhone) + "</code>", null);
+                    return;
+                }
+                case PHONE_MISMATCH -> {
+                    sender.send(chatId, "⚠️ Bu havola <b>" + esc(x.getFullName()) + "</b> uchun, lekin yuborgan "
+                            + "raqamingiz kartadagi raqamga mos kelmadi — ulanmadingiz.\n"
+                            + "SuperAdmin'ga xabar ketdi, u tekshiradi.");
+                    notify.toRole(Role.SUPERADMIN, "⚠️ <b>" + esc(x.getFullName())
+                            + "</b> taklif havolasi bilan kirdi, lekin telefon mos kelmadi.\n"
+                            + "Kartada: <code>" + esc(x.getPhone()) + "</code>"
+                            + " · yuborildi: <code>" + esc(contactPhone) + "</code>\n"
+                            + "TelegramID: <code>" + tgId + "</code>\n\n"
+                            + "Raqam o'zgargan bo'lsa — quyidan o'sha xodimni tanlab ulang.",
+                            contactLinkKb(tgId));
+                    return;
+                }
+                case BUSY -> {
+                    sender.send(chatId, "⚠️ Bu Telegram hisobi boshqa xodimga ulangan — "
+                            + "SuperAdmin'ga murojaat qiling.");
+                    return;
+                }
+                case USED, EXPIRED -> {
+                    g.setInviteToken(null);
+                    guestRepo.save(g);
+                    boolean used = out.result() == uz.kassa.service.control.InviteService.Result.USED;
+                    String why = used ? "allaqachon ishlatilgan" : "eskirgan (24 soat)";
+                    sender.send(chatId, "⚠️ Taklif havolasi " + why
+                            + ". Raqamingiz ro'yxatda bo'lsa baribir ulanasiz…");
+                }
+            }
+        }
         // Jadvaldan (Sheets) telefon bilan oldindan yaratilgan foydalanuvchi bo'lsa — darhol ulaymiz.
         // Moslik faqat TO'LIQ raqam bo'yicha — suffiks (oxirgi 7 raqam) mosligi begona
         // odamni birovning akkauntiga (roli bilan!) ulab yuborishi mumkin edi.
-        String contactPhone = m.getContact().getPhoneNumber();
         if (!TextUtil.normPhone(contactPhone).isEmpty()) {
             for (AppUser cand : userRepo.findAll()) {
                 if (cand.getTelegramId() == null && cand.getPhone() != null

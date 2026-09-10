@@ -3,17 +3,12 @@ package uz.kassa.gsheets;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import uz.kassa.bot.NameService;
 import uz.kassa.domain.*;
 import uz.kassa.repo.*;
-import uz.kassa.service.LedgerService;
 import uz.kassa.service.moysklad.MoySkladClient;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * SHEETS → BOT: Kassalar, Foydalanuvchilar, Shablon varaqlaridagi operator tahrirlarini bazaga qo'llash.

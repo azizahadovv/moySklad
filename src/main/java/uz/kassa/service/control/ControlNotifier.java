@@ -32,6 +32,24 @@ public class ControlNotifier {
     private final KassaRepo kassaRepo;
     private final Sender sender;
     private final ControlConfig cfg;
+    private final InviteService invite;
+
+    /**
+     * «Xodim Telegram'ga ulanmagan» xabariga 🔗 taklif havolasi qatori — admin nusxalab xodimga yuboradi,
+     * xodim bosib telefonini yuborsa tasdiqsiz ulanadi (24 soat, bir martalik; eskirgan bo'lsa yangisi chiqadi).
+     */
+    public String inviteLine(AppUser u) {
+        if (u == null || u.getTelegramId() != null || !u.isActive()) return "";
+        try {
+            String url = invite.linkFor(u, null);
+            return "\n🔗 <b>Taklif havolasi</b> (" + invite.expiresText(u) + " gacha, tasdiqsiz): "
+                    + "<code>" + url + "</code>\n"
+                    + "<i>Xodimga yuboring — bosib 📱 telefonini yuborsa darhol ulanadi.</i>";
+        } catch (Exception e) {
+            log.warn("Taklif havolasi ({}): {}", u.getFullName(), e.getMessage());
+            return "";
+        }
+    }
 
     public static final String MS_DEMAND_URL = "https://online.moysklad.ru/app/#demand/edit?id=";
     public static final String MS_AGENT_URL = "https://online.moysklad.ru/app/#company/edit?id=";
@@ -144,6 +162,9 @@ public class ControlNotifier {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         if (kb != null && kb.getKeyboard() != null) rows.addAll(kb.getKeyboard());
         rows.add(List.of(linkBtn(u)));
+        if (u != null && u.getTelegramId() == null)   // 🔗 havolani yangi xabar sifatida olish
+            rows.add(List.of(InlineKeyboardButton.builder().text("🔗 Taklif havolasi (24 soat, tasdiqsiz)")
+                    .callbackData("a:ctuil:" + u.getId()).build()));
         return InlineKeyboardMarkup.builder().keyboard(rows).build();
     }
 }

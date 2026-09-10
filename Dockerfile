@@ -1,10 +1,13 @@
-# 1-bosqich: build
+# syntax=docker/dockerfile:1
+# 1-bosqich: build. Maven keshi (~/.m2) BuildKit cache mount'da saqlanadi —
+# har rebuild'da bog'liqliklar/plaginlar qayta yuklanmaydi, faqat o'zgargan kod kompilyatsiya bo'ladi.
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /app
 COPY pom.xml .
-RUN mvn -q dependency:go-offline
+RUN --mount=type=cache,target=/root/.m2 mvn -q -B dependency:go-offline
 COPY src ./src
-RUN mvn -q -DskipTests package
+RUN --mount=type=cache,target=/root/.m2 mvn -q -B -o -DskipTests package \
+    || mvn -q -B -DskipTests package
 
 # 2-bosqich: run
 FROM eclipse-temurin:17-jre

@@ -212,7 +212,8 @@ public class AgentCheckService {
             notifier.sendOne(creator, text, agentKb(a.id()));
         } else {
             notifier.send(notifier.superadmins(), "⚠️ <i>Xodim botga bog'lanmagan: " + esc(who(ac))
-                    + " — xabar sizga keldi. Pastdagi tugma bilan ulang, keyingi xabarlar unga boradi.</i>\n\n" + text,
+                    + " — xabar sizga keldi. Pastdagi tugma bilan ulang, keyingi xabarlar unga boradi.</i>"
+                    + notifier.inviteLine(creator) + "\n\n" + text,
                     ControlNotifier.withLink(agentKb(a.id()), creator));
         }
     }
@@ -289,14 +290,6 @@ public class AgentCheckService {
             notifier.sendOne(u, openListText(e.getValue()), null);
         }
     }
-
-
-    /** Xodim yaratgan, hali tuzatilmagan kontragentlar — Telegram ulanganda bir marta yuborish uchun. Bo'sh bo'lsa null. */
-    public String openText(AppUser u) {
-        List<AgentCheck> list = repo.findByStatusAndCreatorUserIdOrderByIdDesc(AgentCheck.Status.OCHIQ, u.getId());
-        return list.isEmpty() ? null : openListText(list);
-    }
-
 
     /** Xodimning ochiq (OCHIQ) tekshiruvlari — eskidan yangiga (kelish tartibi). */
     public List<AgentCheck> openFor(AppUser u) {

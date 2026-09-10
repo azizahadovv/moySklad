@@ -204,13 +204,6 @@ public final class Keyboards {
         return buxMenu(c -> !HIDDEN.contains(c), List.of(), superadmin, null);
     }
 
-    private static ReplyKeyboardMarkup replyMenu(KeyboardRow... rows) {
-        ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
-        m.setKeyboard(Arrays.asList(rows));
-        m.setResizeKeyboard(true);
-        return m;
-    }
-
     private static KeyboardRow row(String... texts) {
         KeyboardRow r = new KeyboardRow();
         for (String t : texts) r.add(new KeyboardButton(t));

@@ -6,9 +6,7 @@ import org.springframework.stereotype.Service;
 import uz.kassa.bot.TextUtil;
 import uz.kassa.config.AppProps;
 import uz.kassa.domain.*;
-import uz.kassa.repo.CategoryRepo;
 import uz.kassa.repo.ClickAccountRepo;
-import uz.kassa.repo.KassaRepo;
 import uz.kassa.repo.OperationRepo;
 import uz.kassa.service.LedgerService;
 import uz.kassa.service.NotificationService;
@@ -19,7 +17,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import uz.kassa.service.moysklad.SyncSupport.Ctx;
 
 /**

@@ -271,7 +271,8 @@ public class ShipmentControlService {
         AppUser owner = s.getOwnerUserId() == null ? null : userRepo.findById(s.getOwnerUserId()).orElse(null);
         if (owner == null || owner.getTelegramId() == null) {
             String warn = "\n\n⚠️ <i>Xodim " + (owner == null ? "botga bog'lanmagan: " + esc(s.getOwnerName())
-                    : esc(owner.getFullName()) + " Telegram'ga ulanmagan") + " — pastdagi tugma bilan ulang.</i>";
+                    : esc(owner.getFullName()) + " Telegram'ga ulanmagan") + " — pastdagi tugma bilan ulang.</i>"
+                    + notifier.inviteLine(owner);
             // xodimsiz oluvchilar — oddiy tugmalar; SuperAdmin'larga — ulash tugmasi bilan
             Set<AppUser> admins = notifier.superadmins();
             Set<Long> adminIds = new HashSet<>();
@@ -708,7 +709,8 @@ public class ShipmentControlService {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (u != null && u.getTelegramId() != null) notifier.sendOne(u, issuesMessage(e.getValue()), null);
             else notifier.send(notifier.superadmins(), "⚠️ <i>Xodim " + esc(u == null ? "#" + e.getKey() : u.getFullName())
-                    + " Telegram'ga ulanmagan — pastdagi tugma bilan ulang.</i>\n\n" + issuesMessage(e.getValue()),
+                    + " Telegram'ga ulanmagan — pastdagi tugma bilan ulang.</i>" + notifier.inviteLine(u)
+                    + "\n\n" + issuesMessage(e.getValue()),
                     ControlNotifier.withLink(null, u));
             for (Shipment s : e.getValue()) { s.setIssuesNotifiedAt(now); repo.save(s); }
         }
@@ -799,17 +801,6 @@ public class ShipmentControlService {
         return list.isEmpty() ? null : issuesMessage(list);
     }
 
-    /** Xodimning ochiq qarzdorlari (ega yoki Масъул): [soni, qoldiq summa]. */
-    public long[] debtSummary(AppUser u) {
-        List<Shipment> list = new ArrayList<>(repo.findByControlStatusAndOwnerUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()));
-        for (Shipment s : repo.findByControlStatusAndMasulUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()))
-            if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
-        long sum = 0;
-        for (Shipment s : list) sum += s.remain();
-        return new long[]{list.size(), sum};
-    }
-
-
     private String issuesMessage(List<Shipment> list) {
         list.sort(Comparator.comparing((Shipment s) -> s.getMoment() == null ? LocalDateTime.MIN : s.getMoment()).reversed());
         StringBuilder sb = new StringBuilder("📦 <b>Otgruzkalarda kamchilik bor</b> — " + list.size() + " ta ("
@@ -869,9 +860,6 @@ public class ShipmentControlService {
         }
         return all;
     }
-
-    public long issueCount() { return repo.countByIssuesNot(""); }
-
 
     /* ==================== UI / QO'LDA ==================== */
 

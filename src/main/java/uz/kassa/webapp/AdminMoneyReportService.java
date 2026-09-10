@@ -11,7 +11,6 @@ import uz.kassa.bot.TextUtil;
 import uz.kassa.config.AppProps;
 import uz.kassa.domain.*;
 import uz.kassa.repo.AppUserRepo;
-import uz.kassa.repo.KassaRepo;
 import uz.kassa.repo.OperationRepo;
 import uz.kassa.repo.SubmissionRepo;
 import uz.kassa.service.AuditService;
@@ -42,7 +41,6 @@ public class AdminMoneyReportService {
 
     private final SubmissionRepo subRepo;
     private final OperationRepo opRepo;
-    private final KassaRepo kassaRepo;
     private final AppUserRepo userRepo;
     private final NameService names;
     private final Sender sender;

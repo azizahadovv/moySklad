@@ -3,19 +3,8 @@ package uz.kassa.bot;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
-import org.telegram.telegrambots.meta.api.objects.Message;
-import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
-import uz.kassa.bot.handlers.AdminHandler;
-import uz.kassa.bot.handlers.BuxgalterHandler;
-import uz.kassa.bot.handlers.KassirHandler;
 import uz.kassa.domain.*;
-import uz.kassa.repo.AppUserRepo;
-import uz.kassa.repo.OperationRepo;
-import uz.kassa.repo.SubmissionRepo;
 import uz.kassa.service.*;
-import java.util.Optional;
 import static uz.kassa.bot.TextUtil.*;
 
 /**

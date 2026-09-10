@@ -41,6 +41,18 @@ public class AppUser {
     @Column(name = "control_welcome_at")
     private Instant controlWelcomeAt;
 
+    /** 🔗 Taklif havolasi tokeni (t.me/<bot>?start=inv_<token>) — bir martalik, ulangach NULL. */
+    @Column(name = "invite_token")
+    private String inviteToken;
+
+    /** Taklif havolasi muddati (24 soat). */
+    @Column(name = "invite_expires_at")
+    private Instant inviteExpiresAt;
+
+    /** 💼 Lavozim (qo'lda, faqat ko'rsatish uchun — huquqlarga ta'sir qilmaydi). */
+    @Column(name = "job_title")
+    private String jobTitle;
+
     @Builder.Default
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();

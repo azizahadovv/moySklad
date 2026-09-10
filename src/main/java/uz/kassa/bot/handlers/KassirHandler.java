@@ -1,7 +1,6 @@
 package uz.kassa.bot.handlers;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
@@ -30,7 +29,6 @@ public class KassirHandler {
     private final LedgerService ledger;
     private final TransferService transferService;
     private final SubmissionService submissionService;
-    private final CategoryRepo categoryRepo;
     private final KassaRepo kassaRepo;
     private final DebtRepo debtRepo;
     private final DayRepo dayRepo;
