@@ -46,6 +46,8 @@ public class Router {
     private final BuxgalterHandler bux;
     private final AdminHandler admin;
     private final uz.kassa.bot.handlers.KontragentHandler kontragent;
+    private final uz.kassa.bot.handlers.OmborHandler ombor;
+    private final uz.kassa.service.ombor.OmborSanoqService omborSanoq;
     private final AuditService audit;
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
@@ -332,6 +334,8 @@ public class Router {
 
         boolean handled;
         try {
+            // 🏬 Омбор — barcha rollar uchun (do'kon kesimida)
+            if (ombor.onText(user, s, text, chatId)) return;
             handled = switch (user.getRole()) {
                 case KASSIR -> kontragent.onText(user, s, text, chatId)
                         || kassir.onText(user, s, text, chatId);
@@ -372,6 +376,8 @@ public class Router {
                     return;
                 }
                 java.time.LocalDate d = java.time.LocalDate.parse(data.substring(6));
+                String block = omborSanoq.blockReason(d);   // 🏬 sanoq tasdiqlanmaguncha kun yopilmaydi
+                if (block != null) { sender.answerAlert(cb.getId(), block); return; }
                 boolean fresh = dailyReport.confirm(d, uo.get());
                 var c = dailyReport.confirmRepoView(d);
                 sender.editCaption(chatId, msgId, dailyReport.caption(d, dailyReport.rows(d), c), null);
@@ -410,6 +416,7 @@ public class Router {
             if (data.startsWith("tr:")) { decisionTransfer(user, data, chatId, msgId); return; }
             if (data.startsWith("sb:")) { decisionSubmission(user, s, data, chatId, msgId); return; }
             if (data.startsWith("kg:")) { kontragent.onCallback(user, s, data, chatId, msgId); return; }
+            if (data.startsWith("om:")) { ombor.onCallback(user, s, data, chatId, msgId); return; }
 
             boolean handled = switch (user.getRole()) {
                 case KASSIR -> kassir.onCallback(user, s, data, chatId, msgId);

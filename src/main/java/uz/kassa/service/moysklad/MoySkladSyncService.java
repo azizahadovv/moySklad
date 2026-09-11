@@ -52,6 +52,7 @@ public class MoySkladSyncService {
     private final OperationRepo opRepo;
     private final SettingsService settings;
     private final NotificationService notify;
+    private final uz.kassa.service.NotifySwitches sw;
     private final AppProps props;
 
     private volatile long lastAttempt = 0;
@@ -167,7 +168,7 @@ public class MoySkladSyncService {
                 && System.currentTimeMillis() - client.last403At() < 3600_000L
                 && System.currentTimeMillis() - lastPermWarnAt > 24 * 3600_000L) {
             lastPermWarnAt = System.currentTimeMillis();
-            notify.toRole(uz.kassa.domain.Role.SUPERADMIN,
+            notify.toRole(uz.kassa.service.NotifySwitches.TEXNIK_OGOH, uz.kassa.domain.Role.SUPERADMIN,
                     "🔑⚠️ MoySklad token HUQUQI yetmayapti (401/403) — ba'zi hujjatlar "
                     + "tizimga KIRMAYAPTI.\nOxirgi rad etilgan so'rov:\n<code>"
                     + TextUtil.esc(client.last403Url()) + "</code>\n"

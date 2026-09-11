@@ -47,6 +47,7 @@ public class DailyReportService {
     private static final DateTimeFormatter D_UZ = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
     private final uz.kassa.config.AppProps props;
+    private final NotifySwitches sw;
     private final KassaRepo kassaRepo;
     private final DayRepo dayRepo;
     private final OperationRepo opRepo;
@@ -131,6 +132,7 @@ public class DailyReportService {
         for (Role r : List.of(Role.SUPERADMIN, Role.BUXGALTER))
             for (AppUser u : userRepo.findByRoleAndActiveTrue(r)) {
                 if (u.getTelegramId() == null || !sent.add(u.getTelegramId())) continue;
+                if (!sw.allow(NotifySwitches.KUNLIK_HISOBOT, u)) continue;   // 🔕 auditoriya
                 try { sendTo(u.getTelegramId(), d); } catch (Exception e) { log.debug("Kunlik hisobot user {}: {}", u.getTelegramId(), e.getMessage()); }
             }
         settings.set(LAST_SENT_KEY, d.toString());
@@ -144,6 +146,7 @@ public class DailyReportService {
         if (!hhmm.equals(time())) return;
         LocalDate today = now.toLocalDate();
         if (today.toString().equals(settings.get(LAST_SENT_KEY).orElse(""))) return;
+        if (!sw.on(NotifySwitches.KUNLIK_HISOBOT)) { log.info("Kunlik hisobot: 🔕 o'chirilgan (Хабарномалар)"); return; }
         sendScheduled(today);
     }
 

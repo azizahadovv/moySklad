@@ -433,6 +433,7 @@ async function pageHisobot(seg, q) {
   if (view === 'qarz') return hisobotQarz(seg.slice(1), q);
   if (view === 'xato') return hisobotXato(seg.slice(1), q);
   if (view === 'nazorat') return hisobotNazorat(q);
+  if (view === 'ombor') return hisobotOmbor(seg.slice(1), q);
   setTitle('Ҳисоботлар', 'бўлимни танланг');
   $main.innerHTML = `
     <div class="label">Кун бўйича</div><div class="tiles">
@@ -448,6 +449,12 @@ async function pageHisobot(seg, q) {
       ${tile('🧾', 'Қарздорлар', 'отгрузка тўлови · муддат · ёпиш', '#/hisobot/qarz')}
       ${tile('⚠️', 'Контрагент хатолари', 'мажбурий майдонлар · дубликат', '#/hisobot/xato')}
       ${tile('📊', 'Назорат статистикаси', 'ходим кесимида: топилди · тузатилди · очиқ', '#/hisobot/nazorat')}
+    </div>
+    <div class="label">🏬 Омбор</div><div class="tiles">
+      ${tile('🏬', 'Омбор', 'камчиликлар · қолдиқ · fill rate', '#/hisobot/ombor')}
+      ${tile('⚠️', 'Омбор камчиликлари', 'манфий қолдиқ · ҳужжат · дубликат', '#/hisobot/ombor/kamchilik')}
+      ${tile('🧾', 'Буюртма қораламалари', 'закупщик → завсклад → директор', '#/hisobot/ombor/qoralama')}
+      ${tile('🔢', 'Санoq ва сўровлар', 'ротацион санoq · дўкон сўровлари', '#/hisobot/ombor/sanoq')}
     </div>
     <div class="label">Файл</div><div class="tiles">
       ${tile('📊', 'Excel', 'умумий / касса — чатга', '#/hisobot/excel')}
@@ -787,6 +794,119 @@ async function xatoCard(id, recheck = false) {
   const ig = document.getElementById('ig');
   if (ig) ig.onclick = () => confirmSheet('Эътиборсиз қолдирилсинми?', 'Бу контрагент хатолар рўйхатидан чиқади, ходимга хабар бормайди.',
     async () => { try { await post('/admin/control/errors/ignore', { id: +id }); toast('🙈 Эътиборсиз'); go('#/hisobot/xato'); } catch (e) { toast(e.message); } });
+}
+
+/* ============================================================
+   🏬 ОМБОР — dashboard · камчиликлар · қоралама · санoq/сўров
+   (docs/OMBOR-TZ.md §10; бот билан бир манба — /api/admin/ombor/*)
+   ============================================================ */
+const SEV = { MUHIM: 'bad', OGOH: 'warn', INFO: '' };
+async function hisobotOmbor(seg, q) {
+  const view = seg[0] || '';
+  if (view === 'kamchilik') return omborKamchilik(seg.slice(1), q);
+  if (view === 'qoralama') return omborQoralama(seg.slice(1), q);
+  if (view === 'sanoq') return omborSanoq(q);
+  const d = await api('/admin/ombor/dashboard');
+  setTitle('🏬 Омбор', (d.enabled ? '' : '⚪ ўчирилган · ') + d.asOf);
+  let h = `<div class="kpis">
+    <div class="kpi ${d.open ? 'warn' : 'ok'}"><b>${d.open}</b><span>очиқ камчилик</span></div>
+    <div class="kpi"><b>${d.fill == null ? '—' : d.fill + '%'}</b><span>fill rate (A, 30 кун)</span></div>
+    <div class="kpi"><b>${d.drafts}</b><span>қоралама</span></div>
+    <div class="kpi"><b>${fmt(d.cash)}</b><span>мавжуд пул</span></div>
+  </div>
+  <div class="card"><div class="hint">Товарлар: ${d.tovar} · қолдиқ ${esc(d.stockDate)} ҳолатига · сотув тарихи ${d.salesDone ? 'тўлиқ' : 'юкланмоқда ' + esc(d.salesCursor)} · янги сўров ${d.sorov}</div>
+    <div class="actions"><button class="btn ghost" id="rf">🔄 Янгилаш (MoySklad)</button></div></div>
+  <div class="label">Дўконлар</div><div class="rows">`;
+  for (const k of d.kassalar)
+    h += rowHtml(k.bound ? (k.manfiy ? 'bad' : 'ok') : '', k.name, k.bound ? `${k.tovar} товар · fill ${k.fill == null ? '—' : k.fill + '%'} · санoq ${k.sanoq}` : 'омбор боғланмаган',
+      `${k.open}<small>камчилик${k.manfiy ? ' · 🔴 манфий ' + k.manfiy : ''}</small>`, `#/hisobot/ombor/kamchilik?kassa=${k.id}`);
+  h += `</div><div class="label">Қоидалар</div><div class="rows">`;
+  for (const r of d.rules)
+    h += rowHtml(r.enabled ? SEV[r.severity] : '', (r.enabled ? '' : '⚪ ') + r.title, r.code + ' · ' + r.severity, String(r.open), `#/hisobot/ombor/kamchilik?rule=${r.code}`);
+  h += `</div><div class="label">Синхрон</div><div class="rows">`;
+  for (const s of d.sync) h += rowHtml(s.ok ? 'ok' : 'bad', s.entity, s.at + (s.error ? ' · ' + esc(s.error) : ''), String(s.rows), '');
+  h += '</div>';
+  $main.innerHTML = h;
+  bindGo();
+  document.getElementById('rf').onclick = async () => { try { await post('/admin/ombor/refresh'); toast('⏳ Янгиланмоқда (1–5 дақиқа)'); } catch (e) { toast(e.message); } };
+}
+
+async function omborKamchilik(seg, q) {
+  if (seg[0]) return omborKamchilikCard(seg[0]);
+  const kassa = q.kassa || '0', rule = q.rule || '', page = +(q.page || 0);
+  const d = await api(`/admin/ombor/issues?kassa=${kassa}&rule=${encodeURIComponent(rule)}&page=${page}`);
+  setTitle('Омбор камчиликлари', `${d.total} та очиқ`);
+  const link = (k, r, p = 0) => `#/hisobot/ombor/kamchilik?kassa=${k}&rule=${encodeURIComponent(r)}&page=${p}`;
+  let h = `<div class="seg"><button class="${kassa === '0' ? 'on' : ''}" data-go="${link(0, rule)}">Ҳаммаси</button>${d.kassalar.map(k => `<button class="${String(k.id) === kassa ? 'on' : ''}" data-go="${link(k.id, rule)}">${esc(k.name.replace('Отдел ', ''))}</button>`).join('')}</div>
+    <div class="seg"><button class="${rule === '' ? 'on' : ''}" data-go="${link(kassa, '')}">Барча қоида</button>${d.rules.map(r => `<button class="${r.code === rule ? 'on' : ''}" data-go="${link(kassa, r.code)}">${esc(r.title)} (${r.count})</button>`).join('')}</div>
+    <div class="card"><button class="btn ghost" id="xl">📥 Excel чатга</button></div><div class="rows">`;
+  if (!d.rows.length) h += '<div class="empty">Очиқ камчилик йўқ ✅</div>';
+  for (const r of d.rows) h += rowHtml(SEV[r.severity], r.title, `${r.ruleTitle}${r.kassa ? ' · ' + r.kassa : ''}${r.owner ? ' · ' + r.owner : ''} · ${r.since}`, r.esc2 ? '❌' : r.esc1 ? '⏰' : '', `#/hisobot/ombor/kamchilik/${r.id}`);
+  h += '</div>';
+  if (d.pages > 1) h += `<div class="seg">${page > 0 ? `<button data-go="${link(kassa, rule, page - 1)}">⬅️</button>` : ''}<button class="on">${page + 1}/${d.pages}</button>${page + 1 < d.pages ? `<button data-go="${link(kassa, rule, page + 1)}">➡️</button>` : ''}</div>`;
+  $main.innerHTML = h;
+  bindGo();
+  document.getElementById('xl').onclick = async () => { try { const r = await post('/admin/ombor/issues/excel', { id: 0, kassaId: +kassa, rule }); haptic('medium'); toast('📤 Excel: ' + r.count + ' та'); } catch (e) { toast(e.message); } };
+}
+
+async function omborKamchilikCard(id) {
+  const r = await api('/admin/ombor/issues/' + id);
+  setTitle(r.ruleTitle, r.open ? (r.severity === 'MUHIM' ? '🔴 муҳим' : r.severity === 'OGOH' ? '🟠 огоҳлантириш' : 'ℹ️') : '✅ ёпилган');
+  const ans = r.answers && r.answers.length ? r.answers : ['TUZATDIM'];
+  const AT = { TUZATDIM: '✅ Тузатдим', ALMASHTIRISH: '🔁 Алмаштириш', BRAK: '🗑 Брак', MUDDATI_OTGAN: '⏳ Муддати ўтган', TASDIQ: '✅ Тасдиқлайман' };
+  $main.innerHTML = `<div class="card">${r.detail}</div>
+    <div class="card"><div class="kv">${kvRow('Дўкон', esc(r.kassa || '—'))}${kvRow('Ходим', esc(r.owner || '—'))}${kvRow('Топилди', esc(r.since))}${r.open ? '' : kvRow('Ёпилди', esc(r.resolvedAt) + ' · ' + esc(r.resolvedBy) + ' · ' + esc(r.answer))}</div></div>
+    ${r.open ? `<div class="actions">${ans.map(a => `<button class="btn" data-ans="${a}">${AT[a] || a}</button>`).join('')}<button class="btn ghost" data-ans="ETIBORSIZ">🙈 Эътиборсиз</button></div>` : ''}`;
+  $main.querySelectorAll('[data-ans]').forEach(b => b.onclick = async () => {
+    try { await post('/admin/ombor/issues/resolve', { id: +id, answer: b.dataset.ans }); toast('✅'); go('#/hisobot/ombor/kamchilik'); } catch (e) { toast(e.message); }
+  });
+}
+
+async function omborQoralama(seg, q) {
+  if (seg[0]) return omborQoralamaCard(seg[0]);
+  const all = q.all === '1';
+  const d = await api('/admin/ombor/drafts?all=' + all);
+  setTitle('Буюртма қораламалари', `мавжуд пул ${fmt(d.cash)} сўм · директор ${fmt(d.katta)} сўмдан`);
+  let h = `<div class="seg"><button class="${all ? '' : 'on'}" data-go="#/hisobot/ombor/qoralama">Очиқ</button><button class="${all ? 'on' : ''}" data-go="#/hisobot/ombor/qoralama?all=1">Ҳаммаси</button></div><div class="rows">`;
+  if (!d.rows.length) h += '<div class="empty">Қоралама йўқ — тунда ROP бўйича тузилади.</div>';
+  for (const r of d.rows) h += rowHtml(r.open ? (r.status === 'TASDIQ' ? 'ok' : 'warn') : '', `#${r.id} · ${r.kassa} · ${r.agent}`, `${r.statusTitle} · ${r.updatedAt}${r.director ? ' · 👔' : ''}`, fmtT(r.total), `#/hisobot/ombor/qoralama/${r.id}`);
+  h += '</div>';
+  $main.innerHTML = h; bindGo();
+}
+
+async function omborQoralamaCard(id) {
+  const r = await api('/admin/ombor/drafts/' + id);
+  setTitle('Қоралама #' + id, r.statusTitle);
+  const FL = { EHTIYOT: '⚠️эҳтиёт', NARX_OSHDI: '📈нарх↑', NARX_TUSHDI: '📉нарх↓', SOROV: '📝сўров', YETKAZUVCHI_YOQ: '❓етказувчи йўқ' };
+  let h = `<div class="card"><div class="kv">${kvRow('Дўкон', esc(r.kassa))}${kvRow('Етказувчи', esc(r.agent))}${kvRow('Жами (landed)', fmtT(r.total) + ' сўм')}${kvRow('Мавжуд пул', fmt(r.cash) + ' сўм')}${r.note ? kvRow('Изоҳ', esc(r.note)) : ''}${r.open ? kvRow('Навбат', esc(r.next)) : ''}</div></div><div class="rows">`;
+  for (const l of r.lines) h += rowHtml('', l.name, `${esc(l.basis)}${l.flags ? ' · ' + l.flags.split(',').map(f => FL[f] || f).join(' ') : ''}`, `${l.qty} × ${fmtT(l.landed)}<small>${fmtT(l.total)}</small>`, '');
+  h += '</div>';
+  if (r.open) h += `<div class="actions"><button class="btn" id="adv">✅ Тасдиқлаш (${esc(r.next)})</button><button class="btn ghost" id="cx">❌ Бекор</button></div>`;
+  $main.innerHTML = h;
+  const adv = document.getElementById('adv');
+  if (adv) adv.onclick = async () => { try { await post('/admin/ombor/drafts/advance', { id: +id }); toast('✅'); omborQoralamaCard(id); } catch (e) { toast(e.message); } };
+  const cx = document.getElementById('cx');
+  if (cx) cx.onclick = () => confirmSheet('Бекор қилинсинми?', 'Қоралама ёпилади; тунда қайта тузилиши мумкин.',
+    async () => { try { await post('/admin/ombor/drafts/cancel', { id: +id, reason: 'web' }); toast('❌'); go('#/hisobot/ombor/qoralama'); } catch (e) { toast(e.message); } });
+}
+
+async function omborSanoq(q) {
+  const [d, s] = await Promise.all([api('/admin/ombor/sanoq'), api('/admin/ombor/sorov')]);
+  setTitle('Санoq ва сўровлар', `ABC ${d.abc.join('/')} кун · мажбурий: ${d.majburiy ? 'ҳа' : 'йўқ'}`);
+  let h = '<div class="label">🔢 Ротацион санoq</div>';
+  for (const k of d.rows) {
+    h += `<div class="card"><b>${esc(k.name)}</b> — бугун ${k.today}, очиқ ${k.open}`;
+    if (k.items.length) h += '<div class="rows">' + k.items.slice(0, 30).map(i => rowHtml(i.status === 'TASDIQ' ? 'ok' : i.fact != null ? 'warn' : '', i.name, `${i.abc} · ${i.date} · ${i.status}`, `${i.system}${i.fact != null ? ' → ' + i.fact : ''}`, '')).join('') + '</div>';
+    h += '</div>';
+  }
+  h += '<div class="label">📝 Дўкон сўровлари</div><div class="rows">';
+  if (!s.rows.length) h += '<div class="empty">Очиқ сўров йўқ</div>';
+  for (const r of s.rows) h += `<div class="row"><div><b>${esc(r.what)}</b> × ${r.qty}<br><small>${esc(r.kassa)} · ${esc(r.reason)} · ${esc(r.by)} · ${r.at} · ${esc(r.statusTitle)}</small></div>
+    ${r.status !== 'QORALAMADA' ? `<div class="actions"><button class="btn ghost" data-sa="${r.id}.KORILDI">👀</button><button class="btn ghost" data-sa="${r.id}.QORALAMADA">🧾</button><button class="btn ghost" data-sa="${r.id}.RAD">❌</button></div>` : ''}</div>`;
+  h += '</div>';
+  $main.innerHTML = h; bindGo();
+  $main.querySelectorAll('[data-sa]').forEach(b => b.onclick = async () => { const [id, st] = b.dataset.sa.split('.');
+    try { await post('/admin/ombor/sorov/answer', { id: +id, status: st, note: '' }); toast('✅'); omborSanoq(q); } catch (e) { toast(e.message); } });
 }
 
 /* ============================================================

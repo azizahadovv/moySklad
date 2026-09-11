@@ -134,6 +134,7 @@ public class TemplateService {
             saqlashda ⚠️ bilan ko'rsatiladi.
             """;
     private final TemplateData data;
+    private final OmborTemplateData omborData;
 
 
     /** Render konteksti: chatId — {adminlar}/{xodimlar} uchun; kassaId — {kassa:mening…} uchun. */
@@ -286,6 +287,7 @@ public class TemplateService {
                 String[] mods = Arrays.copyOfRange(parts, 1, parts.length);
                 if (obj.equals("jami")) return data.jami(field, mods, run);
                 if (obj.equals("bux")) return data.bux(field, mods, run);
+                if (obj.equals("ombor")) return omborData.field(field, mods);
                 return null;
             }
             // {kassa:1.naqd:oy}, {karta:"Nom".qoldiq}, {user:5}, {rol:KASSIR}

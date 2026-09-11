@@ -31,7 +31,9 @@ public class AdminHandler {
     private final uz.kassa.scheduler.Jobs jobs;
     private final NotifyAdminHandler notifyAdmin;
     private final ControlAdminHandler controlAdmin;
+    private final OmborAdminHandler omborAdmin;
     private final MenuSchemaHandler menuSchemaH;
+    private final NotifySwitchHandler switchH;
     private final MenuSupport menus;
     private final MenuSchemaService schema;
     private final AdminSupport sup;
@@ -79,6 +81,8 @@ public class AdminHandler {
             case ADM_CG_FOOTER -> { settingsH.cgFooterSave(u, s, text, chatId); return true; }
             case ADM_LS_DATE -> { msH.lsSave(u, s, text, chatId); return true; }
             case ADM_CT_VAL -> { controlAdmin.onText(u, s, text, chatId); return true; }
+            case ADM_OM_VAL -> { omborAdmin.onText(u, s, text, chatId); return true; }
+            case ADM_OM_DAVR -> { omborAdmin.onDavrText(u, s, text, chatId); return true; }
             case ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN -> {
                 if (notifyAdmin.onText(u, s, text, chatId)) return true;
             }
@@ -152,6 +156,8 @@ public class AdminHandler {
         if (cmd.equals("ctgu")) { s.reset(); s.state = Session.State.ADM_AU_PICK; usersH.auPick(s, arg, chatId, msgId); return true; }
         // 🕵️ Назорат sozlamalari (a:ct*)
         if (cmd.startsWith("ct")) return controlAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
+        // 🏬 Омбор назорати (a:om*)
+        if (cmd.startsWith("om")) return omborAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
 
         switch (cmd) {
             case "p" -> panel(u, s, arg, chatId, msgId);
@@ -330,6 +336,8 @@ public class AdminHandler {
                 if (cmd.startsWith("nf")) return notifyAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
                 // 🧩 Menyu tartibi — «a:mo…»
                 if (cmd.startsWith("mo")) return menuSchemaH.onCallback(u, s, cmd, arg, chatId, msgId);
+                // 🔕 Xabarnoma kalitlari — «a:ns…»
+                if (cmd.startsWith("ns")) return switchH.onCallback(u, s, cmd, arg, chatId, msgId);
                 return false;
             }
         }
@@ -421,7 +429,9 @@ public class AdminHandler {
                     case "🔄 Номлар (MoySklad)" -> namesH.msNamesMenu(chatId, 0);
                     case "📣 Гуруҳлар/Каналлар" -> settingsH.clickGroupMenu(s, chatId, 0);
                     case "🔔 Билдиришномалар" -> notifyAdmin.menu(s, chatId, 0);
+                    case NotifySwitchHandler.LABEL -> switchH.menu(s, chatId, 0);
                     case "🕵️ Назорат" -> controlAdmin.menu(s, chatId, 0);
+                    case OmborAdminHandler.LABEL -> omborAdmin.menu(s, chatId, 0);
                     case "💳 Карта масъуллари" -> settingsH.kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> msH.ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> msH.diagMenu(s, chatId, 0);
@@ -650,7 +660,9 @@ public class AdminHandler {
         ACTIONS.put("🔄 Номлар (MoySklad)", (u, s, c) -> namesH.msNamesMenu(c, 0));
         ACTIONS.put("📣 Гуруҳлар/Каналлар", (u, s, c) -> settingsH.clickGroupMenu(s, c, 0));
         ACTIONS.put("🔔 Билдиришномалар", (u, s, c) -> notifyAdmin.menu(s, c, 0));
+        ACTIONS.put(NotifySwitchHandler.LABEL, (u, s, c) -> switchH.menu(s, c, 0));
         ACTIONS.put("🕵️ Назорат", (u, s, c) -> controlAdmin.menu(s, c, 0));
+        ACTIONS.put(OmborAdminHandler.LABEL, (u, s, c) -> omborAdmin.menu(s, c, 0));
         ACTIONS.put("💳 Карта масъуллари", (u, s, c) -> settingsH.kartaMasList(c, 0));
         ACTIONS.put("📅 Ledger санаси", (u, s, c) -> msH.ledgerMenu(s, c, 0));
         ACTIONS.put("🩺 Диагностика", (u, s, c) -> msH.diagMenu(s, c, 0));

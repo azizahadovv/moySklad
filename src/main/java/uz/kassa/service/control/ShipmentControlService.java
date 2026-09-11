@@ -46,6 +46,7 @@ public class ShipmentControlService {
     private final EmployeeLinkService link;
     private final ControlNotifier notifier;
     private final AuditService audit;
+    private final uz.kassa.service.NotifySwitches sw;
 
     /** balanceTick'da QARZ otgruzkalarni navbat bilan qayta o'qish (o'chirilganini sezish). */
     private int refreshCursor = 0;
@@ -265,7 +266,7 @@ public class ShipmentControlService {
         repo.save(s);
         audit.log(s.getOwnerUserId(), "OTG_QARZ_QOSHILDI", "shipment", s.getId(),
                 "№" + s.getDocNo() + " " + s.getAgentName() + " " + s.remain() + (quiet ? " (jim)" : ""));
-        if (silent || s.isSilent() || quiet) return;
+        if (silent || s.isSilent() || quiet || !sw.on(uz.kassa.service.NotifySwitches.OT_QARZ)) return;
         String text = "🧾 <b>Отгрузка тўлови тўлиқ эмас — қарздорлар рўйхатига қўшилди</b>\n" + render(s, true);
         Set<AppUser> to = notifier.forShipment(s, true);
         AppUser owner = s.getOwnerUserId() == null ? null : userRepo.findById(s.getOwnerUserId()).orElse(null);
@@ -278,11 +279,11 @@ public class ShipmentControlService {
             Set<Long> adminIds = new HashSet<>();
             for (AppUser a : admins) adminIds.add(a.getId());
             to.removeIf(x -> adminIds.contains(x.getId()));
-            notifier.send(to, text, kb(s));
-            notifier.send(admins, text + warn, ControlNotifier.withLink(kb(s), owner));
+            notifier.send(uz.kassa.service.NotifySwitches.OT_QARZ, to, text, kb(s));
+            notifier.send(uz.kassa.service.NotifySwitches.OT_QARZ, admins, text + warn, ControlNotifier.withLink(kb(s), owner));
             return;
         }
-        notifier.send(to, text, kb(s));
+        notifier.send(uz.kassa.service.NotifySwitches.OT_QARZ, to, text, kb(s));
     }
 
 
@@ -306,13 +307,14 @@ public class ShipmentControlService {
         });
         audit.log(by == null ? s.getOwnerUserId() : by.getId(), manual ? "OTG_QOLDA_YOPILDI" : "OTG_QARZ_YOPILDI",
                 "shipment", s.getId(), "№" + s.getDocNo() + " " + s.getAgentName() + " " + reason);
-        if (!wasDebt || (!manual && cfg.isQuietState(s.getState()))) return;   // jim status: to'langani ham xabarsiz
+        if (!wasDebt || (!manual && cfg.isQuietState(s.getState()))
+                || !sw.on(uz.kassa.service.NotifySwitches.OT_QARZ_YOPILDI)) return;   // jim status: to'langani ham xabarsiz
         String text = "✅ <b>Qarz to'landi</b> — №" + esc(s.getDocNo()) + " · " + esc(s.getAgentName())
                 + " · <b>" + fmt(s.getSum()) + "</b> so'm\n👤 Xodim: " + esc(ownerLabel(s))
                 + " · 🕒 qarzda " + days + " kun"
                 + (manual ? "\n✍️ Qo'lda yopildi: " + esc(by == null ? "" : by.getFullName())
                     + (reason == null || reason.isBlank() ? "" : " — " + esc(reason)) : "");
-        notifier.send(notifier.forShipment(s, true), text, null);
+        notifier.send(uz.kassa.service.NotifySwitches.OT_QARZ_YOPILDI, notifier.forShipment(s, true), text, null);
     }
 
 
@@ -328,8 +330,9 @@ public class ShipmentControlService {
             if (r.getStatus() == Reminder.Status.FAOL) { r.setStatus(Reminder.Status.BEKOR); reminderRepo.save(r); }
         });
         audit.log(s.getOwnerUserId(), "OTG_QARZ_BEKOR", "shipment", s.getId(), "№" + s.getDocNo() + " " + reason);
-        if (!wasDebt || silent || s.isSilent() || cfg.isQuietState(s.getState())) return;
-        notifier.send(notifier.forShipment(s, false), "🚫 <b>Qarzdagi otgruzka bekor bo'ldi</b> — №"
+        if (!wasDebt || silent || s.isSilent() || cfg.isQuietState(s.getState())
+                || !sw.on(uz.kassa.service.NotifySwitches.OT_QARZ_YOPILDI)) return;
+        notifier.send(uz.kassa.service.NotifySwitches.OT_QARZ_YOPILDI, notifier.forShipment(s, false), "🚫 <b>Qarzdagi otgruzka bekor bo'ldi</b> — №"
                 + esc(s.getDocNo()) + " · " + esc(s.getAgentName()) + " · " + fmt(s.getSum()) + " so'm\n"
                 + esc(reason) + "\n👤 Xodim: " + esc(ownerLabel(s)), null);
     }
@@ -507,7 +510,7 @@ public class ShipmentControlService {
                     + (qv == null ? "" : "🏦 Перечисление (bank): " + qv[0] + " ta · " + fmt(qv[1]) + " so'm — faqat ro'yxatda\n")
                     + (iss > 0 ? "\n📦 Kamchilikli otgruzkalar: <b>" + iss + "</b> ta (muddat/masul/telefon) — MoySklad'da to'ldiring\n" : "\n")
                     + "Ro'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар · ⚠️ Хатолар → 📦 Otgruzkalar";
-            notifier.sendOne(u, text, null);
+            notifier.sendOne(uz.kassa.service.NotifySwitches.OT_KUNLIK_XODIM, u, text, null);
             sentUsers.add(u.getId());
         }
         // otdel rahbarlari — o'z otdeli
@@ -519,7 +522,7 @@ public class ShipmentControlService {
                     + digestLines(e.getValue(), 30, true);
             Set<AppUser> to = new LinkedHashSet<>(notifier.heads(e.getKey()));
             for (AppUser u : notifier.designated(e.getKey())) if (u.getKassaId() != null) to.add(u);
-            notifier.send(to, text, null);
+            notifier.send(uz.kassa.service.NotifySwitches.OT_KUNLIK_RAHBAR, to, text, null);
         }
         // SuperAdmin + belgilanganlar (otdelsiz) — umumiy
         StringBuilder sb = new StringBuilder("🔔 <b>Qarzdorlar — umumiy</b> · " + today.format(DF) + "\n");
@@ -549,7 +552,7 @@ public class ShipmentControlService {
         if (issN > 0) sb.append("\n📦 Kamchilikli otgruzkalar: <b>").append(issN).append("</b> ta (⚠️ Хатолар → 📦 Otgruzkalar)");
         Set<AppUser> admins = new LinkedHashSet<>(notifier.superadmins());
         for (AppUser u : notifier.designated(null)) if (u.getKassaId() == null) admins.add(u);
-        notifier.send(admins, sb.toString(), null);
+        notifier.send(uz.kassa.service.NotifySwitches.OT_KUNLIK_ADMIN, admins, sb.toString(), null);
     }
 
 
@@ -597,7 +600,7 @@ public class ShipmentControlService {
                     + (overdue > 0 ? "⚠️ Muddati o'tgan: <b>" + overdue + "</b> ta" + (repeat > 0 ? " — har " + repeat + " kunda eslatiladi" : "") + "\n" : "")
                     + "\nMijoz bilan bog'lanib to'lovni undiring. To'langach bot o'zi yopadi.\n"
                     + "Ro'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар";
-            notifier.sendOne(u, text, null);
+            notifier.sendOne(uz.kassa.service.NotifySwitches.OT_QARZ_ESLATMA, u, text, null);
             sent++;
         }
         if (sent > 0) log.info("Qarzdor eslatmalari: {} xodimga yuborildi", sent);
@@ -707,8 +710,9 @@ public class ShipmentControlService {
         Instant now = Instant.now();
         for (var e : byUser.entrySet()) {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
-            if (u != null && u.getTelegramId() != null) notifier.sendOne(u, issuesMessage(e.getValue()), null);
-            else notifier.send(notifier.superadmins(), "⚠️ <i>Xodim " + esc(u == null ? "#" + e.getKey() : u.getFullName())
+            if (!sw.on(uz.kassa.service.NotifySwitches.OT_KAMCHILIK)) { /* 🔕 Хабарномалар — faqat belgilanadi */ }
+            else if (u != null && u.getTelegramId() != null) notifier.sendOne(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, u, issuesMessage(e.getValue()), null);
+            else notifier.send(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, notifier.superadmins(), "⚠️ <i>Xodim " + esc(u == null ? "#" + e.getKey() : u.getFullName())
                     + " Telegram'ga ulanmagan — pastdagi tugma bilan ulang.</i>" + notifier.inviteLine(u)
                     + "\n\n" + issuesMessage(e.getValue()),
                     ControlNotifier.withLink(null, u));
@@ -722,7 +726,8 @@ public class ShipmentControlService {
                 for (Shipment s : e.getValue()) { s.setIssuesNotifiedAt(now); repo.save(s); }
             }
             sb.append("\nPastdagi tugma orqali bog'lang — xabar xodimning o'ziga boradi.");
-            notifier.send(notifier.superadmins(), sb.toString(), ControlNotifier.withLink(null, null));
+            if (sw.on(uz.kassa.service.NotifySwitches.OT_KAMCHILIK))
+                notifier.send(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, notifier.superadmins(), sb.toString(), ControlNotifier.withLink(null, null));
         }
     }
 
@@ -750,7 +755,8 @@ public class ShipmentControlService {
             Long kassa = e.getKey() < 0 ? null : e.getKey();
             Set<AppUser> heads = notifier.heads(kassa);
             if (heads.isEmpty()) continue;   // rahbar yo'q — 2-bosqichda admin oladi
-            notifier.send(heads, "\u23F0 <b>Otgruzka kamchiliklari " + cfg.esc1Min() + " daqiqadan beri tuzatilmadi</b> — "
+            if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA))
+            notifier.send(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA, heads, "\u23F0 <b>Otgruzka kamchiliklari " + cfg.esc1Min() + " daqiqadan beri tuzatilmadi</b> — "
                     + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa)) + "\n"
                     + escalationLines(e.getValue())
                     + "\nXodimlar tuzatishini nazorat qiling. " + cfg.esc2Min()
@@ -760,7 +766,8 @@ public class ShipmentControlService {
         for (var e : st2.entrySet()) {
             for (Shipment s : e.getValue()) { s.setIssuesEscalated2At(now); repo.save(s); }
             Long kassa = e.getKey() < 0 ? null : e.getKey();
-            notifier.send(notifier.escalation(kassa), "\u274C <b>TUZATILMADI — otgruzka kamchiliklari " + cfg.esc2Min()
+            if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA))
+            notifier.send(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA, notifier.escalation(kassa), "\u274C <b>TUZATILMADI — otgruzka kamchiliklari " + cfg.esc2Min()
                     + " daqiqadan beri ochiq</b> — " + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa)) + "\n"
                     + escalationLines(e.getValue())
                     + "\nXodim ham, otdel rahbari ham tuzatmadi.", null);

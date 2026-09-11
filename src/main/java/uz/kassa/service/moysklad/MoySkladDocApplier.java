@@ -28,6 +28,7 @@ public class MoySkladDocApplier {
     private final OperationRepo opRepo;
     private final SettingsService settings;
     private final NotificationService notify;
+    private final uz.kassa.service.NotifySwitches sw;
 
     /** Klik'ga o'xshagan, lekin sozlangan nomga mos kelmagan statuslar — bir marta ogohlantiriladi. */
     private final java.util.Set<String> unknownStateWarned =
@@ -60,8 +61,8 @@ public class MoySkladDocApplier {
             // aks holda Click kirimlar indamay to'xtab qolardi.
             String low = e.state().toLowerCase();
             if ((low.contains("клик") || low.contains("klik") || low.contains("click"))
-                    && unknownStateWarned.add(e.state())) {
-                notify.toRole(uz.kassa.domain.Role.SUPERADMIN,
+                    && unknownStateWarned.add(e.state()) && sw.on(uz.kassa.service.NotifySwitches.TEXNIK_OGOH)) {
+                notify.toRole(uz.kassa.service.NotifySwitches.TEXNIK_OGOH, uz.kassa.domain.Role.SUPERADMIN,
                         "⚠️ MoySklad'da Входящий платеж statusi «" + TextUtil.esc(e.state())
                         + "» uchradi — Klik'ga o'xshaydi, lekin sozlangan nom «"
                         + TextUtil.esc(klikState()) + "»ga mos EMAS.\n"
@@ -119,7 +120,7 @@ public class MoySkladDocApplier {
             } else {
                 if (op.getAmount() != sum && ledger.updateSyncAmount(op, sum)) {
                     if (sup.loudFix(d.date()))
-                        notify.toBuxgalteriya("✏️ MoySklad hujjat summasi o'zgargan — avtomatik tuzatildi: "
+                        notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "✏️ MoySklad hujjat summasi o'zgargan — avtomatik tuzatildi: "
                                 + msId + " — yangi: " + TextUtil.fmt(sum) + " so'm", null);
                     return true;
                 }
@@ -168,7 +169,7 @@ public class MoySkladDocApplier {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
                                     + "<b>" + TextUtil.esc(sup.ownerName(op)) + "</b>: " + TextUtil.fmt(old)
                                     + " → " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
                         return true;
@@ -187,7 +188,7 @@ public class MoySkladDocApplier {
                 sum, e.date(), msId, sup.matchCat(ctx.catByName(), e.expenseItem()), comment);
         if (posted) {
             String kassaName = kassaRepo.findById(kassaId).map(Kassa::getName).orElse("Kassa #" + kassaId);
-            notify.toBuxgalteriya("💸 MoySklad rasxodi: <b>" + TextUtil.esc(kassaName)
+            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_RASXOD, "💸 MoySklad rasxodi: <b>" + TextUtil.esc(kassaName)
                     + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (💵 Naqd)"
                     + (comment.isEmpty() ? "" : "\n" + TextUtil.esc(comment)), null);
             sup.checkNegative(OwnerType.KASSA, kassaId, "Rasxod");
@@ -236,7 +237,7 @@ public class MoySkladDocApplier {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "✏️ MoySklad rasxod summasi o'zgargan — avtomatik tuzatildi:\n"
                                     + sup.docInfo(e) + "\n<b>" + TextUtil.esc(sup.ownerName(op)) + "</b>: "
                                     + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
                         changed = true;
@@ -251,7 +252,7 @@ public class MoySkladDocApplier {
                         String newName = wantOt == OwnerType.BUXGALTERIYA ? "Отдел Основной"
                                 : kassaRepo.findById(wantOid).map(Kassa::getName).orElse("Kassa #" + wantOid);
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — chiqim ko'chirildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "🔀 MoySklad hujjat otdeli o'zgartirilgan — chiqim ko'chirildi:\n"
                                     + sup.docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
                                     + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum) + " so'm (💵 Naqd)", null);
                         log.info("Rasxod qayta yo'naltirildi: {} {} -> {}", msId, oldName, newName);
@@ -271,11 +272,13 @@ public class MoySkladDocApplier {
                         + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (💵 Naqd)"
                         + "\n" + sup.docInfo(e)
                         + (comment.isEmpty() ? "" : "\n" + TextUtil.esc(comment));
-                notify.toKassa(wantOid, text, null);
-                notify.toBuxgalteriya(text, null);
+                if (sw.on(uz.kassa.service.NotifySwitches.MS_RASXOD)) {
+                    notify.toKassa(uz.kassa.service.NotifySwitches.MS_KASSIR_NUSXA, wantOid, text, null);
+                    notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_RASXOD, text, null);
+                }
             } else {
                 String otdel = ctx.groupNames().getOrDefault(e.groupId(), "");
-                notify.toBuxgalteriya("💸 MoySklad rasxodi (Расходный ордер): <b>Отдел Основной</b>"
+                notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_RASXOD, "💸 MoySklad rasxodi (Расходный ордер): <b>Отдел Основной</b>"
                         + (otdel.isEmpty() ? "" : " · " + TextUtil.esc(otdel))
                         + " — <b>" + TextUtil.fmt(sum) + "</b> so'm (💵 Naqd)"
                         + "\n" + sup.docInfo(e)
@@ -338,7 +341,7 @@ public class MoySkladDocApplier {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("✏️ MoySklad kirim summasi o'zgargan — avtomatik tuzatildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "✏️ MoySklad kirim summasi o'zgargan — avtomatik tuzatildi:\n"
                                     + sup.docInfo(e) + "\n<b>" + TextUtil.esc(sup.ownerName(op)) + "</b>: "
                                     + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum)
                                     + " so'm (" + mtLabel + ")", null);
@@ -353,7 +356,7 @@ public class MoySkladDocApplier {
                     if (ledger.reroutePrixod(op, wantOt, wantOid)) {
                         String newName = sup.ownerDisplayName(wantOt, wantOid);
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — kirim ko'chirildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "🔀 MoySklad hujjat otdeli o'zgartirilgan — kirim ko'chirildi:\n"
                                     + sup.docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
                                     + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum)
                                     + " so'm (" + mtLabel + ")", null);
@@ -372,15 +375,17 @@ public class MoySkladDocApplier {
                 String text = "💰 MoySklad kirim: <b>" + TextUtil.esc(kassaName)
                         + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (" + mtLabel + ")"
                         + "\n" + sup.docInfo(e);
-                notify.toKassa(wantOid, text, null);
-                notify.toBuxgalteriya(text, null);
+                if (sw.on(uz.kassa.service.NotifySwitches.MS_KIRIM)) {
+                    notify.toKassa(uz.kassa.service.NotifySwitches.MS_KASSIR_NUSXA, wantOid, text, null);
+                    notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_KIRIM, text, null);
+                }
             } else if (wantOt == OwnerType.CLICK) {
-                notify.toBuxgalteriya("💰 MoySklad kirim: <b>" + TextUtil.esc(sup.ownerDisplayName(wantOt, wantOid))
+                notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_KIRIM, "💰 MoySklad kirim: <b>" + TextUtil.esc(sup.ownerDisplayName(wantOt, wantOid))
                         + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (" + mtLabel + ")"
                         + "\n" + sup.docInfo(e), null);
             } else {
                 String otdel = ctx.groupNames().getOrDefault(e.groupId(), "");
-                notify.toBuxgalteriya("💰 MoySklad kirim: <b>Отдел Основной</b>"
+                notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_KIRIM, "💰 MoySklad kirim: <b>Отдел Основной</b>"
                         + (otdel.isEmpty() ? "" : " · " + TextUtil.esc(otdel))
                         + " — <b>" + TextUtil.fmt(sum) + "</b> so'm (" + mtLabel + ")"
                         + "\n" + sup.docInfo(e), null);
@@ -448,7 +453,7 @@ public class MoySkladDocApplier {
                     long old = op.getAmount();
                     if (ledger.updateSyncAmount(op, sum)) {
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("✏️ MoySklad Klik rasxodi summasi o'zgargan — avtomatik tuzatildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "✏️ MoySklad Klik rasxodi summasi o'zgargan — avtomatik tuzatildi:\n"
                                     + sup.docInfo(e) + "\n<b>" + TextUtil.esc(sup.ownerName(op)) + "</b>: "
                                     + TextUtil.fmt(old) + " → " + TextUtil.fmt(sum) + " so'm (📲 Klik)", null);
                         changed = true;
@@ -461,7 +466,7 @@ public class MoySkladDocApplier {
                     if (ledger.rerouteRasxod(op, wantOt, wantOid)) {
                         String newName = sup.ownerDisplayName(wantOt, wantOid);
                         if (sup.loudFix(e.date()))
-                            notify.toBuxgalteriya("🔀 MoySklad hujjat otdeli o'zgartirilgan — Klik chiqim ko'chirildi:\n"
+                            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "🔀 MoySklad hujjat otdeli o'zgartirilgan — Klik chiqim ko'chirildi:\n"
                                     + sup.docInfo(e) + "\n<b>" + TextUtil.esc(oldName) + "</b> → <b>"
                                     + TextUtil.esc(newName) + "</b> · " + TextUtil.fmt(sum) + " so'm (📲 Klik)", null);
                         changed = true;
@@ -478,8 +483,10 @@ public class MoySkladDocApplier {
                     + "</b> — <b>" + TextUtil.fmt(sum) + "</b> so'm (📲 Klik)"
                     + "\n" + sup.docInfo(e)
                     + (comment.isEmpty() ? "" : "\n" + TextUtil.esc(comment));
-            if (wantOt == OwnerType.KASSA) notify.toKassa(wantOid, text, null);
-            notify.toBuxgalteriya(text, null);
+            if (sw.on(uz.kassa.service.NotifySwitches.MS_KLIK)) {
+                if (wantOt == OwnerType.KASSA) notify.toKassa(uz.kassa.service.NotifySwitches.MS_KASSIR_NUSXA, wantOid, text, null);
+                notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_KLIK, text, null);
+            }
             sup.checkNegative(wantOt, wantOid, MoneyType.KLIK, "Klik rasxod");
         }
         return posted;

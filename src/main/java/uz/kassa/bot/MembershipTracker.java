@@ -25,6 +25,7 @@ public class MembershipTracker {
     private final uz.kassa.repo.GuestRepo guestRepo;
     private final Sender sender;
     private final NotificationService notify;
+    private final uz.kassa.service.NotifySwitches sw;
     private final uz.kassa.scheduler.Jobs jobs;
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
     private final uz.kassa.service.DailyReportService dailyReport;
@@ -164,6 +165,7 @@ public class MembershipTracker {
                 case LINKED -> {
                     sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(x.getFullName()) + "</b>!\n"
                             + menus.otdelLabel(x), menus.menuFor(x));
+                    if (sw.on(uz.kassa.service.NotifySwitches.XODIM_ULANDI))
                     notify.toRole(Role.SUPERADMIN, "🔗 <b>" + esc(x.getFullName())
                             + "</b> taklif havolasi orqali botga ulandi · " + menus.otdelLabel(x)
                             + "\nTelefon: <code>" + esc(contactPhone) + "</code>", null);
@@ -173,6 +175,7 @@ public class MembershipTracker {
                     sender.send(chatId, "⚠️ Bu havola <b>" + esc(x.getFullName()) + "</b> uchun, lekin yuborgan "
                             + "raqamingiz kartadagi raqamga mos kelmadi — ulanmadingiz.\n"
                             + "SuperAdmin'ga xabar ketdi, u tekshiradi.");
+                    if (sw.on(uz.kassa.service.NotifySwitches.XODIM_OGOH))
                     notify.toRole(Role.SUPERADMIN, "⚠️ <b>" + esc(x.getFullName())
                             + "</b> taklif havolasi bilan kirdi, lekin telefon mos kelmadi.\n"
                             + "Kartada: <code>" + esc(x.getPhone()) + "</code>"
@@ -210,6 +213,7 @@ public class MembershipTracker {
                     try { employeeLink.applyDepartment(cand, null); } catch (Exception e) { log.warn("Otdel qo'llash: {}", e.getMessage()); }
                     sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(cand.getFullName())
                             + "</b>!\n" + menus.otdelLabel(cand), menus.menuFor(cand));
+                    if (sw.on(uz.kassa.service.NotifySwitches.XODIM_ULANDI))
                     notify.toRole(Role.SUPERADMIN, "🔗 <b>" + esc(cand.getFullName())
                             + "</b> botga ulandi (telefon mos keldi: <code>"
                             + esc(m.getContact().getPhoneNumber()) + "</code>)", null);
@@ -225,12 +229,14 @@ public class MembershipTracker {
                     AppUser u = reg.get();
                     if (!u.isActive()) {
                         sender.send(chatId, "⚠️ Hisobingiz faolsizlantirilgan — SuperAdmin'ga murojaat qiling.");
+                        if (sw.on(uz.kassa.service.NotifySwitches.XODIM_OGOH))
                         notify.toRole(Role.SUPERADMIN, "⚠️ Faolsizlantirilgan foydalanuvchi <b>" + esc(u.getFullName())
                                 + "</b> kontakt yubordi (MoySklad xodimi). Kerak bo'lsa qayta faollashtiring.", null);
                         return;
                     }
                     if (u.getTelegramId() != null && !u.getTelegramId().equals(tgId)) {
                         sender.send(chatId, "⚠️ Bu telefon raqami boshqa Telegram hisobiga ulangan — SuperAdmin'ga murojaat qiling.");
+                        if (sw.on(uz.kassa.service.NotifySwitches.XODIM_OGOH))
                         notify.toRole(Role.SUPERADMIN, "⚠️ <b>" + esc(u.getFullName()) + "</b> raqami bilan boshqa Telegram (<code>"
                                 + tgId + "</code>) kontakt yubordi — tekshiring.", null);
                         return;
@@ -240,6 +246,7 @@ public class MembershipTracker {
                     sender.send(chatId, "✅ Xush kelibsiz, <b>" + esc(u.getFullName()) + "</b>!\n"
                             + "Siz MoySklad xodimlari ro'yxatida borsiz — avtomatik ro'yxatdan o'tdingiz.\n"
                             + menus.otdelLabel(u), menus.menuFor(u));
+                    if (sw.on(uz.kassa.service.NotifySwitches.XODIM_ULANDI))
                     notify.toRole(Role.SUPERADMIN, "✅ <b>" + esc(u.getFullName()) + "</b> MoySklad xodimi sifatida avtomatik "
                             + "ro'yxatdan o'tdi · " + menus.otdelLabel(u) + "\nTelefon: <code>" + esc(contactPhone) + "</code>", null);
                     return;
@@ -254,6 +261,7 @@ public class MembershipTracker {
                 + "Yoki SuperAdmin sizni qo'lda qo'shadi — unga xabar ketdi.");
         String who = m.getFrom().getFirstName() == null ? "" : m.getFrom().getFirstName();
         if (m.getFrom().getLastName() != null) who += " " + m.getFrom().getLastName();
+        if (sw.on(uz.kassa.service.NotifySwitches.XODIM_OGOH))
         notify.toRole(Role.SUPERADMIN, "📱 <b>Yangi kontakt:</b> " + esc(who.trim())
                 + (m.getFrom().getUserName() == null ? "" : " (@" + esc(m.getFrom().getUserName()) + ")")
                 + "\nTelefon: <code>" + esc(m.getContact().getPhoneNumber()) + "</code>"

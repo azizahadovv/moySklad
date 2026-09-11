@@ -35,6 +35,7 @@ public class AdminReportService {
     private static final DateTimeFormatter DT = DateTimeFormatter.ofPattern("dd.MM HH:mm");
 
     private final uz.kassa.config.AppProps props;
+    private final uz.kassa.service.ombor.OmborSanoqService omborSanoq;
     private final DailyReportService dailyReport;
     private final ExcelReportService excel;
     private final KassaRepo kassaRepo;
@@ -67,6 +68,8 @@ public class AdminReportService {
 
     /** ✔ Moliya menejeri tasdig'i (bot dr:ok bilan bir xil). */
     public boolean confirmDaily(LocalDate d, AppUser by) {
+        String block = omborSanoq.blockReason(d);
+        if (block != null) throw new BusinessException(block);
         boolean fresh = dailyReport.confirm(d, by);
         if (fresh) audit.log(by.getId(), "KUNLIK_TASDIQ", "daily", null,
                 by.getFullName() + " " + d + " kunlik hisobotni tasdiqladi (web)");

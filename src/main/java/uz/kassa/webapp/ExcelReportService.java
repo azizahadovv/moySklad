@@ -374,4 +374,68 @@ public class ExcelReportService {
     private void autos(Sheet sh, int n) {
         for (int i = 0; i < n; i++) sh.autoSizeColumn(i);
     }
+
+    /** Umumiy jadval (🏬 Ombor va boshqalar): sarlavha qatori + qatorlar (Number → son, qolgani matn). */
+    public byte[] buildTable(String sheetName, String[] cols, List<Object[]> rows) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            CellStyle head = wb.createCellStyle();
+            Font hf = wb.createFont(); hf.setBold(true); head.setFont(hf);
+            head.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            head.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            Sheet sh = wb.createSheet(sheetName.length() > 30 ? sheetName.substring(0, 30) : sheetName);
+            Row hr = sh.createRow(0);
+            for (int i = 0; i < cols.length; i++) { Cell c = hr.createCell(i); c.setCellValue(cols[i]); c.setCellStyle(head); }
+            int r = 1;
+            for (Object[] row : rows) {
+                Row x = sh.createRow(r++);
+                for (int i = 0; i < row.length; i++) {
+                    Object v = row[i];
+                    if (v instanceof Number n) x.createCell(i).setCellValue(n.doubleValue());
+                    else x.createCell(i).setCellValue(v == null ? "" : String.valueOf(v));
+                }
+            }
+            for (int i = 0; i < cols.length; i++) sh.setColumnWidth(i, Math.min(60, Math.max(12, cols[i].length() + 6)) * 256);
+            wb.write(bos);
+            return bos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Excel: " + e.getMessage(), e);
+        }
+    }
+
+    /** Bir nechta varaq (🏬 Ombor kamchiliklari): har varaq sarlavha + qatorlar. */
+    public record SheetDef(String name, String[] cols, List<Object[]> rows) {}
+
+    public byte[] buildSheets(List<SheetDef> sheets) {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            CellStyle head = wb.createCellStyle();
+            Font hf = wb.createFont(); hf.setBold(true); head.setFont(hf);
+            head.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex());
+            head.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            java.util.Set<String> used = new java.util.HashSet<>();
+            for (SheetDef d : sheets) {
+                String name = d.name().replaceAll("[\\\\/?*\\[\\]:]", " ");
+                name = name.length() > 28 ? name.substring(0, 28) : name;
+                while (!used.add(name)) name = name + "_";
+                Sheet sh = wb.createSheet(name);
+                Row hr = sh.createRow(0);
+                for (int i = 0; i < d.cols().length; i++) { Cell c = hr.createCell(i); c.setCellValue(d.cols()[i]); c.setCellStyle(head); }
+                int r = 1;
+                for (Object[] row : d.rows()) {
+                    Row x = sh.createRow(r++);
+                    for (int i = 0; i < row.length; i++) {
+                        Object v = row[i];
+                        if (v instanceof Number n) x.createCell(i).setCellValue(n.doubleValue());
+                        else x.createCell(i).setCellValue(v == null ? "" : String.valueOf(v));
+                    }
+                }
+                for (int i = 0; i < d.cols().length; i++) sh.setColumnWidth(i, Math.min(60, Math.max(10, d.cols()[i].length() + 6)) * 256);
+                sh.createFreezePane(0, 1);
+                if (!d.rows().isEmpty()) sh.setAutoFilter(new org.apache.poi.ss.util.CellRangeAddress(0, d.rows().size(), 0, d.cols().length - 1));
+            }
+            wb.write(bos);
+            return bos.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Excel: " + e.getMessage(), e);
+        }
+    }
 }

@@ -44,7 +44,7 @@ public class SettingsAdminHandler {
                 irow(btn("🏷 Тугма номлари", "a:lbm"), btn("🔑 MoySklad API", "a:msk")),
                 irow(btn("🔄 Номлар (MoySklad)", "a:msr")),
                 irow(btn("👁 Ҳуқуқлар", "a:prm"), btn("📣 Гуруҳлар/Каналлар", "a:cg")),
-                irow(btn("🔔 Билдиришномалар", "a:nfm")),
+                irow(btn("🔔 Билдиришномалар", "a:nfm"), btn("🔕 Хабарномалар", "a:ns")),
                 irow(btn("💳 Карта масъуллари", "a:kml")),
                 irow(sup.bk("a:p:main"))));
     }

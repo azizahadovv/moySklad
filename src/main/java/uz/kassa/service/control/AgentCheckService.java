@@ -44,6 +44,7 @@ public class AgentCheckService {
     private final EmployeeLinkService link;
     private final ControlNotifier notifier;
     private final AuditService audit;
+    private final uz.kassa.service.NotifySwitches sw;
 
     /** Bitta xato: kod + ko'rinadigan matn (K5 uchun dublikat nomlari bilan). */
     public record Violation(String code, String text) {}
@@ -206,12 +207,13 @@ public class AgentCheckService {
         audit.log(ac.getCreatorUserId(), "KG_XATO_TOPILDI", "agent_check", ac.getId(),
                 a.name() + " " + ac.getViolations());
 
+        if (!sw.on(uz.kassa.service.NotifySwitches.KG_XATO)) return;   // 🔕 Хабарномалар: yozuv/eskalatsiya vaqti qoladi
         String text = errorMessage(ac, a, v, fresh);
         AppUser creator = ac.getCreatorUserId() == null ? null : userRepo.findById(ac.getCreatorUserId()).orElse(null);
         if (creator != null && creator.getTelegramId() != null) {
-            notifier.sendOne(creator, text, agentKb(a.id()));
+            notifier.sendOne(uz.kassa.service.NotifySwitches.KG_XATO, creator, text, agentKb(a.id()));
         } else {
-            notifier.send(notifier.superadmins(), "⚠️ <i>Xodim botga bog'lanmagan: " + esc(who(ac))
+            notifier.send(uz.kassa.service.NotifySwitches.KG_XATO, notifier.superadmins(), "⚠️ <i>Xodim botga bog'lanmagan: " + esc(who(ac))
                     + " — xabar sizga keldi. Pastdagi tugma bilan ulang, keyingi xabarlar unga boradi.</i>"
                     + notifier.inviteLine(creator) + "\n\n" + text,
                     ControlNotifier.withLink(agentKb(a.id()), creator));
@@ -225,8 +227,8 @@ public class AgentCheckService {
         repo.save(ac);
         audit.log(ac.getCreatorUserId(), "KG_XATO_TUZATILDI", "agent_check", ac.getId(), ac.getAgentName());
         String text = "✅ <b>Kontragent tuzatildi</b>: " + esc(ac.getAgentName()) + "\nRahmat, endi hammasi to'g'ri.";
-        if (ac.getCreatorUserId() != null)
-            userRepo.findById(ac.getCreatorUserId()).ifPresent(u -> notifier.sendOne(u, text, null));
+        if (ac.getCreatorUserId() != null && sw.on(uz.kassa.service.NotifySwitches.KG_TUZATILDI))
+            userRepo.findById(ac.getCreatorUserId()).ifPresent(u -> notifier.sendOne(uz.kassa.service.NotifySwitches.KG_TUZATILDI, u, text, null));
     }
 
 
@@ -247,7 +249,8 @@ public class AgentCheckService {
                         + agentLines(ac)
                         + "\nXodim tuzatishini nazorat qiling. " + cfg.esc2Min() + " daqiqada tuzatilmasa admin'ga «tuzatilmadi» xabari boradi.";
                 Set<AppUser> heads = notifier.heads(ac.getKassaId());
-                if (!heads.isEmpty()) notifier.send(heads, text, agentKb(ac.getAgentMsId()));
+                if (!heads.isEmpty() && sw.on(uz.kassa.service.NotifySwitches.KG_ESKALATSIYA))
+                    notifier.send(uz.kassa.service.NotifySwitches.KG_ESKALATSIYA, heads, text, agentKb(ac.getAgentMsId()));
             }
             if (ac.getEscalated2At() == null && !ac.getNotifiedAt().isAfter(lim2)) {
                 ac.setEscalated2At(Instant.now());
@@ -256,7 +259,8 @@ public class AgentCheckService {
                 String text = "\u274C <b>TUZATILMADI — kontragent xatosi " + cfg.esc2Min() + " daqiqadan beri ochiq</b>\n"
                         + agentLines(ac)
                         + "\nXodim ham, otdel rahbari ham tuzatmadi.";
-                notifier.send(notifier.escalation(ac.getKassaId()), text, agentKb(ac.getAgentMsId()));
+                if (sw.on(uz.kassa.service.NotifySwitches.KG_ESKALATSIYA))
+                    notifier.send(uz.kassa.service.NotifySwitches.KG_ESKALATSIYA, notifier.escalation(ac.getKassaId()), text, agentKb(ac.getAgentMsId()));
             }
         }
     }
@@ -287,7 +291,7 @@ public class AgentCheckService {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (u == null || u.getTelegramId() == null) continue;
             for (AgentCheck ac : e.getValue()) { ac.setLastDaily(today); repo.save(ac); }
-            notifier.sendOne(u, openListText(e.getValue()), null);
+            notifier.sendOne(uz.kassa.service.NotifySwitches.KG_KUNLIK, u, openListText(e.getValue()), null);
         }
     }
 

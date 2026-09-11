@@ -33,6 +33,7 @@ public class ControlNotifier {
     private final Sender sender;
     private final ControlConfig cfg;
     private final InviteService invite;
+    private final uz.kassa.service.NotifySwitches sw;
 
     /**
      * «Xodim Telegram'ga ulanmagan» xabariga 🔗 taklif havolasi qatori — admin nusxalab xodimga yuboradi,
@@ -123,6 +124,16 @@ public class ControlNotifier {
 
     public void sendOne(AppUser u, String text, InlineKeyboardMarkup kb) {
         if (u != null) send(List.of(u), text, kb);
+    }
+
+    /** 🔕 Хабарномалар kaliti bilan: tur o'chiq — hech kimga, auditoriyasi o'chiq — o'sha odamlarga ketmaydi. */
+    public void send(String code, Collection<AppUser> users, String text, InlineKeyboardMarkup kb) {
+        List<AppUser> to = sw.filter(code, users);
+        if (!to.isEmpty()) send(to, text, kb);
+    }
+
+    public void sendOne(String code, AppUser u, String text, InlineKeyboardMarkup kb) {
+        if (u != null) send(code, List.of(u), text, kb);
     }
 
     public String kassaName(Long kassaId) {

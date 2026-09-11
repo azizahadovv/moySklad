@@ -35,6 +35,7 @@ public class SyncSupport {
     private final ClickAccountRepo clickRepo;
     private final SettingsService settings;
     private final NotificationService notify;
+    private final uz.kassa.service.NotifySwitches sw;
     private final AppProps props;
 
     /**
@@ -72,6 +73,7 @@ public class SyncSupport {
 
     /** Tuzatish xabarini yuborish kerakmi: bugungi hujjat — ha; eski — sanaladi. */
     boolean loudFix(LocalDate docDate) {
+        if (!sw.on(uz.kassa.service.NotifySwitches.MS_TUZATISH)) return false;   // 🔕 Хабарномалар: sanalmaydi ham
         if (!quietReload && docDate.equals(ledger.today())) return true;
         quietFixes++;
         return false;
@@ -82,7 +84,8 @@ public class SyncSupport {
     void flushQuietFixes(String source) {
         int n = quietFixes;
         quietFixes = 0;
-        if (n > 0) notify.toBuxgalteriya("🔧 MoySklad " + source + ": o'tgan kunlardagi <b>" + n
+        if (n > 0)
+            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "🔧 MoySklad " + source + ": o'tgan kunlardagi <b>" + n
                 + "</b> ta hujjat o'zgarishi (otdel/summa/storno) avtomatik tuzatildi. "
                 + "Tafsilotlar: Настройка → 📋 Аудит.", null);
     }
@@ -127,7 +130,7 @@ public class SyncSupport {
             sb.append("\n\nHujjatlar eng birinchi kassaga yoziladi, otdel-ko'chirishlar esa "
                     + "TO'XTATILDI (xabar yog'ilib ketmasligi uchun). Sheets «Kassalar» varag'ida "
                     + "yoki bazada otdelni faqat bitta kassada qoldiring.");
-            notify.toRole(uz.kassa.domain.Role.SUPERADMIN, sb.toString(), null);
+            notify.toRole(uz.kassa.service.NotifySwitches.TEXNIK_OGOH, uz.kassa.domain.Role.SUPERADMIN, sb.toString(), null);
         }
 
         java.util.Map<String, String> isoMap = client.fetchCurrencies();
@@ -210,9 +213,9 @@ public class SyncSupport {
 
     /** Kurs kiritilmagan valyuta hujjati — bir marta ogohlantirish. */
     void warnNoRate(MoySkladClient.MsExpense e) {
-        if (!noRateWarned.add(e.id())) return;
+        if (!noRateWarned.add(e.id()) || !sw.on(uz.kassa.service.NotifySwitches.TEXNIK_OGOH)) return;
         String iso = currencyIso.getOrDefault(e.currencyId(), "valyuta");
-        notify.toBuxgalteriya("💱⚠️ MoySklad hujjatida <b>valyuta kursi kiritilmagan</b> — "
+        notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.TEXNIK_OGOH, "💱⚠️ MoySklad hujjatida <b>valyuta kursi kiritilmagan</b> — "
                 + "tizimga o'tkazilmadi:\n" + docInfo(e)
                 + "\nSumma: <b>" + TextUtil.fmt(e.sumTiyin() / 100) + " " + TextUtil.esc(iso)
                 + "</b>\nMoySklad'da kursni kiriting — keyingi sinxronda avtomatik kiradi.", null);
@@ -232,7 +235,7 @@ public class SyncSupport {
         LocalDate opDate = op.getOpDate();
         if (!ledger.reverseSyncOp(op, reason)) return false;
         if (loudFix(opDate))
-            notify.toBuxgalteriya("♻️ MoySklad STORNO — " + TextUtil.esc(reason) + ":\n"
+            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.MS_TUZATISH, "♻️ MoySklad STORNO — " + TextUtil.esc(reason) + ":\n"
                     + "<b>" + TextUtil.esc(owner) + "</b> — " + TextUtil.fmt(amount)
                     + " so'm (" + mtLabel(mt) + ", " + kind + ")"
                     + (info.isEmpty() ? "" : "\n" + info), null);
@@ -290,10 +293,10 @@ public class SyncSupport {
 
 
     void checkNegative(OwnerType ot, Long oid, MoneyType mt, String sabab) {
-        if (quietReload) return;
+        if (quietReload || !sw.on(uz.kassa.service.NotifySwitches.BAL_MANFIY)) return;
         long bal = ledger.view(ot, oid, mt).getAmount();
         if (bal < 0) {
-            notify.toBuxgalteriya("⚠️ " + sabab + " natijasida <b>" + TextUtil.esc(ownerDisplayName(ot, oid))
+            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.BAL_MANFIY, "⚠️ " + sabab + " natijasida <b>" + TextUtil.esc(ownerDisplayName(ot, oid))
                     + "</b> " + mtLabel(mt) + " balansi manfiy: " + TextUtil.fmt(bal)
                     + " so'm. Korrektirovka talab qilinadi.", null);
         }

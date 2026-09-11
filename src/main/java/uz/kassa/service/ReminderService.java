@@ -36,6 +36,7 @@ public class ReminderService {
     private final ReminderRepo repo;
     private final AppUserRepo userRepo;
     private final NotificationService notify;
+    private final NotifySwitches sw;
     private final AuditService audit;
     private final AppProps props;
     private final MoySkladClient msClient;
@@ -137,7 +138,7 @@ public class ReminderService {
                     String text = "✅ Qarz eslatmasi avtomatik yopildi (MoySklad balansiga ko'ra):\n\n"
                             + render(r, false);
                     for (Long uid : r.recipientSet())
-                        userRepo.findById(uid).ifPresent(x -> notify.toUser(x.getTelegramId(), text));
+                        userRepo.findById(uid).ifPresent(x -> notify.toUser(NotifySwitches.QARZ_ESLATMA, x, text));
                 }
             } catch (Exception e) {
                 log.warn("Eslatma #{} MoySklad sinxron xatosi: {}", r.getId(), e.getMessage());
@@ -235,17 +236,20 @@ public class ReminderService {
                 int[] delivered = {0};
                 for (Long uid : r.recipientSet())
                     userRepo.findById(uid).ifPresent(x -> {
-                        if (x.getTelegramId() != null) { notify.toUser(x.getTelegramId(), text); delivered[0]++; }
+                        if (x.getTelegramId() != null) {
+                            notify.toUser(NotifySwitches.QARZ_ESLATMA, x, text);
+                            delivered[0]++;
+                        }
                     });
-                if (delivered[0] == 0) {
+                if (delivered[0] == 0 && sw.on(NotifySwitches.QARZ_ESLATMA)) {
                     // T4: «yuborildi» deb belgilanib, aslida hech kimga bormasin — zaxira kanal:
                     // kiritgan odam (Telegram bo'lsa), aks holda SuperAdmin'lar.
                     String warn = "⚠️ <b>Eslatma #" + r.getId() + " hech kimga yetib bormadi</b> — "
                             + "qabul qiluvchilarda Telegram ulanmagan. Sizga yuborildi:\n\n" + text;
                     AppUser creator = userRepo.findById(r.getCreatorUserId()).orElse(null);
                     if (creator != null && creator.getTelegramId() != null && creator.isActive())
-                        notify.toUser(creator.getTelegramId(), warn);
-                    else notify.toRole(Role.SUPERADMIN, warn, null);
+                        notify.toUser(NotifySwitches.QARZ_ESLATMA, creator, warn);
+                    else notify.toRole(NotifySwitches.QARZ_ESLATMA, Role.SUPERADMIN, warn, null);
                     log.warn("Eslatma #{}: qabul qiluvchilarda Telegram yo'q — zaxira kanalga yuborildi", r.getId());
                 }
                 r.setLastNotified(today);

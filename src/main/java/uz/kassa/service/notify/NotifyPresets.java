@@ -24,6 +24,34 @@ public final class NotifyPresets {
     }
 
     public static final List<Preset> ALL = List.of(
+        new Preset("ombor_kun", "🏬 Омбор кунлик (rahbarga)",
+            "Ombor moduli kunlik jamlamasi: ochiq kamchiliklar, manfiy qoldiq, sanoq, fill rate, do'kon kesimida. "
+            + "Kimga: ombor hisobot oluvchilari (⚙️ → 🏬 Омбор назорати) yoki SuperAdmin.",
+            "🏬 Омбор кунлик (namuna)", "times:08:30", "", "rol:SUPERADMIN", 0,
+            """
+            🏬 <b>ОМБОР — кунлик</b> · {sana}
+            ⚠️ Очиқ камчиликлар: <b>{ombor.kamchilik_soni}</b> (муҳим {ombor.kamchilik_muhim})
+            🔴 Манфий қолдиқ: {ombor.manfiy_soni} · 📦 ўтказилмаган ҳужжат: {ombor.otkazilmagan_soni}
+            🔢 Санoq кутмоқда: {ombor.sanoq_kutmoqda} · 📈 Fill rate: {ombor.fill_rate}
+            🧾 Буюртма номзодлари: {ombor.buyurtma_nomzod} · 🔁 кўчириш таклифи: {ombor.kochirish_soni}
+            ━━━━━━━━━━━━━━━━━━━━
+            {ombor.dokon}
+            ━━━━━━━━━━━━━━━━━━━━
+            {ombor.royxat}"""),
+
+        new Preset("ombor_hafta", "🏬 Омбор ҳафталик (rahbarga)",
+            "Dushanba: fill rate, neliqvid, dublikat, hamkor qarzi, sanoq bajarilishi.",
+            "🏬 Омбор ҳафталик (namuna)", "times:09:00", "1", "rol:SUPERADMIN", 0,
+            """
+            🏬 <b>ОМБОР — ҳафталик</b> · {sana}
+            📈 Fill rate (A, 30 кун): <b>{ombor.fill_rate}</b>
+            🐢 Неликвид (90+ кун): {ombor.nelikvid_soni} · 🧬 Дубликат: {ombor.dublikat_soni}
+            🔢 Санoq бажарилди (7 кун): {ombor.sanoq_bajarildi_foiz}
+            🤝 Ҳамкорлар қарзи: {ombor.hamkor_qarz_summa} сўм
+            🗂 Фаол товарлар: {ombor.tovar_soni}
+            ━━━━━━━━━━━━━━━━━━━━
+            {ombor.dokon}"""),
+
         new Preset("click", "📲 Click qoldiqlari (soatlik)",
             "Mavjud soatlik Click hisobotining shablon nusxasi: har karta bo'yicha MoySklad va karta "
             + "qoldig'i, farq, xulosa. Kimga: Click guruhlari.",

@@ -16,6 +16,10 @@ public class Kassa {
     @Column(name = "moysklad_store_id")
     private String moyskladStoreId;
 
+    /** 🏬 MoySklad OMBOR (склад) UUID — qoldiqlar shu orqali do'konga bog'lanadi (retailstore.store dan avtomatik). */
+    @Column(name = "moysklad_warehouse_id")
+    private String moyskladWarehouseId;
+
     /** MoySklad otdel (group) UUID — Приходный/Расходный ордер shu bog'lanish orqali kassaga yoziladi. */
     @Column(name = "moysklad_group_id")
     private String moyskladGroupId;

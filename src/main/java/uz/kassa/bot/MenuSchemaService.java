@@ -31,7 +31,7 @@ public class MenuSchemaService {
     /** Faqat SuperAdmin ko'radigan tugmalar (qaysi menyuda bo'lmasin). */
     public static final Set<String> SA_ONLY = new LinkedHashSet<>();
     /** Ko'chirib bo'lmaydigan tugmalar (sozlamalarga kirish yo'li). */
-    public static final Set<String> PINNED = Set.of("⚙️ Настройка", "🏪 Кассалар", "🤝 КОНТРАГЕНТ");
+    public static final Set<String> PINNED = Set.of("⚙️ Настройка", "🏪 Кассалар", "🤝 КОНТРАГЕНТ", "🏬 Омбор");
 
     public static final Map<String, MenuDef> MENUS;
 
@@ -45,7 +45,7 @@ public class MenuSchemaService {
 
         Map<String, MenuDef> m = new LinkedHashMap<>();
         reg(m, "main.bux", "🏠 Bosh menyu — Buxgalter/Admin", true,
-                "🏪 Кассалар", "📥 Кутилаётганлар", "📊 Ҳисоботлар", "🤝 КОНТРАГЕНТ", "💰 Баланс", "⚙️ Настройка");
+                "🏪 Кассалар", "📥 Кутилаётганлар", "📊 Ҳисоботлар", "🤝 КОНТРАГЕНТ", "🏬 Омбор", "💰 Баланс", "⚙️ Настройка");
         reg(m, "stat", "📊 Ҳисоботлар", true,
                 "💰 Бугунги тушум", "🧾 Расходлар",
                 "🏪 Кассалар холати", "🧾 Карзлар реестр", "📜 История",
@@ -58,11 +58,11 @@ public class MenuSchemaService {
         reg(m, "soz.moliya", "💼 Молия", true,
                 "💼 Бошланғич қолдиқ", "🛠 Корректировка", "📅 Ledger санаси", "♻️ Нол бошлаш");
         reg(m, "soz.moysklad", "🔗 MoySklad", true,
-                "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "📥 Қайта юклаш", "🩺 Диагностика", "🕵️ Назорат");
+                "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "📥 Қайта юклаш", "🩺 Диагностика", "🕵️ Назорат", "🏬 Омбор назорати");
         reg(m, "soz.interfeys", "🎛 Интерфейс", true,
-                "🏷 Тугма номлари", "🧩 Меню тартиби", "🔔 Билдиришномалар", "📋 Аудит");
+                "🏷 Тугма номлари", "🧩 Меню тартиби", "🔔 Билдиришномалар", "🔕 Хабарномалар", "📋 Аудит");
         reg(m, "main.kassir", "🏠 Bosh menyu — Kassir", false,
-                "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ", "🔁 O'tkazma", "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ", "💰 Баланс");
+                "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ", "🔁 O'tkazma", "📤 Hisobot topshirish", "🤝 КОНТРАГЕНТ", "🏬 Омбор", "💰 Баланс");
         reg(m, "kassam", "📊 КАССАМ (kassir paneli)", false,
                 "💰 Бугунги тушум", "💸 Расход", "📆 Давр танлаш", "💼 Салдо", "🧾 Қарзларим", "🏦 Топширганларим", "📊 Excel");
         reg(m, "kassa", "🏪 Kassa kartasi", false,

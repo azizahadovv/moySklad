@@ -36,6 +36,7 @@ public class ControlWelcomeService {
     private final AgentCheckService agents;
     private final ControlConfig cfg;
     private final Sender sender;
+    private final uz.kassa.service.NotifySwitches sw;
 
     /** userId -> keyingi urinish vaqti (chat topilmasa spam bo'lmasin). */
     private final Map<Long, Long> retryAt = new ConcurrentHashMap<>();
@@ -69,6 +70,7 @@ public class ControlWelcomeService {
         String issueText = shipments.pendingIssuesText(u);
         String debtText = shipments.debtorsDigest(u);
         if (open.isEmpty() && issueText == null && debtText == null) return;
+        if (!sw.allow(uz.kassa.service.NotifySwitches.KG_XUSH, u)) return;   // 🔕 Хабарномалар: belgilanadi, xabar ketmaydi
 
         sender.send(tg, "👋 Xush kelibsiz, <b>" + esc(u.getFullName()) + "</b>! Sizga tegishli nazorat xabarlari quyida — "
                 + "bundan keyin ular to'g'ridan-to'g'ri sizga keladi: avval sizga, " + cfg.esc1Min()

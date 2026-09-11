@@ -35,6 +35,7 @@ public class MoySkladAuditService {
     private final OperationRepo opRepo;
     private final SettingsService settings;
     private final NotificationService notify;
+    private final uz.kassa.service.NotifySwitches sw;
     private final AppProps props;
     private final SyncSupport sup;
     private final MoySkladDocApplier applier;
@@ -158,7 +159,7 @@ public class MoySkladAuditService {
             ledger.postAdjustment(OpType.KORREKTIROVKA, OwnerType.CLICK, c.getId(), MoneyType.KLIK,
                     diff, "MoySklad joriy qoldig'iga tenglashtirish (doim bir xil siyosati)",
                     null, ledger.today());
-            notify.toBuxgalteriya("🔄 <b>Click avto-tenglashtirish</b>: <b>" + TextUtil.esc(c.getName())
+            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.CLICK_AVTO, "🔄 <b>Click avto-tenglashtirish</b>: <b>" + TextUtil.esc(c.getName())
                     + "</b> — MoySklad joriy qoldig'i bilan farq topildi, tenglashtirildi:\n"
                     + TextUtil.fmt(bot) + " → <b>" + TextUtil.fmt(bot + diff) + "</b> so'm ("
                     + (diff > 0 ? "+" : "") + TextUtil.fmt(diff) + ")"
@@ -196,7 +197,7 @@ public class MoySkladAuditService {
         if (diff == 0) {
             if (!prev.isBlank()) {
                 settings.set(NAQD_AUDIT_KEY, "");
-                notify.toBuxgalteriya("✅ <b>Naqd tekshiruvi</b>: farq yopildi — MoySklad CASH va bot "
+                notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.NAQD_TEKSHIRUV, "✅ <b>Naqd tekshiruvi</b>: farq yopildi — MoySklad CASH va bot "
                         + "jami naqd teng: <b>" + TextUtil.fmt(msCash) + "</b> so'm", null);
             }
             return;
@@ -291,7 +292,7 @@ public class MoySkladAuditService {
               .append("\nℹ️ Bot hech narsani O'ZI YOZMAYDI. Xabar farq o'zgarganda darhol, "
                     + "aks holda 24 soatda bir keladi. Qo'lda tekshirish: /auditclick");
             settings.set(NAQD_AUDIT_KEY, diff + "|" + System.currentTimeMillis());
-            notify.toBuxgalteriya(sb.toString(), null);
+            notify.toBuxgalteriya(uz.kassa.service.NotifySwitches.NAQD_TEKSHIRUV, sb.toString(), null);
             log.info("Naqd tekshiruvi: MS {} bot {} farq {} — xabar yuborildi", msCash, total, diff);
         } catch (Exception e) {
             log.warn("Naqd qayta tekshiruv xatosi: {}", e.getMessage());

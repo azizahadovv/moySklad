@@ -11,6 +11,7 @@ import uz.kassa.repo.KassaRepo;
 import uz.kassa.service.DayService;
 import uz.kassa.service.LedgerService;
 import uz.kassa.service.NotificationService;
+import uz.kassa.service.NotifySwitches;
 import uz.kassa.service.SubmissionService;
 import uz.kassa.service.moysklad.MoySkladSyncService;
 
@@ -39,6 +40,7 @@ public class Jobs {
     private final uz.kassa.repo.OperationRepo opRepo;
     private final uz.kassa.service.moysklad.MoySkladClient msClient;
     private final uz.kassa.service.SettingsService settings;
+    private final NotifySwitches sw;
     private final uz.kassa.bot.Sender sender;
     private final uz.kassa.repo.AppUserRepo userRepo;
     private final uz.kassa.repo.GroupMemberRepo groupMemberRepo;
@@ -49,6 +51,14 @@ public class Jobs {
     private final uz.kassa.service.control.ControlConfig controlCfg;
     private final uz.kassa.service.control.EmployeeLinkService employeeLink;
     private final uz.kassa.service.control.ControlWelcomeService controlWelcome;
+    private final uz.kassa.service.ombor.OmborSyncService omborSync;
+    private final uz.kassa.service.ombor.OmborRuleEngine omborRules;
+    private final uz.kassa.service.ombor.OmborSalesService omborSales;
+    private final uz.kassa.service.ombor.OmborCalcService omborCalc;
+    private final uz.kassa.service.ombor.OmborSanoqService omborSanoq;
+    private final uz.kassa.service.ombor.OmborNarxService omborNarx;
+    private final uz.kassa.service.ombor.OmborSorovService omborSorov;
+    private final uz.kassa.service.ombor.OmborDraftService omborDraft;
     private volatile long lastBalanceTick = 0;
 
     /**
@@ -199,7 +209,7 @@ public class Jobs {
     private void jobFail(String job, Exception e) {
         int n = jobFails.merge(job, 1, Integer::sum);
         if (n == 10)
-            notify.toRole(Role.SUPERADMIN, "🚨 <b>" + job + "</b> ishi 10 marta KETMA-KET "
+            notify.toRole(NotifySwitches.TEXNIK_OGOH, Role.SUPERADMIN, "🚨 <b>" + job + "</b> ishi 10 marta KETMA-KET "
                     + "xato bermoqda — tizim qisman ishlamayapti!\nOxirgi xato: "
                     + TextUtil.esc(String.valueOf(e.getMessage())), null);
     }
@@ -295,12 +305,12 @@ public class Jobs {
             var e = it.next();
             if (current.contains(e.getKey())) continue;
             if (e.getValue()[2] != 0)
-                notify.toRole(Role.SUPERADMIN, "✅ <b>" + TextUtil.esc(names.owner(OwnerType.KASSA, e.getKey()))
+                notify.toRole(NotifySwitches.BAL_NOMUVOFIQ, Role.SUPERADMIN, "✅ <b>" + TextUtil.esc(names.owner(OwnerType.KASSA, e.getKey()))
                         + "</b>: kunlar kesimi balansga mos keldi.", null);
             it.remove();
         }
         if (alerts == 0) return;
-        notify.toRole(Role.SUPERADMIN, "⚠️ <b>Kunlar kesimi balansga mos emas!</b>\n"
+        notify.toRole(NotifySwitches.BAL_NOMUVOFIQ, Role.SUPERADMIN, "⚠️ <b>Kunlar kesimi balansga mos emas!</b>\n"
                 + "Kassa naqd balansi va kunlar qoldig'i yig'indisi 30 daqiqadan beri farq qiladi "
                 + "(pul qabulida kunlarga tushmagan qoldiq yoki yo'qolgan yozuv):\n" + sb
                 + "\nTuzatish: 🛠 Корректировка — farq summasini o'sha kun sanasi bilan kiriting "
@@ -351,7 +361,7 @@ public class Jobs {
                       .append(o.getMoyskladId() == null ? " (qo'lda)" : " (MoySklad)");
                 }
             }
-            notify.toRole(Role.SUPERADMIN, sb.toString(), null);
+            notify.toRole(NotifySwitches.BAL_NOMUVOFIQ, Role.SUPERADMIN, sb.toString(), null);
             log.warn("Balans nomuvofiqligi: {} ta qator", issues.size());
         } catch (Exception e) {
             log.error("Balans tekshiruvi xatosi: {}", e.getMessage(), e);
@@ -382,6 +392,7 @@ public class Jobs {
         int from = clickFrom(), to = clickTo();
         if (h < from || h > to) return;
         if ((h - from) % clickEvery() != 0) return;
+        if (!sw.on(NotifySwitches.CLICK_SOATLIK)) { log.info("Click hisobot: 🔕 o'chirilgan (Хабарномалар)"); return; }
         log.info("Click hisobot: nominal {}:00 (siljish {} min) — yuborilmoqda", h, clickOffsetMin());
         clickReportNow();
     }
@@ -614,6 +625,7 @@ public class Jobs {
     /** Har kuni app.reminder-hour (standart 21:00) — kassirlarga eslatma (TZ 7.2). */
     @Scheduled(cron = "0 0 ${app.reminder-hour:21} * * *", zone = "${app.zone:Asia/Tashkent}")
     public void reminder() {
+        if (!sw.on(NotifySwitches.KASSIR_ESLATMA)) return;   // 🔕 Хабарномалар
         LocalDate today = ledger.today();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
             try {
@@ -634,7 +646,7 @@ public class Jobs {
                 sb.append("Qo'lingizdagi qoldiq: Naqd ").append(TextUtil.fmt(availNaqd))
                         .append(" · Click ").append(TextUtil.fmt(availKlik)).append(" so'm");
 
-                notify.toKassa(k.getId(), sb.toString(), null);
+                notify.toKassa(NotifySwitches.KASSIR_ESLATMA, k.getId(), sb.toString(), null);
             } catch (Exception e) {
                 log.warn("Eslatma ({}): {}", k.getName(), e.getMessage());
             }
@@ -693,5 +705,46 @@ public class Jobs {
         catch (Exception e) { log.warn("Qarzdor eslatmalari xatosi: {}", e.getMessage()); }
         try { agentCheckSvc.dailyTick(); }
         catch (Exception e) { log.warn("Kontragent kunlik jamlama xatosi: {}", e.getMessage()); }
+    }
+
+    /* ==================== 🏬 ОМБОР ==================== */
+
+    /** Omborlar + tovarlar (inkremental, har 10 daqiqa). */
+    @Scheduled(fixedDelayString = "PT10M", initialDelayString = "PT150S")
+    public void omborSync() {
+        try { omborSync.tick(); jobOk("Ombor sinxron"); }
+        catch (Exception e) { jobFail("Ombor sinxron", e); log.warn("Ombor sinxron xatosi: {}", e.getMessage()); }
+    }
+
+    /** Qoldiqlar (report/stock) — ombor.stock_time dan keyin kuniga bir marta (har 15 daqiqada tekshiriladi). */
+    @Scheduled(fixedDelayString = "PT15M", initialDelayString = "PT4M")
+    public void omborStock() {
+        boolean ran = false;
+        try { ran = omborSync.stockTick(false); }
+        catch (Exception e) { log.warn("Ombor qoldiq sinxroni xatosi: {}", e.getMessage()); }
+        if (!ran) return;
+        // tunlik zanjir: qoldiq → kecha/bugun sotuv → hisoblar (ABC, ROP, fill) → sanoq rejasi → hamkorlar
+        try { omborSales.refreshRecent(); } catch (Exception e) { log.warn("Ombor sotuv (kecha/bugun): {}", e.getMessage()); }
+        try { omborCalc.nightly(); } catch (Exception e) { log.warn("Ombor tunlik hisob: {}", e.getMessage()); }
+        try { omborSanoq.planToday(); } catch (Exception e) { log.warn("Ombor sanoq rejasi: {}", e.getMessage()); }
+        try { omborNarx.fromSupplies(); } catch (Exception e) { log.warn("Ombor narx (priyomka): {}", e.getMessage()); }
+        try { omborNarx.pullSheets(null); } catch (Exception e) { log.warn("Ombor Sheets: {}", e.getMessage()); }
+        try { var ids = omborSync.hamkorIds(); if (!ids.isEmpty()) omborSorov.hamkorIntervals(ids); } catch (Exception e) { log.warn("Ombor hamkorlar: {}", e.getMessage()); }
+        try { omborRules.tick(); } catch (Exception e) { log.warn("Ombor qoidalar (tun): {}", e.getMessage()); }
+        try { omborDraft.buildAll(); } catch (Exception e) { log.warn("Ombor qoralama: {}", e.getMessage()); }
+    }
+
+    /** Sotuv tarixini orqaga yuklash (kursor tugaguncha, har 15 daqiqada 20 kun). */
+    @Scheduled(fixedDelayString = "PT15M", initialDelayString = "PT6M")
+    public void omborSalesBackfill() {
+        try { if (!omborSales.backfillDone()) omborSales.backfillTick(); }
+        catch (Exception e) { log.warn("Ombor sotuv tarixi xatosi: {}", e.getMessage()); }
+    }
+
+    /** Qoidalar → kamchiliklar → xabar → eskalatsiya (har 5 daqiqa). */
+    @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT5M")
+    public void omborRules() {
+        try { omborRules.tick(); jobOk("Ombor qoidalar"); }
+        catch (Exception e) { jobFail("Ombor qoidalar", e); log.warn("Ombor qoidalar xatosi: {}", e.getMessage()); }
     }
 }

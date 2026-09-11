@@ -61,10 +61,10 @@ public final class Keyboards {
 
     private static final List<String> KASSIR_MAIN = List.of(
             "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ", "🔁 O'tkazma", "📤 Hisobot topshirish",
-            "🤝 КОНТРАГЕНТ", "💰 Баланс");
+            "🤝 КОНТРАГЕНТ", "🏬 Омбор", "💰 Баланс");
     /** Buxgalter/SuperAdmin bosh menyusi — 3 daraja qoidasi: bosh menyu → bo'lim → amal. */
     private static final List<String> BUX_MAIN = List.of(
-            "🏪 Кассалар", "📥 Кутилаётганлар", "📊 Ҳисоботлар", "🤝 КОНТРАГЕНТ", "💰 Баланс", "⚙️ Настройка");
+            "🏪 Кассалар", "📥 Кутилаётганлар", "📊 Ҳисоботлар", "🤝 КОНТРАГЕНТ", "🏬 Омбор", "💰 Баланс", "⚙️ Настройка");
     public static final String SETTINGS_LABEL = "⚙️ Настройка";
     public static final String WEBAPP_LABEL = "🌐 Админ панел";
 
@@ -95,7 +95,7 @@ public final class Keyboards {
         if (!addCustom(rows, "main.kassir", KASSIR_MAIN, visible)) {
             addRowIf(rows, visible, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
             addRowIf(rows, visible, "🔁 O'tkazma", "📤 Hisobot topshirish");
-            addRowIf(rows, visible, "🤝 КОНТРАГЕНТ");
+            addRowIf(rows, visible, "🤝 КОНТРАГЕНТ", "🏬 Омбор");
             addRowIf(rows, visible, "💰 Баланс");
         }
         addExtraRows(rows, extra);
@@ -127,7 +127,8 @@ public final class Keyboards {
         if (!addCustom(rows, "main.bux", BUX_MAIN, vis)) {
             addRowIf(rows, vis, "🏪 Кассалар", "📥 Кутилаётганлар");
             addRowIf(rows, vis, "📊 Ҳисоботлар", "🤝 КОНТРАГЕНТ");
-            addRowIf(rows, vis, "💰 Баланс", SETTINGS_LABEL);
+            addRowIf(rows, vis, "🏬 Омбор", "💰 Баланс");
+            addRowIf(rows, vis, SETTINGS_LABEL);
         }
         addExtraRows(rows, extra);
         // webappUrl: reply-klaviatura WebApp tugmasi ISHLATILMAYDI — Telegram u orqali initData
@@ -157,7 +158,7 @@ public final class Keyboards {
             "👥 Foydalanuvchi qo'shish", "🏪 Kassa qo'shish",
             "💼 Boshlang'ich qoldiq", "👤 Foydalanuvchilar",
             "👑 АДМИН ПАНЕЛ", "💰 БУГУНГИ ТУШУМ", "📊 ПАНЕЛ", "📊 КАССАМ", "🏪 KASSA",
-            "🤝 КОНТРАГЕНТ", "💰 Баланс",
+            "🤝 КОНТРАГЕНТ", "🏬 Омбор", "💰 Баланс",
             "🏪 Кассалар", "📥 Кутилаётганлар", "📊 Ҳисоботлар", "⚙️ Настройка", "🌐 Админ панел");
 
     public static boolean isMenuLabel(String text) { return MENU_LABELS.contains(text); }
@@ -168,7 +169,7 @@ public final class Keyboards {
         List<KeyboardRow> rows = new ArrayList<>();
         addVisibleRow(rows, "📊 КАССАМ", "💰 БУГУНГИ ТУШУМ");
         addVisibleRow(rows, "🔁 O'tkazma", "📤 Hisobot topshirish");
-        addVisibleRow(rows, "🤝 КОНТРАГЕНТ");
+        addVisibleRow(rows, "🤝 КОНТРАГЕНТ", "🏬 Омбор");
         addVisibleRow(rows, "💰 Баланс");
         ReplyKeyboardMarkup m = new ReplyKeyboardMarkup();
         m.setKeyboard(rows);
@@ -211,6 +212,11 @@ public final class Keyboards {
     }
 
     /* ---------------- Inline ---------------- */
+
+    /** Rangli tugma (Bot API style): StyledButton.PRIMARY / SUCCESS / DANGER; null — oddiy. */
+    public static InlineKeyboardButton sbtn(String text, String data, String style) {
+        return style == null ? btn(text, data) : new StyledButton(text, data, style);
+    }
 
     public static InlineKeyboardButton btn(String text, String data) {
         return InlineKeyboardButton.builder().text(text).callbackData(data).build();

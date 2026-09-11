@@ -782,4 +782,44 @@ public class MoySkladClient {
         try { return api.fromMs(LocalDateTime.parse(v, DT_FMT)); } catch (Exception e) { return null; }
     }
 
+    /* ==================== 🏬 OMBOR: umumiy o'qish (registry uchun) ==================== */
+
+    /**
+     * Istalgan MoySklad ro'yxati: pathQuery — baseUrl'siz (masalan "entity/store?limit=100" yoki
+     * "report/stock/bystore?limit=1000"). Sahifalar meta.nextHref bo'yicha o'qiladi; sahifalar orasida
+     * qisqa pauza (rate-limit). 401/403 — bo'sh ro'yxat (last403 belgilanadi). Boshqa xato — exception.
+     */
+    public List<JsonNode> listAll(String pathQuery, int maxPages) {
+        List<JsonNode> out = new ArrayList<>();
+        String url = props.getMoysklad().getBaseUrl() + "/" + pathQuery;
+        for (int page = 0; url != null && page < maxPages; page++) {
+            JsonNode root = api.getJson(url);
+            if (root == null) break;
+            for (JsonNode r : root.path("rows")) out.add(r);
+            String next = root.path("meta").path("nextHref").asText("");
+            url = next.isBlank() ? null : next;
+            if (url != null) try { Thread.sleep(120); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+        }
+        return out;
+    }
+
+    /** Bitta JSON (baseUrl'siz path). 401/403 → null. */
+    public JsonNode fetchJson(String pathQuery) {
+        return api.getJson(props.getMoysklad().getBaseUrl() + "/" + pathQuery);
+    }
+
+    /** meta.href oxirgi segmenti (UUID). */
+    public String idOf(JsonNode metaHolder) {
+        String s = lastSegment(metaHolder.path("meta").path("href").asText(""));
+        int q = s.indexOf('?');   // report/stock: «…/product/<id>?expand=supplier»
+        return q < 0 ? s : s.substring(0, q);
+    }
+
+    /** MoySklad vaqt maydoni → bot vaqti (ombor sinxroni uchun ochiq). */
+    public LocalDateTime dtOf(JsonNode r, String field) { return dt(r, field); }
+
+    /** Bot vaqti → MoySklad filtri matni (Moskva). */
+    public String filterTime(LocalDateTime local) { return api.toMs(local).format(FILTER_FMT); }
+
+
 }

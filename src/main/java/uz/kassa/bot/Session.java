@@ -43,7 +43,10 @@ public class Session {
         KG_SEARCH, KG_MN_NAME, KG_MN_INFO, KG_SUM, KG_IZOH,
         KG_AU_TGID, KG_AU_NAME, KG_RN_NAME, KG_PAY_AMOUNT,
         // 🕵️ Nazorat: qarzni sabab bilan yopish (SuperAdmin), sozlama qiymatini kiritish
-        KG_CLOSE_REASON, ADM_CT_VAL
+        KG_CLOSE_REASON, ADM_CT_VAL,
+        // 🏬 Ombor: tovar qidirish; sozlama qiymati (SuperAdmin)
+        OM_SEARCH, ADM_OM_VAL, OM_SANOQ_QTY, ADM_OM_DAVR,
+        OM_SOROV_PROD, OM_SOROV_NEW, OM_SOROV_QTY, OM_SOROV_ANS, OM_QR_QTY, OM_NARX, OM_ISSUE_Q
     }
 
     public State state = State.IDLE;
