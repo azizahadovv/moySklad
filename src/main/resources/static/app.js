@@ -4,6 +4,8 @@
    Route қоидаси: #/<tab>/<объект>/<кўриниш>, ID йўлда, фильтр сўровда.
    ============================================================ */
 
+import { barsH, barsGrouped, meter, statChips, vizInit } from './viz.js?v=16';
+
 const tg = window.Telegram?.WebApp;
 /* initData: SDK'dan; SDK yuklanmagan bo'lsa Telegram URL hash'iga qo'ygan tgWebAppData'dan
    (hash'ni router o'zgartirmasidan OLDIN o'qib olamiz). */
@@ -109,6 +111,7 @@ const PAGES = {
 
 async function render() {
   const { seg, q } = parseRoute();
+  arranging = false; document.body.classList.remove('arrange');
   const root = seg[0] || '';
   state.tab = root === '' || root === 'pending' ? 'bugun' : root;
   document.querySelectorAll('.nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab));
@@ -130,39 +133,62 @@ async function pageBugun() {
   const d = await api('/admin/dashboard');
   setTitle('Бугун · ' + dUz(d.today), 'ҳолат ' + d.asOf + (d.msKnown ? '' : ' · ⚠️ MoySklad ўқилмади'));
   document.getElementById('dot-bugun').hidden = d.pending.length === 0;
-  const farqli = d.kassalar.filter(k => !k.cashless && k.farq !== 0);
+  const ks = d.kassalar.filter(k => !k.cashless);
+  const farqli = ks.filter(k => k.farq !== 0);
   const kartaBad = d.karta.farq + d.karta.kiritilmagan;
+  const short = n => n.replace('Отдел ', '');
+  const tiles = [];
 
-  // 1) Ҳолат — тўрт рақам
-  let h = `<div class="label">Ҳолат</div><div class="kpis">
-      <div class="kpi"><div class="l">💵 Нақд кассаларда</div><div class="v num">${fmt(d.naqdJami)}</div><div class="s">бухгалтерияда ${fmt(d.buxNaqd)}</div></div>
-      <div class="kpi"><div class="l">📲 Click карталарда</div><div class="v num">${fmtT(d.karta.kartaTiyin)}</div><div class="s">MoySklad ${fmtT(d.karta.msTiyin)}</div></div>
-      <div class="kpi link" data-go="#/pending"><div class="l">📥 Қарор кутмоқда</div><div class="v num ${d.pending.length ? 'bad' : 'good'}">${d.pending.length}</div><div class="s">${d.pending.length ? 'ҳисобот' : 'ҳаммаси кўрилган'}</div></div>
-      <div class="kpi link" data-go="#/hisobot/karta"><div class="l">💳 Карта фарқи</div><div class="v num ${kartaBad ? 'warn' : 'good'}">${kartaBad}</div><div class="s">${d.karta.teng} тенг · ${d.karta.farq} фарқ · ${d.karta.kiritilmagan} йўқ</div></div>
-    </div>`;
+  tiles.push({ id: 'naqd', w: 'm', cls: 'hero accent', html: `
+    <div class="l">💵 Нақд кассаларда</div>
+    <div class="v num">${fmt(d.naqdJami)}<small>сўм</small></div>
+    <div class="s">Бухгалтерияда ${fmt(d.buxNaqd)} сўм · ${ks.length} касса</div>
+    <div class="fig">${barsH(ks.map(k => ({ label: short(k.name), value: k.naqd })), { fmt })}</div>` });
 
-  // 2) Қарор кутмоқда / эътибор — фақат бўлса
-  const attention = [];
-  for (const p of d.pending) attention.push(rowHtml('bad', p.kassa, `ҳисобот #${p.id} · ${p.days} кун · ${p.kassir || ''}`, fmt(p.naqd) + '<small>нақд</small>', `#/pending/${p.id}`));
-  for (const k of farqli) attention.push(rowHtml('warn', k.name, `MoySklad ${fmt(k.savdoMs)} · бот ${fmt(k.savdoBot)}`, sign(k.farq) + '<small>фарқ</small>', `#/kassa/${k.id}`));
-  for (const k of d.kassalar.filter(k => k.karta.kiritilmagan > 0)) attention.push(rowHtml('warn', k.name, `${k.karta.kiritilmagan} та карта қолдиғи киритилмаган`, '❗', `#/kassa/${k.id}`));
-  if (attention.length) h += `<div class="label">Эътибор керак · ${attention.length}</div><div class="rows">${attention.join('')}</div>`;
+  tiles.push({ id: 'karta', w: 's', go: '#/hisobot/karta', cls: kartaBad ? 'warn' : 'good', html: `
+    <div class="l">📲 Click карталарда<span class="chev">›</span></div>
+    <div class="v num">${fmtT(d.karta.kartaTiyin)}</div>
+    <div class="s">MoySklad ${fmtT(d.karta.msTiyin)}</div>
+    <div class="fig">${statChips([
+      { icon: '✅', label: 'тенг', value: d.karta.teng, state: 'ok' },
+      { icon: '⚠️', label: 'фарқ', value: d.karta.farq, state: d.karta.farq ? 'warn' : '' },
+      { icon: '❗', label: 'йўқ', value: d.karta.kiritilmagan, state: d.karta.kiritilmagan ? 'bad' : '' }])}</div>` });
 
-  // 3) Тез амаллар
-  h += `<div class="label">Тез амаллар</div><div class="tiles">
+  tiles.push({ id: 'pending', w: 's', go: '#/pending', cls: d.pending.length ? 'bad' : 'good', html: `
+    <div class="l">📥 Қарор кутмоқда<span class="chev">›</span></div>
+    <div class="v num ${d.pending.length ? 'bad' : 'good'}">${d.pending.length}</div>
+    <div class="s">${d.pending.length ? 'ҳисобот текширилмаган' : 'ҳаммаси кўриб чиқилган'}</div>` });
+
+  tiles.push({ id: 'savdo', w: 'm', html: `
+    <div class="l">📊 Бугунги савдо · MoySklad ↔ бот</div>
+    <div class="fig">${barsGrouped(ks.map(k => ({ label: short(k.name), a: k.savdoMs, b: k.savdoBot })), { aName: 'MoySklad', bName: 'Бот', fmt })}</div>
+    <div class="s">${farqli.length ? '⚠️ ' + farqli.length + ' кассада фарқ бор — пастда' : '✅ ҳамма касса тенг'}</div>` });
+
+  const att = [];
+  for (const p of d.pending) att.push(rowHtml('bad', p.kassa, 'ҳисобот #' + p.id + ' · ' + p.days + ' кун · ' + (p.kassir || ''), fmt(p.naqd) + '<small>нақд</small>', '#/pending/' + p.id));
+  for (const k of farqli) att.push(rowHtml('warn', k.name, 'MoySklad ' + fmt(k.savdoMs) + ' · бот ' + fmt(k.savdoBot), sign(k.farq) + '<small>фарқ</small>', '#/kassa/' + k.id));
+  for (const k of ks.filter(x => x.karta.kiritilmagan > 0)) att.push(rowHtml('warn', k.name, k.karta.kiritilmagan + ' та карта қолдиғи киритилмаган', '❗', '#/kassa/' + k.id));
+  tiles.push({ id: 'etibor', w: 'm', cls: att.length ? 'warn' : 'good', html: `
+    <div class="l">🔔 Эътибор керак · ${att.length}</div>
+    ${att.length ? '<div class="rows">' + att.join('') + '</div>' : '<div class="s">Ҳозирча ҳаммаси жойида ✅</div>'}` });
+
+  tiles.push({ id: 'kassalar', w: 'm', html: `
+    <div class="l">🏪 Кассалар бугун</div>
+    <div class="rows">${ks.map(k => rowHtml(k.pending ? 'bad' : k.farq === 0 ? 'ok' : 'warn', k.name,
+      'савдо: MoySklad ' + fmt(k.savdoMs) + ' · бот ' + fmt(k.savdoBot) + (k.openDays ? ' · ' + k.openDays + ' кун топширилмаган' : ''),
+      fmt(k.naqd) + '<small>нақд қўлда</small>', '#/kassa/' + k.id)).join('')}</div>` });
+
+  tiles.push({ id: 'tez', w: 'l', html: `
+    <div class="l">⚡ Тез амаллар</div>
+    <div class="tiles">
       ${tile('💰', 'Пул қабул қилиш', 'кассани танланг', '#/kassa')}
       ${tile('📋', 'Кунлик солиштириш', 'MoySklad = бот?', '#/hisobot/kunlik')}
-      ${tile('💵', 'Пул ҳаракати', 'топширилган · қабул', '#/hisobot/pul')}
+      ${tile('🏬', 'Омбор', 'камчилик · қолдиқ', '#/hisobot/ombor')}
       ${tile('📊', 'Excel', 'файл чатга', '#/hisobot/excel')}
-    </div>`;
+    </div>` });
 
-  // 4) Кассалар бугун
-  h += `<div class="label">Кассалар бугун</div><div class="rows">`;
-  for (const k of d.kassalar.filter(k => !k.cashless))
-    h += rowHtml(k.pending ? 'bad' : k.farq === 0 ? 'ok' : 'warn', k.name, `савдо: MoySklad ${fmt(k.savdoMs)} · бот ${fmt(k.savdoBot)}${k.openDays ? ' · ' + k.openDays + ' кун топширилмаган' : ''}`, fmt(k.naqd) + '<small>нақд қўлда</small>', `#/kassa/${k.id}`);
-  h += `</div>`;
-  $main.innerHTML = h;
-  bindGo();
+  $main.innerHTML = bento('bugun', tiles);
+  bindBento('bugun', pageBugun);
 }
 
 function rowHtml(cls, title, sub, right, href) {
@@ -177,6 +203,70 @@ function tile(icon, title, sub, href, cls = '') {
 }
 function bindGo() {
   $main.querySelectorAll('[data-go]').forEach(el => el.addEventListener('click', () => { haptic(); go(el.dataset.go); }));
+}
+
+/* ============================================================
+   🍱 BENTO — плиткали тартиб. Ҳар плитка `data-id` билан, тартиби
+   браузерда сақланади (kn.bento.<саҳифа>). «✥ Тартиб» режимида плиткани
+   тортиб ёки ◀ ▶ билан суриш мумкин; «↺ Стандарт» — кодда берилган тартиб.
+   ============================================================ */
+let arranging = false;
+const bentoKey = k => 'kn.bento.' + k;
+function bentoOrder(k) { try { return JSON.parse(localStorage.getItem(bentoKey(k)) || '[]'); } catch (_) { return []; } }
+function bentoSave(k, ids) { try { localStorage.setItem(bentoKey(k), JSON.stringify(ids)); } catch (_) { /* private mode */ } }
+
+/** tiles: [{id, w:'s|m|w|l', cls, go, html}] → HTML (сақланган тартиб қўлланади). */
+function bento(key, tiles) {
+  const saved = bentoOrder(key), byId = new Map(tiles.map(t => [t.id, t]));
+  const ord = [...saved.map(i => byId.get(i)).filter(Boolean), ...tiles.filter(t => !saved.includes(t.id))];
+  const bar = `<div class="arrangebar">
+      <span class="hint">${arranging ? '✥ Плиткани тортинг ёки ◀ ▶ билан суринг' : ''}</span>
+      <span class="grp">
+        ${saved.length ? '<button class="abtn" id="bt-reset">↺ Стандарт</button>' : ''}
+        <button class="abtn ${arranging ? 'on' : ''}" id="bt-arr">${arranging ? '✓ Тайёр' : '✥ Тартиб'}</button>
+      </span></div>`;
+  const body = ord.map(t => {
+    const tap = t.go && !arranging, tag = tap ? 'button' : 'div';
+    return `<${tag} class="bt ${t.cls || ''}${tap ? ' tap' : ''}" data-w="${t.w || 'm'}" data-id="${t.id}"`
+      + `${tap ? ` data-go="${t.go}"` : ''}${arranging ? ' draggable="true"' : ''}>${t.html}`
+      + `${arranging ? '<span class="btmove"><button data-mv="-1">◀</button><button data-mv="1">▶</button></span>' : ''}</${tag}>`;
+  }).join('');
+  return bar + `<div class="bento" id="bento">${body}</div>`;
+}
+
+/** Плиткалар чизилгандан кейин: ҳаваолалар, тартиб тугмалари, drag. redraw — саҳифани қайта чизувчи. */
+function bindBento(key, redraw) {
+  bindGo();
+  const arr = document.getElementById('bt-arr');
+  if (arr) arr.onclick = () => { arranging = !arranging; document.body.classList.toggle('arrange', arranging); haptic(); redraw(); };
+  const rs = document.getElementById('bt-reset');
+  if (rs) rs.onclick = () => { bentoSave(key, []); toast('↺ Стандарт тартиб'); redraw(); };
+  const grid = document.getElementById('bento');
+  if (!grid || !arranging) return;
+  const ids = () => [...grid.children].map(el => el.dataset.id);
+  const moveTo = (fromId, toId) => {
+    const list = ids(), i = list.indexOf(fromId), j = list.indexOf(toId);
+    if (i < 0 || j < 0 || i === j) return;
+    list.splice(j, 0, list.splice(i, 1)[0]);
+    bentoSave(key, list); redraw();
+  };
+  grid.querySelectorAll('[data-mv]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const list = ids(), id = b.closest('.bt').dataset.id, j = list.indexOf(id) + Number(b.dataset.mv);
+    if (j < 0 || j >= list.length) return;
+    haptic(); moveTo(id, list[j]);
+  });
+  let from = null;
+  grid.querySelectorAll('.bt').forEach(el => {
+    el.addEventListener('dragstart', e => { from = el; el.classList.add('dragging'); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; });
+    el.addEventListener('dragend', () => { el.classList.remove('dragging'); grid.querySelectorAll('.dropzone').forEach(x => x.classList.remove('dropzone')); });
+    el.addEventListener('dragover', e => { e.preventDefault(); if (el !== from) el.classList.add('dropzone'); });
+    el.addEventListener('dragleave', () => el.classList.remove('dropzone'));
+    el.addEventListener('drop', e => {
+      e.preventDefault(); el.classList.remove('dropzone');
+      if (from && from !== el) moveTo(from.dataset.id, el.dataset.id);
+    });
+  });
 }
 
 /* ============================================================
@@ -808,27 +898,69 @@ async function hisobotOmbor(seg, q) {
   if (view === 'sanoq') return omborSanoq(q);
   const d = await api('/admin/ombor/dashboard');
   setTitle('🏬 Омбор', (d.enabled ? '' : '⚪ ўчирилган · ') + d.asOf);
-  let h = `<div class="kpis">
-    <div class="kpi ${d.open ? 'warn' : 'ok'}"><b>${d.open}</b><span>очиқ камчилик</span></div>
-    <div class="kpi"><b>${d.fill == null ? '—' : d.fill + '%'}</b><span>fill rate (A, 30 кун)</span></div>
-    <div class="kpi"><b>${d.drafts}</b><span>қоралама</span></div>
-    <div class="kpi"><b>${fmt(d.cash)}</b><span>мавжуд пул</span></div>
-  </div>
-  <div class="card"><div class="hint">Товарлар: ${d.tovar} · қолдиқ ${esc(d.stockDate)} ҳолатига · сотув тарихи ${d.salesDone ? 'тўлиқ' : 'юкланмоқда ' + esc(d.salesCursor)} · янги сўров ${d.sorov}</div>
-    <div class="actions"><button class="btn ghost" id="rf">🔄 Янгилаш (MoySklad)</button></div></div>
-  <div class="label">Дўконлар</div><div class="rows">`;
-  for (const k of d.kassalar)
-    h += rowHtml(k.bound ? (k.manfiy ? 'bad' : 'ok') : '', k.name, k.bound ? `${k.tovar} товар · fill ${k.fill == null ? '—' : k.fill + '%'} · санoq ${k.sanoq}` : 'омбор боғланмаган',
-      `${k.open}<small>камчилик${k.manfiy ? ' · 🔴 манфий ' + k.manfiy : ''}</small>`, `#/hisobot/ombor/kamchilik?kassa=${k.id}`);
-  h += `</div><div class="label">Қоидалар</div><div class="rows">`;
-  for (const r of d.rules)
-    h += rowHtml(r.enabled ? SEV[r.severity] : '', (r.enabled ? '' : '⚪ ') + r.title, r.code + ' · ' + r.severity, String(r.open), `#/hisobot/ombor/kamchilik?rule=${r.code}`);
-  h += `</div><div class="label">Синхрон</div><div class="rows">`;
-  for (const s of d.sync) h += rowHtml(s.ok ? 'ok' : 'bad', s.entity, s.at + (s.error ? ' · ' + esc(s.error) : ''), String(s.rows), '');
-  h += '</div>';
-  $main.innerHTML = h;
-  bindGo();
-  document.getElementById('rf').onclick = async () => { try { await post('/admin/ombor/refresh'); toast('⏳ Янгиланмоқда (1–5 дақиқа)'); } catch (e) { toast(e.message); } };
+  const short = n => n.replace('Отдел ', '');
+  const sev = { MUHIM: 0, OGOH: 0, INFO: 0 };
+  for (const r of d.rules) if (r.open) sev[r.severity] = (sev[r.severity] || 0) + r.open;
+  const bound = d.kassalar.filter(k => k.bound);
+  const tiles = [];
+
+  tiles.push({ id: 'open', w: 'm', cls: 'hero ' + (sev.MUHIM ? 'bad' : sev.OGOH ? 'warn' : 'good'), html: `
+    <div class="l">⚠️ Очиқ камчиликлар</div>
+    <div class="v num ${sev.MUHIM ? 'bad' : ''}">${d.open}</div>
+    <div class="fig">${statChips([
+      { icon: '🔴', label: 'муҳим', value: sev.MUHIM, state: sev.MUHIM ? 'bad' : '' },
+      { icon: '🟠', label: 'огоҳ', value: sev.OGOH, state: sev.OGOH ? 'warn' : '' },
+      { icon: 'ℹ️', label: 'инфо · хабарсиз', value: sev.INFO, state: '' }])}</div>
+    <div class="s">Рўйхат, фильтр ва Excel — ⚠️ Камчиликлар бўлимида</div>` });
+
+  tiles.push({ id: 'fill', w: 's', html: `
+    <div class="l">📈 Fill rate · А товар</div>
+    <div class="v num">${d.fill == null ? '—' : d.fill + '%'}</div>
+    <div class="fig">${d.fill == null ? '<div class="vz-empty">ҳали ҳисобланмади</div>' : meter(d.fill, { label: 'Fill rate', target: 95, warnBelow: 95, badBelow: 85 })}</div>
+    <div class="s">30 кун · мақсад 95%</div>` });
+
+  tiles.push({ id: 'qoralama', w: 's', go: '#/hisobot/ombor/qoralama', html: `
+    <div class="l">🧾 Буюртма қораламаси<span class="chev">›</span></div>
+    <div class="v num">${d.drafts}</div>
+    <div class="s">Мавжуд пул ${fmt(d.cash)} сўм</div>` });
+
+  tiles.push({ id: 'sorov', w: 's', go: '#/hisobot/ombor/sanoq', html: `
+    <div class="l">📝 Янги сўров<span class="chev">›</span></div>
+    <div class="v num ${d.sorov ? 'warn' : ''}">${d.sorov}</div>
+    <div class="s">Санoq ва дўкон сўровлари</div>` });
+
+  const topRules = d.rules.filter(r => r.open > 0).sort((a, b) => b.open - a.open).slice(0, 8);
+  tiles.push({ id: 'rules', w: 'm', html: `
+    <div class="l">📏 Қоидалар бўйича</div>
+    <div class="fig">${barsH(topRules.map(r => ({ label: r.title, value: r.open })), {})}</div>
+    <div class="s">Энг кўп учрагани юқорида · ҳар бирини Камчиликлар'да фильтрлаш мумкин</div>` });
+
+  tiles.push({ id: 'dokon', w: 'm', html: `
+    <div class="l">🏪 Дўконлар бўйича камчилик</div>
+    <div class="fig">${barsH(bound.map(k => ({ label: short(k.name), value: k.open, sub: k.tovar + ' товар · манфий ' + k.manfiy })), {})}</div>
+    <div class="rows">${d.kassalar.map(k => rowHtml(k.bound ? (k.manfiy ? 'bad' : 'ok') : '', k.name,
+      k.bound ? k.tovar + ' товар · fill ' + (k.fill == null ? '—' : k.fill + '%') + ' · санoq ' + k.sanoq : 'MoySklad омбори боғланмаган',
+      (k.manfiy ? '🔴 ' + k.manfiy : '—') + '<small>манфий</small>', '#/hisobot/ombor/kamchilik?kassa=' + k.id)).join('')}</div>` });
+
+  tiles.push({ id: 'sync', w: 'm', html: `
+    <div class="l">🔄 Синхрон ҳолати</div>
+    <div class="fig">${statChips(d.sync.map(x => ({ icon: x.ok ? '🟢' : '🔴', label: x.entity, value: x.rows, state: x.ok ? '' : 'bad' })))}</div>
+    <div class="s">Товарлар ${fmt(d.tovar)} · қолдиқ ${esc(d.stockDate)} ҳолатига · сотув тарихи ${d.salesDone ? 'тўлиқ' : 'юкланмоқда ' + esc(d.salesCursor)}</div>
+    <div class="actions" style="margin-top:4px"><button class="btn sm ghost" id="om-rf">🔄 Янгилаш (MoySklad)</button></div>` });
+
+  tiles.push({ id: 'nav', w: 'l', html: `
+    <div class="l">🏬 Бўлимлар</div>
+    <div class="tiles">
+      ${tile('⚠️', 'Камчиликлар', 'фильтр · Excel', '#/hisobot/ombor/kamchilik')}
+      ${tile('🧾', 'Қораламалар', 'тасдиқ занжири', '#/hisobot/ombor/qoralama')}
+      ${tile('🔢', 'Санoq ва сўров', 'ротацион пересчёт', '#/hisobot/ombor/sanoq')}
+      ${tile('🔴', 'Манфий қолдиқ', 'дарҳол текшириш', '#/hisobot/ombor/kamchilik?rule=QOLDIQ_MANFIY')}
+    </div>` });
+
+  $main.innerHTML = bento('ombor', tiles);
+  bindBento('ombor', () => hisobotOmbor(seg, q));
+  const rf = document.getElementById('om-rf');
+  if (rf) rf.onclick = async () => { try { await post('/admin/ombor/refresh'); toast('⏳ Янгиланмоқда (1–5 дақиқа)'); } catch (e) { toast(e.message); } };
 }
 
 async function omborKamchilik(seg, q) {
@@ -944,7 +1076,7 @@ async function pageSozlama(seg, q) {
       ${tile('📣', 'Гуруҳлар / Каналлар', 'Click ҳисоботи, жадвал', '#/sozlama/guruh')}
     </div>
     <div class="label">💼 Молия</div><div class="tiles">
-      ${tile('💼', 'Бошланғич қолдиқ', 'касса / Основной / карта', '#/sozlama/moliya/init')}
+      ${tile('💼', 'Бошланғич қолдиқ', 'фақат Отдел основной', '#/sozlama/moliya/init')}
       ${tile('🛠', 'Корректировка', '± сумма ёки = мақсад', '#/sozlama/moliya/adjust')}
       ${tile('📅', 'Ledger санаси', 'синхрон бошланиши', '#/sozlama/moliya/ledger')}
       ${tile('♻️', 'Нол бошлаш', 'олдинги кунларни ёпиш', '#/sozlama/moliya/zero', 'warn')}
@@ -1116,12 +1248,14 @@ async function moliya(view) {
   const owners = await api('/admin/moliya/owners');
   const ownerSel = `<select id="o">${owners.map(o => `<option value="${o.code}">${esc(o.name)} — ${o.naqd == null ? '' : 'нақд ' + fmt(o.naqd) + ' · '}click ${fmt(o.klik)}</option>`).join('')}</select>`;
   if (view === 'init') {
-    setTitle('Бошланғич қолдиқ', 'касса / Основной / карта');
-    $main.innerHTML = `<div class="card"><div class="field"><label>Эга</label>${ownerSel}</div>
+    // Бошланғич қолдиқ ФАҚАТ Отдел основной (Бухгалтерия)га — эга танланмайди (бот билан бир хил)
+    const osn = owners.find(o => o.code === 'B');
+    setTitle('Бошланғич қолдиқ', 'фақат Отдел основной');
+    $main.innerHTML = `<div class="card"><div class="field"><label>Эга</label><input value="🏦 Отдел основной${osn ? ' — нақд ' + fmt(osn.naqd) + ' · click ' + fmt(osn.klik) : ''}" disabled></div>
       <div class="kpis"><div class="field"><label>💵 Нақд (сўм)</label><input id="n" type="number" value="0"></div><div class="field"><label>📲 Click (сўм)</label><input id="k" type="number" value="0"></div></div>
       <div class="field"><label>Сана</label><input type="date" id="d" value="${TODAY()}" max="${TODAY()}"></div>
       <button class="btn main" id="ok">💾 Киритиш</button><div class="hint">Балансга қўшилади (BOSHLANGICH операцияси). Click ҳисобида фақат click.</div></div>`;
-    document.getElementById('ok').onclick = () => { const v = i => document.getElementById(i).value; confirmSheet('Бошланғич қолдиқ', `нақд ${fmt(v('n'))} · click ${fmt(v('k'))} · ${dShort(v('d'))}`, async () => { try { const r = await post('/admin/moliya/init', { owner: v('o'), naqd: +v('n'), klik: +v('k'), date: v('d') }); toast('✅ ' + r.owner); go('#/sozlama'); } catch (e) { toast(e.message); } }); };
+    document.getElementById('ok').onclick = () => { const v = i => document.getElementById(i).value; confirmSheet('Бошланғич қолдиқ', `нақд ${fmt(v('n'))} · click ${fmt(v('k'))} · ${dShort(v('d'))}`, async () => { try { const r = await post('/admin/moliya/init', { owner: 'B', naqd: +v('n'), klik: +v('k'), date: v('d') }); toast('✅ ' + r.owner); go('#/sozlama'); } catch (e) { toast(e.message); } }); };
     return;
   }
   setTitle('Корректировка', 'исталган эга');
@@ -1511,6 +1645,17 @@ document.getElementById('theme').addEventListener('click', () => {
   toast(next === 'auto' ? '🅰 Telegram темаси' : next === 'light' ? '☀️ Ёруғ режим' : '🌙 Қоронғи режим');
 });
 applyTheme(readTheme());
+
+/* ⇕ зичлик: ихчам (стандарт) ↔ кенг — телефонда ҳам, компьютерда ҳам ўқишни мослаш. */
+const readDens = () => { try { return localStorage.getItem('kn.dens') || 'c'; } catch (_) { return 'c'; } };
+const applyDens = v => { document.body.dataset.d = v; };
+document.getElementById('dens')?.addEventListener('click', () => {
+  const v = readDens() === 'c' ? 'w' : 'c';
+  try { localStorage.setItem('kn.dens', v); } catch (_) { /* private mode */ }
+  applyDens(v); haptic(); toast(v === 'w' ? '⇕ Кенг кўриниш' : '⇕ Ихчам кўриниш');
+});
+applyDens(readDens());
+vizInit();
 try { tg?.onEvent?.('themeChanged', () => applyTheme(readTheme())); } catch (_) { /* */ }
 
 /* ---------------------------- boot ---------------------------- */

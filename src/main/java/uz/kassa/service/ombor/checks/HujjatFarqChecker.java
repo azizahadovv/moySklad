@@ -102,7 +102,7 @@ public class HujjatFarqChecker implements OmborChecker {
             String name = name(s.getProductMsId());
             out.add(new Found("sanoq", String.valueOf(s.getId()), s.getKassaId(), s.getByUserId(),
                     name + ": hisob " + s.getSystemQty().stripTrailingZeros().toPlainString() + " · fakt " + s.getFactQty().stripTrailingZeros().toPlainString(),
-                    "<b>" + esc(name) + "</b> (" + s.getAbc() + ")\nHisobda <b>" + s.getSystemQty().stripTrailingZeros().toPlainString()
+                    "<b>" + esc(name) + "</b> (" + (s.eski() ? "🐢 eski" : s.getAbc()) + ")\nHisobda <b>" + s.getSystemQty().stripTrailingZeros().toPlainString()
                     + "</b> · sanoqda <b>" + s.getFactQty().stripTrailingZeros().toPlainString() + "</b> · farq <b>"
                     + s.getFactQty().subtract(s.getSystemQty()).stripTrailingZeros().toPlainString() + "</b>\n📅 " + s.getPlanDate()
                     + "\nMoySklad'da inventarizatsiya/tuzatish hujjati bilan yoping."));

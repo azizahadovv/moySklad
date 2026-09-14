@@ -59,6 +59,10 @@ public class Jobs {
     private final uz.kassa.service.ombor.OmborNarxService omborNarx;
     private final uz.kassa.service.ombor.OmborSorovService omborSorov;
     private final uz.kassa.service.ombor.OmborDraftService omborDraft;
+    private final uz.kassa.service.ombor.OmborChempionService omborChempion;
+    private final uz.kassa.service.tg.TgReaderService tgReader;
+    private final uz.kassa.service.tg.TgCardReport tgCardReport;
+    private final uz.kassa.webapp.WebUrlService webUrl;
     private volatile long lastBalanceTick = 0;
 
     /**
@@ -608,6 +612,13 @@ public class Jobs {
         closeDays();
     }
 
+    /** 💳 Karta qoldiqlari guruh hisoboti — har soat :00 (interval/oyna ⚙️ 📨 Бот хабарлари). */
+    @Scheduled(cron = "0 0 * * * *", zone = "${app.zone:Asia/Tashkent}")
+    public void tgCardReportTick() {
+        try { tgCardReport.tick(); }
+        catch (Exception e) { log.warn("Karta qoldiqlari hisoboti xatosi: {}", e.getMessage()); }
+    }
+
     /** 🔔 Bildirishnomalar (shablonli, jadvalli) — har daqiqa tekshiriladi. */
     @Scheduled(cron = "0 * * * * *", zone = "${app.zone:Asia/Tashkent}")
     public void notifyTick() {
@@ -709,11 +720,18 @@ public class Jobs {
 
     /* ==================== 🏬 ОМБОР ==================== */
 
-    /** Omborlar + tovarlar (inkremental, har 10 daqiqa). */
+    /** Omborlar + tovarlar + hujjatlar (inkremental, har 10 daqiqa); otgruzka o'zgargan bo'lsa kecha/bugun naqd sotuv qayta yoziladi. */
     @Scheduled(fixedDelayString = "PT10M", initialDelayString = "PT150S")
     public void omborSync() {
-        try { omborSync.tick(); jobOk("Ombor sinxron"); }
+        int demands = 0;
+        try { demands = omborSync.tick(); jobOk("Ombor sinxron"); }
         catch (Exception e) { jobFail("Ombor sinxron", e); log.warn("Ombor sinxron xatosi: {}", e.getMessage()); }
+        boolean first = !omborSales.naqdReady();
+        if (demands > 0 || first) try { omborSales.refreshRecent(); } catch (Exception e) { log.warn("Ombor naqd sotuv (kecha/bugun): {}", e.getMessage()); }
+        if (first && omborSales.naqdReady()) {   // birinchi to'liq naqd hisobdan keyin tunni kutmasdan ABC/ROP/fill yangilanadi
+            try { omborCalc.nightly(); } catch (Exception e) { log.warn("Ombor hisoblar (naqd): {}", e.getMessage()); }
+            try { omborChempion.nightly(); } catch (Exception e) { log.warn("Ombor chempion fill (naqd): {}", e.getMessage()); }
+        }
     }
 
     /** Qoldiqlar (report/stock) — ombor.stock_time dan keyin kuniga bir marta (har 15 daqiqada tekshiriladi). */
@@ -723,15 +741,26 @@ public class Jobs {
         try { ran = omborSync.stockTick(false); }
         catch (Exception e) { log.warn("Ombor qoldiq sinxroni xatosi: {}", e.getMessage()); }
         if (!ran) return;
-        // tunlik zanjir: qoldiq → kecha/bugun sotuv → hisoblar (ABC, ROP, fill) → sanoq rejasi → hamkorlar
+        // tunlik zanjir: qoldiq → kecha/bugun sotuv → hisoblar (ABC, ROP, fill) → sanoq rejasi → narx → qoidalar → qoralama
         try { omborSales.refreshRecent(); } catch (Exception e) { log.warn("Ombor sotuv (kecha/bugun): {}", e.getMessage()); }
         try { omborCalc.nightly(); } catch (Exception e) { log.warn("Ombor tunlik hisob: {}", e.getMessage()); }
+        try { omborChempion.nightly(); } catch (Exception e) { log.warn("Ombor chempion fill: {}", e.getMessage()); }
         try { omborSanoq.planToday(); } catch (Exception e) { log.warn("Ombor sanoq rejasi: {}", e.getMessage()); }
         try { omborNarx.fromSupplies(); } catch (Exception e) { log.warn("Ombor narx (priyomka): {}", e.getMessage()); }
         try { omborNarx.pullSheets(null); } catch (Exception e) { log.warn("Ombor Sheets: {}", e.getMessage()); }
-        try { var ids = omborSync.hamkorIds(); if (!ids.isEmpty()) omborSorov.hamkorIntervals(ids); } catch (Exception e) { log.warn("Ombor hamkorlar: {}", e.getMessage()); }
         try { omborRules.tick(); } catch (Exception e) { log.warn("Ombor qoidalar (tun): {}", e.getMessage()); }
         try { omborDraft.buildAll(); } catch (Exception e) { log.warn("Ombor qoralama: {}", e.getMessage()); }
+    }
+
+    /** Kunlik sanoq tsikli (so'rov → yakun → haftalik Excel) va 🏆 chempionlar ertalabki xabari; vaqtlar ⚙️ 🏬 Омбор назорати. */
+    @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT3M")
+    public void omborSanoqTick() {
+        try { omborSanoq.tick(); }
+        catch (Exception e) { log.warn("Ombor sanoq tsikli xatosi: {}", e.getMessage()); }
+        try { omborChempion.tick(); }
+        catch (Exception e) { log.warn("Ombor chempion xabari xatosi: {}", e.getMessage()); }
+        try { tgReader.silenceTick(); }
+        catch (Exception e) { log.warn("Bot xabarlari jimlik nazorati xatosi: {}", e.getMessage()); }
     }
 
     /** Sotuv tarixini orqaga yuklash (kursor tugaguncha, har 15 daqiqada 20 kun). */
@@ -746,5 +775,33 @@ public class Jobs {
     public void omborRules() {
         try { omborRules.tick(); jobOk("Ombor qoidalar"); }
         catch (Exception e) { jobFail("Ombor qoidalar", e); log.warn("Ombor qoidalar xatosi: {}", e.getMessage()); }
+    }
+
+    /* ==================== 🌐 ПАНЕЛ МАНЗИЛИ ==================== */
+
+    /**
+     * Манзил (туннель/домен) ўзгарса — Telegram'даги СТАНДАРТ меню тугмасини янгилаш.
+     * Шу туфайли ходимларга `/start` юбориш шарт эмас: ≡ тугмаси ўзи янги манзилга ўтади.
+     * Ҳар дақиқада текширилади, фақат ЎЗГАРГАНДА Telegram'га сўров кетади.
+     */
+    @Scheduled(fixedDelayString = "PT1M", initialDelayString = "PT20S")
+    public void webMenuButton() {
+        try {
+            String url = webUrl.url();
+            if (url.isBlank() || url.equals(webUrl.appliedMenuUrl())) return;
+            if (!sender.setDefaultMenuButton("🌐 Админ панел", url)) return;
+            // Чатга алоҳида қўйилган тугма стандартдан УСТУН — шунинг учун ҳар бир
+            // фойдаланувчиникини ҳам янгилаймиз (акс ҳолда эски манзил очилаверади).
+            int n = 0;
+            for (AppUser u : userRepo.findByActiveTrueOrderByRoleAscIdAsc()) {
+                if (u.getTelegramId() == null || u.getRole() == Role.KASSIR) continue;
+                sender.setMenuButton(u.getTelegramId(), "🌐 Админ панел", url);
+                n++;
+            }
+            webUrl.markMenuApplied(url);
+            log.info("Telegram меню тугмаси янгиланди: {} (стандарт + {} фойдаланувчи)", url, n);
+        } catch (Exception e) {
+            log.warn("Меню тугмаси янгиланмади: {}", e.getMessage());
+        }
     }
 }

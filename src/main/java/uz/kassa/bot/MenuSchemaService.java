@@ -58,7 +58,7 @@ public class MenuSchemaService {
         reg(m, "soz.moliya", "💼 Молия", true,
                 "💼 Бошланғич қолдиқ", "🛠 Корректировка", "📅 Ledger санаси", "♻️ Нол бошлаш");
         reg(m, "soz.moysklad", "🔗 MoySklad", true,
-                "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "📥 Қайта юклаш", "🩺 Диагностика", "🕵️ Назорат", "🏬 Омбор назорати");
+                "🔑 MoySklad API", "🔄 Номлар (MoySklad)", "📥 Қайта юклаш", "🩺 Диагностика", "🕵️ Назорат", "🏬 Омбор назорати", "📨 Бот хабарлари");
         reg(m, "soz.interfeys", "🎛 Интерфейс", true,
                 "🏷 Тугма номлари", "🧩 Меню тартиби", "🔔 Билдиришномалар", "🔕 Хабарномалар", "📋 Аудит");
         reg(m, "main.kassir", "🏠 Bosh menyu — Kassir", false,

@@ -6,7 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 
-/** 🏬 Rotatsion sanoq topshirig'i: REJA → KIRITILDI (fakt) → TASDIQ. */
+/** 🏬 Kunlik sanoq topshirig'i: REJA → KIRITILDI (fakt) → TASDIQ; kun yakunida fakt kiritilmagan — OTKAZILDI. */
 @Entity @Table(name = "ombor_sanoq")
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class OmborSanoq {
@@ -21,5 +21,17 @@ public class OmborSanoq {
     @Column(name = "by_user_id") private Long byUserId;
     private Instant at;
 
+    /** Ochiq holatlar (kladovchi hali ishlaydi). */
+    public static final java.util.List<String> OPEN = java.util.List.of("REJA", "KIRITILDI");
+
     public boolean diff() { return factQty != null && factQty.compareTo(systemQty) != 0; }
+
+    /** 🐢 Eski tovar (30 kunda sotilmagan, qoldig'i bor) — abc = "E". */
+    public boolean eski() { return "E".equals(abc); }
+    /** Ro'yxat belgisi: A/B/C yoki 🐢. */
+    public String mark() { return eski() ? "🐢" : abc; }
+
+    public static String statusTitle(String s) {
+        return switch (s) { case "REJA" -> "Режа"; case "KIRITILDI" -> "Киритилди"; case "TASDIQ" -> "Тасдиқ"; case "OTKAZILDI" -> "Саналмади"; default -> s; };
+    }
 }

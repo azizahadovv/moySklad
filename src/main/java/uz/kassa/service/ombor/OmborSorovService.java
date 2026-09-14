@@ -17,8 +17,7 @@ import java.time.LocalDate;
 import java.util.*;
 
 /**
- * 🏬 B4: do'kon so'rovlari (sabab kodi bilan) va 🤝 hamkor do'konlar (tuman ustalari):
- * hamkorning oxirgi 180 kundagi xaridlari orasidagi o'rtacha interval o'tgan tovarlar → HAMKOR_INTERVAL ko'rsatkichi
+ * 🏬 B4: do'kon so'rovlari (sabab kodi bilan). Hamkor do'konlar (xarid intervali) bo'limi olib tashlangan (2026-09-12).
  * (kassa 0, product = "agent|tovar", qiymat = necha kun o'tib ketgan).
  */
 @Service
@@ -52,42 +51,4 @@ public class OmborSorovService {
     public List<OmborSorov> forDraft() { return repo.findByStatusOrderByCreatedAtAsc("QORALAMADA"); }
     public OmborSorovRepo repo() { return repo; }
 
-    /* ==================== 🤝 hamkorlar: xarid intervali ==================== */
-
-    /** Tunlik: har hamkor uchun demand pozitsiyalari (180 kun) → tovar bo'yicha interval → o'tib ketgan kunlar. */
-    public int hamkorIntervals(Collection<String> agentIds) {
-        LocalDate today = LocalDate.now(cfg.zone());
-        List<OmborMetrics.Row> rows = new ArrayList<>();
-        int n = 0;
-        for (String agent : agentIds) {
-            try {
-                String f = URLEncoder.encode("agent=https://api.moysklad.ru/api/remap/1.2/entity/counterparty/" + agent
-                        + ";moment>=" + ms.filterTime(today.minusDays(180).atStartOfDay()), StandardCharsets.UTF_8);
-                Map<String, TreeSet<LocalDate>> dates = new HashMap<>();
-                for (JsonNode d : ms.listAll("entity/demand?limit=100&expand=positions&filter=" + f, 30)) {
-                    if (!d.path("applicable").asBoolean(true)) continue;
-                    var m = ms.dtOf(d, "moment");
-                    if (m == null) continue;
-                    for (JsonNode p : d.path("positions").path("rows")) {
-                        String pid = ms.idOf(p.path("assortment"));
-                        if (!pid.isBlank()) dates.computeIfAbsent(pid, k -> new TreeSet<>()).add(m.toLocalDate());
-                    }
-                }
-                for (var e : dates.entrySet()) {
-                    TreeSet<LocalDate> ds = e.getValue();
-                    if (ds.size() < 3) continue;   // kamida 3 xarid — interval ishonchli
-                    long span = java.time.temporal.ChronoUnit.DAYS.between(ds.first(), ds.last());
-                    double interval = (double) span / (ds.size() - 1);
-                    if (interval < 3) continue;
-                    long since = java.time.temporal.ChronoUnit.DAYS.between(ds.last(), today);
-                    double overdue = since - interval;
-                    if (overdue > 0) rows.add(new OmborMetrics.Row(today, 0, agent + "|" + e.getKey(), "HAMKOR_INTERVAL", BigDecimal.valueOf(Math.round(overdue))));
-                }
-                n++;
-            } catch (Exception ex) { log.warn("Hamkor {} intervali: {}", agent, ex.getMessage()); }
-        }
-        metrics.clear(today, "HAMKOR_INTERVAL");
-        metrics.upsert(rows);
-        return n;
-    }
 }

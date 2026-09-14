@@ -20,7 +20,7 @@ import java.util.*;
 
 /**
  * 🏬 {ombor.*} o'rinbosarlari (docs/OMBOR-TZ.md §11): kamchilik_soni, kamchilik_muhim, manfiy_soni, nelikvid_soni,
- * fill_rate, sanoq_kutmoqda, sanoq_bajarildi_foiz, hamkor_qarz_summa, buyurtma_nomzod, kochirish_soni, tovar_soni,
+ * fill_rate (A sinf), chempion_fill (do'kon chempionlari javonda %), sanoq_kutmoqda, sanoq_bajarildi_foiz, buyurtma_nomzod, kochirish_soni, tovar_soni,
  * royxat (10 tagacha muhim kamchilik matni), dokon (har do'kon bir qator). Modifikator: :kassa=ID.
  */
 @Component
@@ -34,6 +34,7 @@ public class OmborTemplateData {
     private final OmborMetrics metrics;
     private final KassaRepo kassaRepo;
     private final OmborConfig cfg;
+    private final uz.kassa.service.ombor.OmborChempionService chempion;
 
     public Object field(String field, String[] mods) {
         Long kassa = null;
@@ -58,17 +59,17 @@ public class OmborTemplateData {
                 var l = metrics.latest(OmborCalcService.FILL_RATE_30, kassa == null ? "kassa_id = 0 AND product_ms_id = ''" : "kassa_id = ? AND product_ms_id = ''", kassa == null ? new Object[0] : new Object[]{kassa});
                 return l.isEmpty() ? "—" : ((BigDecimal) l.get(0).get("value")).stripTrailingZeros().toPlainString() + "%";
             }
-            case "sanoq_kutmoqda": return kassa == null ? sanoqRepo.countByStatusNotAndPlanDateLessThanEqual("TASDIQ", today)
-                    : sanoqRepo.countByKassaIdAndStatusNotAndPlanDateLessThanEqual(kassa, "TASDIQ", today);
+            case "chempion_fill": {
+                if (kassa == null) { String s = chempion.fillSummary(); return s == null ? "—" : s; }
+                Integer p = uz.kassa.service.ombor.OmborChempionService.fillPct(chempion.list(kassa)); return p == null ? "—" : p + "%";
+            }
+            case "sanoq_kutmoqda": return kassa == null ? sanoqRepo.countByStatusInAndPlanDateLessThanEqual(uz.kassa.domain.OmborSanoq.OPEN, today)
+                    : sanoqRepo.countByKassaIdAndStatusInAndPlanDateLessThanEqual(kassa, uz.kassa.domain.OmborSanoq.OPEN, today);
             case "sanoq_bajarildi_foiz": {
                 long done = sanoqRepo.countByStatusAndPlanDateGreaterThanEqual("TASDIQ", today.minusDays(7));
-                long all = done + sanoqRepo.countByStatusNotAndPlanDateLessThanEqual("TASDIQ", today);
+                long all = done + sanoqRepo.countByStatusAndPlanDateGreaterThanEqual("OTKAZILDI", today.minusDays(7))
+                        + sanoqRepo.countByStatusInAndPlanDateLessThanEqual(uz.kassa.domain.OmborSanoq.OPEN, today);
                 return all == 0 ? "—" : Math.round(100.0 * done / all) + "%";
-            }
-            case "hamkor_qarz_summa": {
-                long s = 0;
-                for (Map<String, Object> m : metrics.latest("HAMKOR_QARZ", "kassa_id = 0")) s += ((BigDecimal) m.get("value")).max(BigDecimal.ZERO).longValue();
-                return TextUtil.fmt(s);
             }
             case "royxat": {
                 StringBuilder sb = new StringBuilder();
@@ -85,14 +86,14 @@ public class OmborTemplateData {
             case "dokon": {
                 StringBuilder sb = new StringBuilder();
                 for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-                    if (k.isCashless() || k.getMoyskladWarehouseId() == null) continue;
+                    if (k.getMoyskladWarehouseId() == null) continue;
                     long[] st = metrics.stockStats(k.getId());
                     long oc = open.stream().filter(x -> k.getId().equals(x.getKassaId()) && !silent(rules, x)).count();
                     var fr = metrics.latest(OmborCalcService.FILL_RATE_30, "kassa_id = ? AND product_ms_id = ''", k.getId());
                     sb.append("🏪 <b>").append(TextUtil.esc(k.getName())).append("</b>: kamchilik ").append(oc)
                       .append(st[1] > 0 ? " · 🔴 manfiy " + st[1] : "")
                       .append(fr.isEmpty() ? "" : " · fill " + ((BigDecimal) fr.get(0).get("value")).stripTrailingZeros().toPlainString() + "%")
-                      .append(" · sanoq ").append(sanoqRepo.countByKassaIdAndStatusNotAndPlanDateLessThanEqual(k.getId(), "TASDIQ", today)).append("\n");
+                      .append(" · sanoq ").append(sanoqRepo.countByKassaIdAndStatusInAndPlanDateLessThanEqual(k.getId(), uz.kassa.domain.OmborSanoq.OPEN, today)).append("\n");
                 }
                 return sb.toString().trim();
             }

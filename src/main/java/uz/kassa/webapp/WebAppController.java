@@ -60,7 +60,7 @@ public class WebAppController {
     /* ============================ ME ============================ */
 
     @GetMapping("/me")
-    public Map<String, Object> me(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public Map<String, Object> me(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         AppUser u = user(init);
         return Map.of(
                 "name", u.getFullName(),
@@ -72,7 +72,7 @@ public class WebAppController {
     /* ============================ BALANS ============================ */
 
     @GetMapping("/balances")
-    public List<Map<String, Object>> balances(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> balances(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         AppUser u = user(init);
         syncService.syncIfStale(45);   // so'ralganda oxirgi ma'lumot kelsin
         List<Map<String, Object>> out = new ArrayList<>();
@@ -103,7 +103,7 @@ public class WebAppController {
     }
 
     @GetMapping("/kassas")
-    public List<Map<String, Object>> kassas(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> kassas(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         user(init);
         List<Map<String, Object>> out = new ArrayList<>();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
@@ -115,7 +115,7 @@ public class WebAppController {
 
     @GetMapping("/operations")
     public List<Map<String, Object>> operations(
-            @RequestHeader("X-Telegram-Init-Data") String init,
+            @RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
             @RequestParam String from, @RequestParam String to,
             @RequestParam(required = false, defaultValue = "0") long kassaId,
             @RequestParam(required = false, defaultValue = "") String type) {
@@ -162,7 +162,7 @@ public class WebAppController {
     /* ============================ KASSA PROFILI ============================ */
 
     @GetMapping("/kassa/{id}/profile")
-    public Map<String, Object> kassaProfile(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> kassaProfile(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                             @PathVariable long id,
                                             @RequestParam String from, @RequestParam String to) {
         AppUser u = user(init);
@@ -222,7 +222,7 @@ public class WebAppController {
     public record ExportReq(String from, String to) {}
 
     @PostMapping("/export")
-    public Map<String, String> export(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, String> export(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                       @RequestBody ExportReq r) {
         AppUser u = user(init);
         if (u.getRole() == Role.KASSIR)
@@ -242,7 +242,7 @@ public class WebAppController {
     /* ============================ KUTILAYOTGANLAR ============================ */
 
     @GetMapping("/pending")
-    public Map<String, Object> pending(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public Map<String, Object> pending(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         AppUser u = user(init);
         List<Map<String, Object>> rasxod = new ArrayList<>();
         List<Map<String, Object>> transfer = new ArrayList<>();
@@ -272,7 +272,7 @@ public class WebAppController {
     /* ============================ LUG'ATLAR ============================ */
 
     @GetMapping("/categories")
-    public List<Map<String, Object>> categories(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> categories(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         user(init);
         List<Map<String, Object>> out = new ArrayList<>();
         for (Category c : categoryRepo.findByActiveTrueOrderByIdAsc())
@@ -286,7 +286,7 @@ public class WebAppController {
                               String kind, Long debtId, String comment) {}
 
     @PostMapping("/transfer-create")
-    public Map<String, Object> transferCreate(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> transferCreate(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                               @RequestBody TransferReq r) {
         AppUser u = user(init);
         OwnerType fromT = u.getRole() == Role.KASSIR ? OwnerType.KASSA : OwnerType.BUXGALTERIYA;
@@ -321,7 +321,7 @@ public class WebAppController {
     /* ============================ 🧾 QARZLAR ============================ */
 
     @GetMapping("/debts")
-    public List<Map<String, Object>> debts(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> debts(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         AppUser u = user(init);
         List<uz.kassa.domain.Debt> list;
         if (u.getRole() == Role.KASSIR) {
@@ -345,7 +345,7 @@ public class WebAppController {
     /* ============================ 📤 HISOBOT (kassir) ============================ */
 
     @GetMapping("/submit-days")
-    public List<Map<String, Object>> submitDays(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> submitDays(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         AppUser u = user(init);
         if (u.getRole() != Role.KASSIR || u.getKassaId() == null) return List.of();
         List<Map<String, Object>> out = new ArrayList<>();
@@ -358,7 +358,7 @@ public class WebAppController {
     public record SubmitReq(int days) {}
 
     @PostMapping("/submit")
-    public Map<String, Object> submit(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> submit(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                       @RequestBody SubmitReq r) {
         AppUser u = user(init);
         if (u.getRole() != Role.KASSIR) throw new BusinessException("Faqat kassir topshiradi");
@@ -384,7 +384,7 @@ public class WebAppController {
     }
 
     @GetMapping("/guests")
-    public List<Map<String, Object>> guests(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> guests(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         adminOnly(user(init));
         List<Map<String, Object>> out = new ArrayList<>();
         for (uz.kassa.domain.Guest g : guestRepo.findAllByOrderByLastSeenDesc()) {
@@ -400,7 +400,7 @@ public class WebAppController {
     public record NewUserReq(long tgId, String name, String role, Long kassaId) {}
 
     @PostMapping("/admin/user")
-    public Map<String, Object> addUser(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> addUser(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                        @RequestBody NewUserReq r) {
         AppUser me = user(init); adminOnly(me);
         if (userRepo.findByTelegramId(r.tgId()).isPresent())
@@ -422,7 +422,7 @@ public class WebAppController {
     }
 
     @GetMapping("/users")
-    public List<Map<String, Object>> users(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> users(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         adminOnly(user(init));
         List<Map<String, Object>> out = new ArrayList<>();
         for (AppUser x : userRepo.findByActiveTrueOrderByRoleAscIdAsc())
@@ -436,7 +436,7 @@ public class WebAppController {
     public record IdReq(long id) {}
 
     @PostMapping("/admin/user-deactivate")
-    public Map<String, Object> deactivate(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> deactivate(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                           @RequestBody IdReq r) {
         AppUser me = user(init); adminOnly(me);
         AppUser x = userRepo.findById(r.id()).orElseThrow(() -> new BusinessException("Topilmadi"));
@@ -451,7 +451,7 @@ public class WebAppController {
     }
 
     @GetMapping("/groups")
-    public List<Map<String, Object>> groups(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public List<Map<String, Object>> groups(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         adminOnly(user(init));
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map.Entry<String, String> e : msClient.fetchGroups().entrySet())
@@ -462,7 +462,7 @@ public class WebAppController {
     public record NewKassaReq(String name, String storeId, String groupId) {}
 
     @PostMapping("/admin/kassa")
-    public Map<String, Object> addKassa(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> addKassa(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                         @RequestBody NewKassaReq r) {
         AppUser me = user(init); adminOnly(me);
         if (r.name() == null || r.name().isBlank()) throw new BusinessException("Nom kiriting");
@@ -477,11 +477,13 @@ public class WebAppController {
     public record InitBalanceReq(String ownerType, Long ownerId, long naqd, long klik) {}
 
     @PostMapping("/admin/init-balance")
-    public Map<String, Object> initBalance(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> initBalance(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                            @RequestBody InitBalanceReq r) {
         AppUser u = user(init); adminOnly(u);
-        OwnerType ot = "B".equals(r.ownerType()) ? OwnerType.BUXGALTERIYA : OwnerType.KASSA;
-        Long oid = ot == OwnerType.BUXGALTERIYA ? LedgerService.BUX_ID : r.ownerId();
+        // Boshlang'ich qoldiq FAQAT Основной отдел — kassa/karta uchun 🛠 Корректировка
+        if (r.ownerType() != null && !"B".equals(r.ownerType())) throw new BusinessException("Boshlang'ich qoldiq faqat Основной отдел uchun");
+        OwnerType ot = OwnerType.BUXGALTERIYA;
+        Long oid = LedgerService.BUX_ID;
         if (r.naqd() == 0 && r.klik() == 0) throw new BusinessException("Ikkala summa ham 0");
         if (r.naqd() > 0) ledger.postAdjustment(OpType.BOSHLANGICH, ot, oid, MoneyType.NAQD,
                 r.naqd(), "Boshlang'ich qoldiq", u.getId());
@@ -498,7 +500,7 @@ public class WebAppController {
                             String reason, Long naqd, Long klik) {}
 
     @PostMapping("/decide")
-    public Map<String, String> decide(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, String> decide(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                       @RequestBody DecideReq r) {
         AppUser u = user(init);
         switch (r.kind()) {

@@ -104,7 +104,7 @@ public class MuddatOtdiChecker implements OmborChecker {
         LocalDate today = LocalDate.now(cfg.zone());
         boolean late = LocalTime.now(cfg.zone()).isAfter(LocalTime.of(untilHour, 0));
         Map<Long, List<OmborSanoq>> byKassa = new LinkedHashMap<>();
-        for (OmborSanoq s : sanoqRepo.findByStatusNotAndPlanDateLessThanEqual("TASDIQ", today)) {
+        for (OmborSanoq s : sanoqRepo.findByStatusInAndPlanDateLessThanEqual(OmborSanoq.OPEN, today)) {
             if (s.getPlanDate().equals(today) && !late) continue;
             byKassa.computeIfAbsent(s.getKassaId(), k -> new ArrayList<>()).add(s);
         }

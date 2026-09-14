@@ -48,6 +48,7 @@ public class OmborAdminHandler {
     private final OmborSalesService sales;
     private final OmborNarxService narxSvc;
     private final OmborDraftService draftSvc;
+    private final OmborChempionService chempionSvc;
 
 
     public boolean onCallback(AppUser u, Session s, String cmd, String arg, long chatId, int msgId) {
@@ -96,12 +97,21 @@ public class OmborAdminHandler {
             }
             case "omt" -> { int[] c = engine.tick(); sender.send(chatId, "🔎 Qoidalar tekshirildi: yangi " + c[0] + " · yopildi " + c[1]); menu(s, chatId, 0); }
             case "omc" -> {
-                sender.edit(chatId, msgId, "⏳ Tunlik hisoblar (sotuv, ABC, buyurtma nuqtasi, fill rate, sanoq rejasi, hamkorlar)…");
-                new Thread(() -> { sales.refreshRecent(); calc.nightly(); int n = sanoqSvc.planToday(); int h = sync.syncHamkorlar();
-                    sender.send(chatId, "✅ Hisoblar bajarildi. Sanoq rejasi: " + n + " ta tovar · hamkorlar: " + h); menu(s, chatId, 0); }, "ombor-calc-now").start();
+                sender.edit(chatId, msgId, "⏳ Tunlik hisoblar (sotuv, ABC, buyurtma nuqtasi, fill rate, sanoq rejasi)…");
+                new Thread(() -> { sales.refreshRecent(); calc.nightly(); int n = sanoqSvc.planToday();
+                    sender.send(chatId, "✅ Hisoblar bajarildi. Sanoq rejasi: " + n + " ta tovar"); menu(s, chatId, 0); }, "ombor-calc-now").start();
             }
             case "omcs" -> { sender.edit(chatId, msgId, "⏳ Sotuv tarixi yuklanmoqda (20 kun)…"); new Thread(() -> { int n = sales.backfillTick(); sender.send(chatId, "📈 Sotuv tarixi: " + n + " kun yuklandi" + (sales.backfillDone() ? " — to'liq" : ", davom etadi (har 15 daqiqa)")); menu(s, chatId, 0); }, "ombor-sales-now").start(); }
-            case "omsm" -> { cfg.set(OmborConfig.SANOQ_MAJBURIY, cfg.sanoqMajburiy() ? "0" : "1"); audit.log(u.getId(), "OMBOR_SOZLAMA", "settings", null, "sanoq_majburiy=" + cfg.sanoqMajburiy()); menu(s, chatId, msgId); }
+            case "omsm" -> { cfg.set(OmborConfig.SANOQ_MAJBURIY, cfg.sanoqMajburiy() ? "0" : "1"); audit.log(u.getId(), "OMBOR_SOZLAMA", "settings", null, "sanoq_majburiy=" + cfg.sanoqMajburiy()); sanoqMenu(s, chatId, msgId); }
+            case "omsn" -> sanoqMenu(s, chatId, msgId);
+            case "omch" -> { sender.edit(chatId, msgId, "⏳ Chempionlar xabari yuborilmoqda…"); new Thread(() -> {
+                int n = chempionSvc.sendDaily(java.time.LocalDate.now(cfg.zone()), null); sender.send(chatId, "✅ Chempionlar xabari: " + n + " ta do'kon"); menu(s, chatId, 0); }, "ombor-chempion").start(); }
+            case "omsq" -> { sender.edit(chatId, msgId, "⏳ Reja tuzilmoqda va so'rov yuborilmoqda…"); new Thread(() -> {
+                int p = sanoqSvc.planToday(); int n = sanoqSvc.askAll(java.time.LocalDate.now(cfg.zone()), null);
+                sender.send(chatId, "✅ Sanoq so'rovi yuborildi: " + n + " ta do'kon" + (p > 0 ? " · yangi reja " + p + " ta tovar" : "")); sanoqMenu(s, chatId, 0); }, "ombor-sanoq-ask").start(); }
+            case "omsx" -> { sender.edit(chatId, msgId, "⏳ Excel tuzilmoqda…"); new Thread(() -> {
+                java.time.LocalDate t = java.time.LocalDate.now(cfg.zone()); int n = sanoqSvc.sendWeekly(t.minusDays(7), t.minusDays(1), u);
+                if (n == 0) sender.send(chatId, "⚠️ Excel yuborilmadi — Telegram ulanmagan."); sanoqMenu(s, chatId, 0); }, "ombor-sanoq-xlsx").start(); }
             case "omd" -> davrList(s, chatId, msgId);
             case "omda" -> {
                 s.state = Session.State.ADM_OM_DAVR;
@@ -115,6 +125,18 @@ public class OmborAdminHandler {
                 sender.send(chatId, r == null ? "⚠️ Google Sheets sozlanmagan (GSHEET_ID)" : "📥 <b>Sheets</b>\n" + esc(r) + "Priyomkadan narx: " + n + " yangi"); menu(s, chatId, 0); }, "ombor-sheets").start(); }
             case "omqb" -> { sender.edit(chatId, msgId, "⏳ Qoralama tuzilmoqda…"); new Thread(() -> { int n = draftSvc.buildAll(); sender.send(chatId, "🧾 Qoralama: " + n + " ta"); menu(s, chatId, 0); }, "ombor-draft").start(); }
             case "omh" -> hisobotPick(chatId, msgId);
+            case "omns" -> naqdMenu(s, chatId, msgId);
+            case "omnst" -> {
+                List<String> st = naqdStateList();
+                int i = Integer.parseInt(arg);
+                if (i >= 0 && i < st.size()) {
+                    cfg.toggleNaqdState(st.get(i));
+                    audit.log(u.getId(), "OMBOR_SOZLAMA", "settings", null, "naqd_statuslar=" + String.join(",", cfg.naqdStates()));
+                    rebuildAsync(chatId);
+                }
+                naqdMenu(s, chatId, msgId);
+            }
+            case "omnr" -> { rebuildAsync(chatId); naqdMenu(s, chatId, msgId); }
             case "omht" -> { cfg.toggleHisobot(Long.parseLong(arg)); hisobotPick(chatId, msgId); }
             default -> { return false; }
         }
@@ -130,8 +152,11 @@ public class OmborAdminHandler {
         sb.append("🌙 Qoldiqlar o'qish vaqti: <b>").append(cfg.stockTime()).append("</b> · 🙈 e'tiborsiz oynasi: <b>").append(cfg.ignoreDays()).append(" kun</b>\n");
         sb.append("🚚 Muddat <b>").append(cfg.leadDays()).append("</b> · 🛡 xavfsizlik <b>").append(cfg.safetyDays()).append("</b> · 📦 qoplash <b>").append(cfg.coverDays())
           .append("</b> kun · 🔤 ABC ").append(cfg.abcDays('A')).append("/").append(cfg.abcDays('B')).append("/").append(cfg.abcDays('C'))
-          .append(" · 🗓 hujjat ").append(cfg.docsDays()).append(" kun · 📈 sotuv ").append(sales.backfillDone() ? "to'liq" : "yuklanmoqda")
-          .append(" · 🤝 teg: ").append(cfg.hamkorTag().isBlank() ? "—" : esc(cfg.hamkorTag())).append("\n");
+          .append(" · 🗓 hujjat ").append(cfg.docsDays()).append(" kun · 📈 sotuv ").append(sales.backfillDone() ? "to'liq" : "yuklanmoqda").append("\n");
+        sb.append("🏆 Chempionlar: top <b>").append(cfg.chempionSoni()).append("</b> · xabar <b>").append(cfg.chempionVaqt()).append("</b>\n");
+        sb.append("💵 Naqd statuslar: <b>").append(esc(String.join(", ", cfg.naqdStates()))).append("</b> · chegara <b>")
+          .append(cfg.sotuvMaxHujjat() == 0 ? "yo'q" : OmborChempionService.pul(cfg.sotuvMaxHujjat() * 100) + " so'm").append("</b>")
+          .append(sales.progress() != null ? " · ⏳ qayta hisob " + sales.progress() : sales.naqdReady() ? "" : " · ⏳ otgruzka tarixi kutilmoqda").append("\n");
         sb.append("📏 Qoidalar: <b>").append(ruleRepo.findByEnabledTrueOrderBySortAscCodeAsc().size()).append("/").append(ruleRepo.count()).append("</b> yoqilgan · ⚠️ ochiq: <b>")
           .append(engine.openCount()).append("</b>\n");
         long unbound = kassaRepo.findByActiveTrueOrderByIdAsc().stream().filter(k -> !k.isCashless() && k.getMoyskladWarehouseId() == null).count();
@@ -147,19 +172,101 @@ public class OmborAdminHandler {
         rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:omg"), btn("🌙 Qoldiq vaqti", "a:omv:stock"), btn("🙈 Kunlar", "a:omv:ignore")));
         rows.add(irow(btn("📏 Qoidalar", "a:omk"), btn("👥 Rollar (do'kon)", "a:omr"), btn("📣 Hisobot oluvchilar", "a:omh")));
         rows.add(irow(btn("🏪 Ombor ↔ do'kon", "a:oms"), btn("📅 Davrlar (aksiya/mavsum)", "a:omd")));
-        rows.add(irow(btn(cfg.sanoqMajburiy() ? "🔢 Sanoq majburiy: ON" : "🔢 Sanoq majburiy: OFF", "a:omsm"), btn("🔤 ABC kunlar", "a:omv:abc")));
+        rows.add(irow(btn("🔢 Kunlik sanoq", "a:omsn"), btn("🔤 ABC kunlar", "a:omv:abc")));
         rows.add(irow(btn("🚚 Muddat (kun)", "a:omv:lead"), btn("🛡 Xavfsizlik (kun)", "a:omv:safety"), btn("📦 Qoplash (kun)", "a:omv:cover")));
-        rows.add(irow(btn("🗓 Hujjat oynasi (kun)", "a:omv:docs"), btn("📈 Sotuv tarixi (kun)", "a:omv:sales"), btn("🤝 Hamkor tegi", "a:omv:hamkor")));
+        rows.add(irow(btn("🗓 Hujjat oynasi (kun)", "a:omv:docs"), btn("📈 Sotuv tarixi (kun)", "a:omv:sales")));
         rows.add(irow(btn("🔄 Hozir sinxron", "a:omn"), btn("🔎 Hozir tekshirish", "a:omt")));
         rows.add(irow(btn("🧮 Hisoblar hozir", "a:omc"), btn("📈 Sotuv tarixi +20 kun", "a:omcs")));
-        rows.add(irow(btn("📥 Sheets (narx/yetkazuvchi/davr)", "a:omgs"), btn("🧾 Qoralama tuzish", "a:omqb")));
+        rows.add(irow(btn("📥 Sheets (yetkazuvchi/davr)", "a:omgs"), btn("🧾 Qoralama tuzish", "a:omqb")));
         rows.add(irow(btn("💰 Katta summa (so'm)", "a:omv:katta"), btn("🧊 Sovish (kun)", "a:omv:sovish")));
+        rows.add(irow(btn("🏆 Chempion soni", "a:omv:ch_soni"), btn("🏆 Xabar vaqti", "a:omv:ch_vaqt"), btn("🏆 Hozir yuborish", "a:omch")));
+        rows.add(irow(btn("💵 Naqd statuslar", "a:omns"), btn("📏 Hujjat chegarasi", "a:omv:max_hujjat")));
         rows.add(irow(btn("⬅️ Orqaga", "a:p:set")));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    /* ---------- 💵 naqd statuslar ---------- */
+
+    /** Otgruzkalarda uchragan statuslar (ko'p → kam) + sozlamadagi qo'shimchalar — indeks callback'da yuradi. */
+    private List<String> naqdStateList() {
+        List<String> out = new ArrayList<>(sales.demandStates().keySet());
+        for (String st : cfg.naqdStates()) if (out.stream().noneMatch(x -> x.equalsIgnoreCase(st))) out.add(st);
+        return out;
+    }
+
+    private void naqdMenu(Session s, long chatId, int msgId) {
+        s.reset();
+        var counts = sales.demandStates();
+        List<String> st = naqdStateList();
+        StringBuilder sb = new StringBuilder("💵 <b>Naqd statuslar</b>\n\n");
+        sb.append("Sotuv tahlili (chempionlar, ABC, buyurtma nuqtasi, sanoq havzasi, trend) faqat shu statusdagi otgruzkalardan hisoblanadi. ")
+          .append("Перечисление va Карз перечисление — bank orqali, tahlilga kirmaydi.\n")
+          .append("Hozir: <b>").append(esc(String.join(", ", cfg.naqdStates()))).append("</b>")
+          .append(cfg.sotuvMaxHujjat() == 0 ? "" : " · bitta hujjat ≤ " + OmborChempionService.pul(cfg.sotuvMaxHujjat() * 100) + " so'm").append("\n");
+        if (sales.progress() != null) sb.append("⏳ Qayta hisoblanmoqda ").append(sales.progress()).append("\n");
+        else if (!sales.demandLoaded()) sb.append("⏳ Otgruzka tarixi yuklanmoqda (birinchi sinxron)\n");
+        sb.append("\nStatusni bosib yoqing/o'chiring — sotuv ").append(cfg.salesDays()).append(" kun uchun qayta hisoblanadi:");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        for (int i = 0; i < st.size(); i++) {
+            String x = st.get(i);
+            Long c = counts.get(x);
+            rows.add(irow(btn((cfg.isNaqd(x) ? "✅ " : "▫️ ") + cut(x, 24) + (c == null ? "" : " · " + c + " ta"), "a:omnst:" + i)));
+        }
+        if (st.isEmpty()) rows.add(irow(btn("⏳ Statuslar hali yo'q", "a:omns")));
+        rows.add(irow(btn("📏 Hujjat chegarasi", "a:omv:max_hujjat"), btn("♻️ Qayta hisoblash", "a:omnr")));
+        rows.add(irow(btn("⬅️ Orqaga", BACK)));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    /** Naqd sotuvni fonda qayta hisoblash (sales_days kun), keyin tunlik hisoblar va chempion fill. Band bo'lsa — jim. */
+    private void rebuildAsync(long chatId) {
+        if (sales.busy()) return;
+        new Thread(() -> {
+            try {
+                int n = sales.rebuildAll();
+                if (n == 0) return;
+                calc.nightly();
+                chempionSvc.nightly();
+                sender.send(chatId, "✅ Naqd sotuv qayta hisoblandi: <b>" + n + "</b> kun · statuslar: " + esc(String.join(", ", cfg.naqdStates())));
+            } catch (Exception e) { sender.send(chatId, "⚠️ Qayta hisoblash xatosi: " + esc(String.valueOf(e.getMessage()))); }
+        }, "ombor-naqd-rebuild").start();
+    }
+
+    /* ---------- 🔢 kunlik sanoq ---------- */
+
+    private void sanoqMenu(Session s, long chatId, int msgId) {
+        java.time.LocalDate today = java.time.LocalDate.now(cfg.zone());
+        long reja = sanoqSvc.repo().findByPlanDateBetweenOrderByKassaIdAscPlanDateAscIdAsc(today, today).size();
+        long open = sanoqSvc.openCountAll();
+        StringBuilder sb = new StringBuilder("🔢 <b>Kunlik sanoq</b>\n\n");
+        sb.append("Har kuni har do'kon uchun ").append(OmborSanoqService.SOTUV_KUN).append(" kunlik eng ko'p sotilgan <b>").append(cfg.sanoqHavza())
+          .append("</b> tovar ichidan tasodifiy <b>").append(cfg.sanoqSoni()).append("</b> tasi tanlanadi (oxirgi ").append(OmborSanoqService.TAKROR_KUN).append(" kunda sanalganlar takrorlanmaydi).\n");
+        sb.append("🐢 Shundan <b>").append(cfg.sanoqEski()).append("</b> tasi eski qoldiq: ").append(OmborSanoqService.SOTUV_KUN).append(" kunda sotilmagan, qoldig'i bor; hech sanalmagani → eng uzoq sanalmagani.\n");
+        sb.append("🕘 So'rov zavskladga: <b>").append(cfg.sanoqVaqt()).append("</b> · 🌆 Yakun rahbarga: <b>").append(cfg.sanoqYopishVaqt()).append("</b>\n");
+        sb.append("📊 Haftalik Excel admin'ga: <b>").append(OmborConfig.HAFTA_KUNLARI[cfg.sanoqHaftaKun() - 1]).append(" ").append(cfg.sanoqHaftaVaqt()).append("</b>\n");
+        sb.append("🔒 Sanoq majburiy (kun yopilishi): <b>").append(cfg.sanoqMajburiy() ? "ON" : "OFF").append("</b>\n");
+        sb.append("━━━━━━━━━━━━━━━━━━━━\nBugun reja <b>").append(reja).append("</b> ta · ochiq <b>").append(open).append("</b> ta\n");
+        sb.append("<i>Xabar kalitlari: 🔕 Хабарномалар → 🏬 Омбор (so'rov, kun yakuni, haftalik).</i>");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("🔢 Kuniga soni", "a:omv:sn_soni"), btn("🎯 Havza (top N)", "a:omv:sn_havza"), btn("🐢 Eski ulushi", "a:omv:sn_eski")));
+        rows.add(irow(btn("🕘 So'rov vaqti", "a:omv:sn_vaqt"), btn("🌆 Yakun vaqti", "a:omv:sn_yopish")));
+        rows.add(irow(btn("📊 Haftalik kun/vaqt", "a:omv:sn_hafta"), btn(cfg.sanoqMajburiy() ? "🔒 Majburiy: ON" : "🔓 Majburiy: OFF", "a:omsm")));
+        rows.add(irow(btn("📤 So'rovni hozir yuborish", "a:omsq"), btn("📥 Haftalik Excel hozir", "a:omsx")));
+        rows.add(irow(btn("⬅️ Orqaga", BACK)));
         show(chatId, msgId, sb.toString(), inline(rows));
     }
 
     private void askValue(Session s, String key, long chatId, int msgId) {
         String prompt = switch (key) {
+            case "ch_soni" -> "🏆 Chempionlar: har do'kon uchun " + OmborChempionService.KUN + " kunlik eng ko'p sotilgan nechta tovar? (5–100)\nHozir: " + cfg.chempionSoni();
+            case "ch_vaqt" -> "🏆 Ertalabki chempion xabari (fill rate + javonda yo'qlar) zakupshik va rahbarga qaysi vaqtda? (HH:mm)\nHozir: " + cfg.chempionVaqt();
+            case "sn_soni" -> "🔢 Kuniga har do'kon uchun nechta tovar sanalsin? (1–200)\nHozir: " + cfg.sanoqSoni();
+            case "sn_havza" -> "🎯 Tanlov havzasi: " + OmborSanoqService.SOTUV_KUN + " kunlik eng ko'p sotilgan nechta tovar ichidan? (5–1000)\nHozir: " + cfg.sanoqHavza();
+            case "sn_eski" -> "🐢 Kunlik sonining nechtasi eski qoldiq (" + OmborSanoqService.SOTUV_KUN + " kunda sotilmagan, qoldig'i bor) bo'lsin? (0–100; 0 — faqat top-sotuvchilar)\nHozir: " + cfg.sanoqEski() + " / " + cfg.sanoqSoni();
+            case "sn_vaqt" -> "🕘 Ertalabki so'rov zavskladga qaysi vaqtda ketsin? (HH:mm)\nHozir: " + cfg.sanoqVaqt();
+            case "sn_yopish" -> "🌆 Kun yakuni — kiritilganlar tasdiqlanib, natija rahbarga qaysi vaqtda ketsin? (HH:mm)\nHozir: " + cfg.sanoqYopishVaqt();
+            case "sn_hafta" -> "📊 Haftalik Excel: hafta kuni (1 — dushanba … 7 — yakshanba) va vaqt, masalan <code>1 09:00</code>\nHozir: "
+                    + cfg.sanoqHaftaKun() + " (" + OmborConfig.HAFTA_KUNLARI[cfg.sanoqHaftaKun() - 1] + ") " + cfg.sanoqHaftaVaqt();
             case "stock" -> "🌙 Qoldiqlar (report/stock) kuniga bir marta qaysi vaqtdan keyin o'qilsin? (HH:mm)\nHozir: " + cfg.stockTime();
             case "ignore" -> "🙈 «E'tiborsiz» deyilgan kamchilik necha kun qayta chiqmasin? (1–365)\nHozir: " + cfg.ignoreDays();
             case "lead" -> "🚚 Standart yetkazib berish muddati (kun, 0–120) — buyurtma nuqtasi = 90 kunlik o'rtacha × (muddat + xavfsizlik)\nHozir: " + cfg.leadDays();
@@ -170,7 +277,8 @@ public class OmborAdminHandler {
             case "abc" -> "🔤 ABC sanoq davrlari (kun), vergul bilan A,B,C: masalan <code>10,30,90</code>\nHozir: " + cfg.abcDays('A') + "," + cfg.abcDays('B') + "," + cfg.abcDays('C');
             case "katta" -> "💰 Direktor tasdig'i kerak bo'ladigan qoralama summasi (so'm)\nHozir: " + cfg.kattaSumma();
             case "sovish" -> "🧊 Aksiyadan keyin necha kun tovar qoralamaga tushmasin? (1–120)\nHozir: " + cfg.sovishKun();
-            case "hamkor" -> "🤝 Hamkor do'konlar (tuman ustalari) MoySklad kontragent TEGI (Группы) nomi. «-» — o'chirish.\nHozir: " + (cfg.hamkorTag().isBlank() ? "—" : cfg.hamkorTag());
+            case "max_hujjat" -> "📏 Bitta otgruzka summasi shundan katta bo'lsa (naqd statusda ham) sotuv tahliliga kirmaydi — bir martalik katta savdo chempionlarni buzmasin. So'mda, 0 — chegarasiz.\nHozir: "
+                    + (cfg.sotuvMaxHujjat() == 0 ? "chegara yo'q" : uz.kassa.bot.TextUtil.fmt(cfg.sotuvMaxHujjat()) + " so'm");
             default -> {
                 if (key.startsWith("params:")) {
                     var r = rule(key.substring(7)).orElse(null);
@@ -192,7 +300,7 @@ public class OmborAdminHandler {
         if (prompt == null) { menu(s, chatId, msgId); return; }
         s.state = Session.State.ADM_OM_VAL;
         s.data.put("omKey", key);
-        sender.edit(chatId, msgId, prompt, inline(List.of(irow(btn("❌ Bekor", BACK)))));
+        sender.edit(chatId, msgId, prompt, inline(List.of(irow(btn("❌ Bekor", key.startsWith("sn_") ? "a:omsn" : key.equals("max_hujjat") ? "a:omns" : BACK)))));
     }
 
     public void onText(AppUser u, Session s, String text, long chatId) {
@@ -213,9 +321,21 @@ public class OmborAdminHandler {
                 if (a.length != 3) throw new IllegalArgumentException("3 ta son kerak");
                 cfg.set(OmborConfig.ABC_A_DAYS, String.valueOf(range(a[0], 1, 365))); cfg.set(OmborConfig.ABC_B_DAYS, String.valueOf(range(a[1], 1, 365))); cfg.set(OmborConfig.ABC_C_DAYS, String.valueOf(range(a[2], 1, 365)));
             }
-            else if (key.equals("hamkor")) cfg.set(OmborConfig.HAMKOR_TAG, t.equals("-") ? "" : t);
             else if (key.equals("katta")) cfg.set(OmborConfig.KATTA_SUMMA, String.valueOf(Long.parseLong(t.replaceAll("\\D", ""))));
             else if (key.equals("sovish")) cfg.set(OmborConfig.SOVISH_KUN, String.valueOf(range(t, 1, 120)));
+            else if (key.equals("max_hujjat")) { cfg.set(OmborConfig.SOTUV_MAX_HUJJAT, String.valueOf(Long.parseLong(t.replaceAll("\\D", "")))); rebuildAsync(chatId); }
+            else if (key.equals("ch_soni")) cfg.set(OmborConfig.CHEMPION_SONI, String.valueOf(range(t, 5, 100)));
+            else if (key.equals("ch_vaqt")) cfg.set(OmborConfig.CHEMPION_VAQT, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
+            else if (key.equals("sn_soni")) cfg.set(OmborConfig.SANOQ_SONI, String.valueOf(range(t, 1, 200)));
+            else if (key.equals("sn_havza")) cfg.set(OmborConfig.SANOQ_HAVZA, String.valueOf(range(t, 5, 1000)));
+            else if (key.equals("sn_eski")) cfg.set(OmborConfig.SANOQ_ESKI, String.valueOf(range(t, 0, 100)));
+            else if (key.equals("sn_vaqt")) cfg.set(OmborConfig.SANOQ_VAQT, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
+            else if (key.equals("sn_yopish")) cfg.set(OmborConfig.SANOQ_YOPISH_VAQT, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
+            else if (key.equals("sn_hafta")) {
+                String[] a = t.split("\\s+");
+                cfg.set(OmborConfig.SANOQ_HAFTA_KUN, String.valueOf(range(a[0], 1, 7)));
+                if (a.length > 1) cfg.set(OmborConfig.SANOQ_HAFTA_VAQT, LocalTime.parse(a[1].length() == 4 ? "0" + a[1] : a[1]).toString());
+            }
             else if (key.startsWith("params:")) {
                 String err = engine.validateParams(t);
                 if (err != null) throw new IllegalArgumentException("JSON xato: " + err);
@@ -230,6 +350,8 @@ public class OmborAdminHandler {
             sender.send(chatId, "⚠️ Qiymat noto'g'ri: " + esc(t) + " — " + esc(String.valueOf(e.getMessage())));
         }
         if (key != null && key.contains(":")) ruleCard(s, key.substring(key.indexOf(':') + 1), chatId, 0);
+        else if (key != null && key.startsWith("sn_")) sanoqMenu(s, chatId, 0);
+        else if (key != null && key.equals("max_hujjat")) naqdMenu(s, chatId, 0);
         else menu(s, chatId, 0);
     }
 
@@ -343,7 +465,7 @@ public class OmborAdminHandler {
         for (String role : OmborConfig.ROLES) {
             rows.add(irow(btn(OmborConfig.roleTitle(role) + " · umumiy (" + cfg.roleUsersExact(role, 0).size() + ")", "a:omrr:" + role + ".0")));
             for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-                if (k.isCashless() || role.equals("DIREKTOR")) continue;
+                if (k.getMoyskladWarehouseId() == null || role.equals("DIREKTOR")) continue;
                 rows.add(irow(btn("   " + cut(k.getName(), 24) + " (" + cfg.roleUsersExact(role, k.getId()).size() + ")", "a:omrr:" + role + "." + k.getId())));
             }
         }

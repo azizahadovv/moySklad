@@ -52,6 +52,7 @@ public class NotifySwitches {
     public static final String G_OT       = "📦 Назорат — отгрузка / қарз";
     public static final String G_OMBOR    = "🏬 Омбор";
     public static final String G_XODIM    = "👥 Ходимлар";
+    public static final String G_TG       = "📨 Бот хабарлари";
     public static final String G_TEXNIK   = "⚙️ Техник";
 
     /* 💰 balans / kassa */
@@ -88,9 +89,16 @@ public class NotifySwitches {
     /* 🏬 ombor */
     public static final String OM_KAMCHILIK   = "OM_KAMCHILIK";
     public static final String OM_ESKALATSIYA = "OM_ESKALATSIYA";
+    public static final String OM_SANOQ_SOROV = "OM_SANOQ_SOROV";
+    public static final String OM_SANOQ_KUNLIK = "OM_SANOQ_KUNLIK";
+    public static final String OM_SANOQ_HAFTALIK = "OM_SANOQ_HAFTALIK";
+    public static final String OM_CHEMPION_KUNLIK = "OM_CHEMPION_KUNLIK";
     /* 👥 xodimlar */
     public static final String XODIM_ULANDI = "XODIM_ULANDI";
     public static final String XODIM_OGOH   = "XODIM_OGOH";
+    /* 📨 bot xabarlari (tg-reader) */
+    public static final String TG_XABAR = "TG_XABAR";
+    public static final String TG_JIM   = "TG_JIM";
     /* ⚙️ texnik */
     public static final String TEXNIK_OGOH = "TEXNIK_OGOH";
 
@@ -156,11 +164,24 @@ public class NotifySwitches {
                     "23 qoida bo'yicha yangi kamchilik → qoidada belgilangan rol", ABRX),
             new Sw(OM_ESKALATSIYA, G_OMBOR, "⏰ Ombor eskalatsiyasi",
                     "tuzatilmasa rahbarga, keyin admin'ga", ABR),
+            new Sw(OM_SANOQ_SOROV, G_OMBOR, "🔢 Kunlik sanoq so'rovi",
+                    "ertalab bugungi ro'yxat → zavsklad (bo'lmasa rahbar)", RX),
+            new Sw(OM_SANOQ_KUNLIK, G_OMBOR, "🔢 Sanoq kun yakuni",
+                    "kun oxirida natija (teng/farq/sanalmadi) → bo'lim rahbari", ABR),
+            new Sw(OM_SANOQ_HAFTALIK, G_OMBOR, "📊 Sanoq haftalik Excel",
+                    "haftada bir Excel → SuperAdmin + hisobot oluvchilar", ABR),
+            new Sw(OM_CHEMPION_KUNLIK, G_OMBOR, "🏆 Chempionlar kunlik",
+                    "ertalab do'kon fill rate va javonda yo'q chempionlar → zakupshik + do'kon rahbari", ABRX),
 
             new Sw(XODIM_ULANDI, G_XODIM, "🔗 Xodim botga ulandi",
                     "taklif havolasi / telefon / MoySklad xodimi orqali ulanish", A),
             new Sw(XODIM_OGOH, G_XODIM, "📱 Kontakt ogohlantirishlari",
                     "yangi notanish kontakt, telefon mos kelmadi, faolsiz foydalanuvchi", A),
+
+            new Sw(TG_XABAR, G_TG, "📨 Bot xabari ogohlantirishi",
+                    "ulangan akkauntga botdan kelgan xabar kalit so'z / summa nomuvofiqligi topilganda → admin + rahbar", ABR),
+            new Sw(TG_JIM, G_TG, "🔇 Bot xabarlari jimligi",
+                    "akkaunt ulanishi uzilgan yoki N soat xabar kelmagan (tg-reader to'xtagan)", A),
 
             new Sw(TEXNIK_OGOH, G_TEXNIK, "🚨 Texnik ogohlantirishlar",
                     "job 10 marta yiqildi, MoySklad token huquqi, valyuta kursi yo'q, dublikat otdel, noma'lum Klik statusi", AB)

@@ -46,7 +46,11 @@ public class Session {
         KG_CLOSE_REASON, ADM_CT_VAL,
         // 🏬 Ombor: tovar qidirish; sozlama qiymati (SuperAdmin)
         OM_SEARCH, ADM_OM_VAL, OM_SANOQ_QTY, ADM_OM_DAVR,
-        OM_SOROV_PROD, OM_SOROV_NEW, OM_SOROV_QTY, OM_SOROV_ANS, OM_QR_QTY, OM_NARX, OM_ISSUE_Q
+        OM_SOROV_PROD, OM_SOROV_NEW, OM_SOROV_QTY, OM_SOROV_ANS, OM_QR_QTY, OM_ISSUE_Q,
+        // 📨 Bot xabarlari nazorati (SuperAdmin sozlama qiymati)
+        ADM_TG_VAL,
+        // 📨 Akkaunt ulash (xodim, bot ichida): telefon, kod, 2FA parol
+        TG_PHONE, TG_CODE, TG_PWD
     }
 
     public State state = State.IDLE;

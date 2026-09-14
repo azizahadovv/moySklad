@@ -47,7 +47,10 @@ public class Router {
     private final AdminHandler admin;
     private final uz.kassa.bot.handlers.KontragentHandler kontragent;
     private final uz.kassa.bot.handlers.OmborHandler ombor;
+    private final uz.kassa.bot.handlers.TgHandler tg;
     private final uz.kassa.service.ombor.OmborSanoqService omborSanoq;
+    private final uz.kassa.webapp.WebSessionService webSessions;
+    private final uz.kassa.webapp.WebUrlService webUrl;
     private final AuditService audit;
     private final uz.kassa.service.SettingsService settings;
     private final uz.kassa.scheduler.Jobs jobs;
@@ -309,13 +312,57 @@ public class Router {
             return;
         }
 
+        // 🌐 /weburl <манзил> — панел манзилини иловани қайта кўтармасдан ўзгартириш (SuperAdmin).
+        if (text.equals("/weburl") || text.startsWith("/weburl ")) {
+            if (user.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Фақат SuperAdmin учун"); return; }
+            String[] wp = text.trim().split("\\s+", 2);
+            if (wp.length < 2) {
+                sender.send(chatId, "🌐 <b>Панел манзили</b>\nҲозир: <code>" + esc(webUrl.configured() ? webUrl.url() : "созланмаган") + "</code>\n\n"
+                        + "Ўзгартириш: <code>/weburl https://buxgalteriya.nsb.uz</code>\n"
+                        + "<code>/weburl -</code> — .env даги қийматга қайтиш");
+                return;
+            }
+            String v = wp[1].trim();
+            webUrl.set(v.equals("-") ? "" : v);
+            audit.log(user.getId(), "WEB_URL", "settings", null, v);
+            sender.send(chatId, "✅ Панел манзили: <code>" + esc(webUrl.configured() ? webUrl.url() : "созланмаган") + "</code>\n"
+                    + "Энди <b>/start</b> ёки <b>/panel</b> шу манзилни беради.");
+            return;
+        }
+
+        // 🖥 /panel — админ панелни БРАУЗЕРДА очиш учун бир мартали ҳавола (компьютер учун).
+        if (text.equals("/panel")) {
+            if (user.getRole() == Role.KASSIR) {
+                sender.send(chatId, "⚠️ Админ панел бухгалтер ва админ учун.");
+                return;
+            }
+            String link = webSessions.loginLink(user);
+            if (link == null) {
+                sender.send(chatId, "⚠️ Веб манзил созланмаган (WEBAPP_URL). SuperAdmin'га мурожаат қилинг.");
+                return;
+            }
+            sender.send(chatId, "🖥 <b>Админ панел — компьютерда</b>\n\n"
+                    + "Қуйидаги ҳаволани компьютер браузерига нусхалаб қўйинг:\n"
+                    + "<code>" + esc(link) + "</code>\n\n"
+                    + "⏳ Ҳавола <b>" + webSessions.linkMinutes() + " дақиқа</b> ва <b>бир марта</b> ишлайди; "
+                    + "кирилгандан кейин браузер 30 кун эсда сақлайди.\n"
+                    + "🔒 Ҳаволани бошқаларга юборманг — у сизнинг номингиздан киритади.\n"
+                    + "Чиқиш: манзилга <code>/logout</code> қўшинг.");
+            audit.log(user.getId(), "WEB_PANEL_LINK", "web", null, user.getFullName() + " браузер ҳаволасини олди");
+            return;
+        }
+
+        if (text.equals("/akkaunt")) {   // @suffiks yuqorida olib tashlangan
+            tg.myScreen(user, s, chatId, 0);
+            return;
+        }
         if (text.equals("/start") || text.startsWith("/start ") || text.equals("/menu")) {
             s.reset();
             sender.send(chatId, "Assalomu alaykum, <b>" + esc(user.getFullName()) + "</b>!\n"
                     + menus.otdelLabel(user), menus.menuFor(user));
             // 🌐 Админ панел (Mini App): chat menyu tugmasi (≡) + inline tugma. Reply-klaviatura
             // tugmasi ishlatilmaydi — u orqali ochilganda Telegram initData bermaydi (2026-09-04 test).
-            String wa = props.getWebappUrl();
+            String wa = webUrl.url();
             if (wa != null && !wa.isBlank() && user.getRole() != Role.KASSIR) {
                 sender.setMenuButton(chatId, "🌐 Админ панел", wa);
                 sender.sendWebAppButton(chatId, "🌐 <b>Админ панел</b> — веб кўриниш: бугун, кассалар, "
@@ -334,6 +381,10 @@ public class Router {
 
         boolean handled;
         try {
+            // 📨 Akkaunt ulash (telefon/kod/parol) — barcha rollar uchun
+            if (s.state == Session.State.TG_PHONE || s.state == Session.State.TG_CODE || s.state == Session.State.TG_PWD) {
+                if (tg.onLoginText(user, s, text, chatId)) return;
+            }
             // 🏬 Омбор — barcha rollar uchun (do'kon kesimida)
             if (ombor.onText(user, s, text, chatId)) return;
             handled = switch (user.getRole()) {
@@ -417,6 +468,7 @@ public class Router {
             if (data.startsWith("sb:")) { decisionSubmission(user, s, data, chatId, msgId); return; }
             if (data.startsWith("kg:")) { kontragent.onCallback(user, s, data, chatId, msgId); return; }
             if (data.startsWith("om:")) { ombor.onCallback(user, s, data, chatId, msgId); return; }
+            if (data.startsWith("tg:")) { tg.onCallback(user, s, data, chatId, msgId); return; }
 
             boolean handled = switch (user.getRole()) {
                 case KASSIR -> kassir.onCallback(user, s, data, chatId, msgId);

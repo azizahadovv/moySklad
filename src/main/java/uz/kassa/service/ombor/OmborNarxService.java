@@ -12,15 +12,18 @@ import java.time.LocalDateTime;
 import java.util.*;
 
 /**
- * 🏬 Yetkazuvchi narxlari (docs/OMBOR-TZ.md B3): (1) priyomkalardan haqiqiy narx (PRIYOMKA), (2) zakupshik qo'lda (QOLDA),
- * (3) Google Sheets «Нархлар», «Етказувчилар», «Даврлар» varaqlari (SHEETS). Yetkazuvchi profili avtomatik yaratiladi.
+ * 🏬 Yetkazuvchi narxlari (docs/OMBOR-TZ.md B3): faqat priyomkalardan haqiqiy narx (PRIYOMKA) — tovar kelgach narx tahlil qilinadi,
+ * qo'lda/Sheets narx kiritish yo'q (2026-09-12 qarori). Google Sheets «Етказувчилар», «Даврлар» — yetkazuvchi profili va davrlar.
+ * Yetkazuvchi profili priyomkadan avtomatik yaratiladi.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class OmborNarxService {
 
-    public static final List<String> TABS = List.of("Етказувчилар", "Нархлар", "Даврлар");
+    public static final List<String> TABS = List.of("Етказувчилар", "Даврлар");
+
+    public static final String PRIYOMKA = "PRIYOMKA";
 
     private final OmborNarxRepo repo;
     private final OmborYetkazuvchiRepo supRepo;
@@ -46,9 +49,9 @@ public class OmborNarxService {
             if (s.getLastSupply() == null || s.getLastSupply().isBefore(d)) s.setLastSupply(d);
             for (OmborPozitsiya p : posRepo.findByHujjatId(h.getId())) {
                 if (p.getPrice() <= 0) continue;
-                if (repo.findFirstByAgentMsIdAndProductMsIdAndAtDateAndSource(h.getAgentMsId(), p.getProductMsId(), d, "PRIYOMKA").isPresent()) continue;
+                if (repo.findFirstByAgentMsIdAndProductMsIdAndAtDateAndSource(h.getAgentMsId(), p.getProductMsId(), d, PRIYOMKA).isPresent()) continue;
                 repo.save(OmborNarx.builder().agentMsId(h.getAgentMsId()).productMsId(p.getProductMsId()).price(p.getPrice()).atDate(d)
-                        .source("PRIYOMKA").note("№" + h.getDocNo()).build());
+                        .source(PRIYOMKA).note("№" + h.getDocNo()).build());
                 n++;
             }
         }
@@ -60,25 +63,9 @@ public class OmborNarxService {
         return n;
     }
 
-    /* ==================== qo'lda ==================== */
+    /* ==================== yetkazuvchi / tovar ==================== */
 
-    /** «yetkazuvchi; tovar (artikul/kod/nom); narx so'm; [muddat kun]; [izoh]». Xato — IllegalArgumentException. */
-    public OmborNarx addManual(String line, AppUser by) {
-        String[] p = line.split(";");
-        if (p.length < 3) throw new IllegalArgumentException("kamida 3 maydon: yetkazuvchi; tovar; narx");
-        OmborYetkazuvchi s = supplier(p[0].trim());
-        OmborTovar t = product(p[1].trim());
-        long tiyin = Math.round(Double.parseDouble(p[2].trim().replace(" ", "").replace(",", ".")) * 100);
-        if (tiyin <= 0) throw new IllegalArgumentException("narx > 0");
-        Integer lead = p.length > 3 && !p[3].isBlank() ? Integer.parseInt(p[3].trim().replaceAll("\\D", "")) : null;
-        LocalDate d = LocalDate.now(cfg.zone());
-        OmborNarx n = repo.findFirstByAgentMsIdAndProductMsIdAndAtDateAndSource(s.getAgentMsId(), t.getMsId(), d, "QOLDA")
-                .orElse(OmborNarx.builder().agentMsId(s.getAgentMsId()).productMsId(t.getMsId()).atDate(d).source("QOLDA").build());
-        n.setPrice(tiyin); n.setLeadDays(lead); n.setNote(p.length > 4 ? p[4].trim() : ""); n.setCreatedBy(by.getId());
-        return repo.save(n);
-    }
-
-    /** Yetkazuvchini nomi bo'yicha (bor bo'lsa) yoki MoySklad kontragent nomi bo'yicha yaratish. */
+    /** Yetkazuvchini nomi bo'yicha (bor bo'lsa) yoki MoySklad kontragent nomi bo'yicha yaratish (Sheets «Етказувчилар»). */
     public OmborYetkazuvchi supplier(String name) {
         Optional<OmborYetkazuvchi> s = supRepo.findFirstByNameIgnoreCase(name);
         if (s.isPresent()) return s.get();
@@ -100,22 +87,21 @@ public class OmborNarxService {
 
     /* ==================== so'rovlar ==================== */
 
-    /** Tovar bo'yicha har yetkazuvchining oxirgi narxi (QOLDA ustun, so'ng PRIYOMKA/SHEETS), 365 kun ichida. */
+    /** Tovar bo'yicha har yetkazuvchining oxirgi priyomka narxi, 365 kun ichida. Eski QOLDA/SHEETS yozuvlari hisobga olinmaydi. */
     public Map<String, OmborNarx> lastPrices(String productMsId) {
         Map<String, OmborNarx> out = new LinkedHashMap<>();
         LocalDate lim = LocalDate.now(cfg.zone()).minusDays(365);
         for (OmborNarx n : repo.findByProductMsIdOrderByAtDateDesc(productMsId)) {
-            if (n.getAtDate().isBefore(lim)) continue;
-            OmborNarx cur = out.get(n.getAgentMsId());
-            if (cur == null || (!cur.getSource().equals("QOLDA") && n.getSource().equals("QOLDA") && !n.getAtDate().isBefore(cur.getAtDate().minusDays(30))))
-                out.put(n.getAgentMsId(), n);
+            if (n.getAtDate().isBefore(lim) || !PRIYOMKA.equals(n.getSource())) continue;
+            out.putIfAbsent(n.getAgentMsId(), n);
         }
         return out;
     }
 
-    /** (agent, tovar) bo'yicha oxirgi ikki narx: [oxirgi, oldingi] (oldingi bo'lmasa null). */
+    /** (agent, tovar) bo'yicha oxirgi ikki priyomka narxi: [oxirgi, oldingi] (oldingi bo'lmasa null). */
     public OmborNarx[] lastTwo(String agent, String product) {
-        List<OmborNarx> l = repo.findByAgentMsIdAndProductMsIdOrderByAtDateDescIdDesc(agent, product);
+        List<OmborNarx> l = repo.findByAgentMsIdAndProductMsIdOrderByAtDateDescIdDesc(agent, product).stream()
+                .filter(n -> PRIYOMKA.equals(n.getSource())).toList();
         OmborNarx last = l.isEmpty() ? null : l.get(0), prev = null;
         for (int i = 1; i < l.size(); i++) if (l.get(i).getPrice() != last.getPrice()) { prev = l.get(i); break; }
         return new OmborNarx[]{last, prev};
@@ -125,7 +111,7 @@ public class OmborNarxService {
 
     /* ==================== Google Sheets ==================== */
 
-    /** Uchta varaqni o'qish. Qaytadi: natija matni (yoki null — Sheets sozlanmagan). */
+    /** Ikki varaqni o'qish (yetkazuvchi profili, davrlar). Qaytadi: natija matni (yoki null — Sheets sozlanmagan). */
     public String pullSheets(Long actorId) {
         if (!gs.configured()) return null;
         StringBuilder sb = new StringBuilder();
@@ -149,27 +135,6 @@ public class OmborNarxService {
             }
             sb.append("Етказувчилар: ").append(n).append(err > 0 ? " (xato " + err + ")" : "").append("\n");
         } catch (Exception e) { sb.append("Етказувчилар: ⚠️ ").append(e.getMessage()).append("\n"); }
-        // Нархлар: Sana dd.MM.yyyy | Yetkazuvchi | Tovar (artikul) | Narx so'm | Valyuta | Muddat | Izoh
-        n = 0; err = 0;
-        try {
-            for (List<String> r : gs.get("Нархлар!A2:G1000")) {
-                if (r.isEmpty() || cell(r, 1).isBlank() || cell(r, 2).isBlank() || cell(r, 3).isBlank()) continue;
-                try {
-                    LocalDate d = cell(r, 0).isBlank() ? LocalDate.now(cfg.zone()) : parseDate(cell(r, 0));
-                    OmborYetkazuvchi s = supplier(cell(r, 1));
-                    OmborTovar t = product(cell(r, 2));
-                    long tiyin = Math.round(Double.parseDouble(cell(r, 3).replace(" ", "").replace(",", ".")) * 100);
-                    OmborNarx x = repo.findFirstByAgentMsIdAndProductMsIdAndAtDateAndSource(s.getAgentMsId(), t.getMsId(), d, "SHEETS")
-                            .orElse(OmborNarx.builder().agentMsId(s.getAgentMsId()).productMsId(t.getMsId()).atDate(d).source("SHEETS").build());
-                    x.setPrice(tiyin);
-                    if (!cell(r, 4).isBlank()) x.setCurrency(cell(r, 4).trim().toUpperCase());
-                    if (!cell(r, 5).isBlank()) x.setLeadDays(Integer.parseInt(cell(r, 5).replaceAll("\\D", "")));
-                    x.setNote(cell(r, 6)); x.setCreatedBy(actorId);
-                    repo.save(x); n++;
-                } catch (Exception e) { err++; }
-            }
-            sb.append("Нархлар: ").append(n).append(err > 0 ? " (xato " + err + ")" : "").append("\n");
-        } catch (Exception e) { sb.append("Нархлар: ⚠️ ").append(e.getMessage()).append("\n"); }
         // Даврлар: Tur | Tovar yoki #Guruh | Kod | Dan | Gacha | Izoh
         n = 0; err = 0;
         try {

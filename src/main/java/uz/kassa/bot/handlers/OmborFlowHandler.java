@@ -18,15 +18,15 @@ import static uz.kassa.bot.Keyboards.*;
 import static uz.kassa.bot.TextUtil.*;
 
 /**
- * 🏬 Омбор — jarayonlar (B3–B5): 📝 Сўров (do'kon so'rovi), 🧾 Қоралама (tasdiq zanjiri), 🤝 Ҳамкорлар, 💵 Нарх (zakupshik).
- * Callback: om:sr* (so'rov), om:qr* (qoralama), om:hk* (hamkor), om:nx* (narx). OmborHandler orqali chaqiriladi.
+ * 🏬 Омбор — jarayonlar (B3–B5): 📝 Сўров (do'kon so'rovi), 🧾 Қоралама (tasdiq zanjiri), 💵 Нарх (priyomka narxlari, faqat ko'rish).
+ * Callback: om:sr* (so'rov), om:qr* (qoralama), om:nxl (tovar narxlari). OmborHandler orqali chaqiriladi. Hamkorlar bo'limi olib tashlangan (2026-09-12).
  */
 @Component
 @RequiredArgsConstructor
 public class OmborFlowHandler {
 
     private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("dd.MM HH:mm");
-    private static final List<String> REASONS = List.of("YOQ", "KAM", "MIJOZ", "YANGI", "HAMKOR", "LOT");
+    private static final List<String> REASONS = List.of("YOQ", "KAM", "MIJOZ", "YANGI", "LOT");
 
     private final Sender sender;
     private final OmborSorovService sorov;
@@ -59,10 +59,6 @@ public class OmborFlowHandler {
                     draft.setQty(lid, v, u); sender.send(chatId, "✅ Miqdor o'zgartirildi: " + v.stripTrailingZeros().toPlainString()); }
                 catch (Exception e) { sender.send(chatId, "⚠️ Miqdor noto'g'ri."); }
                 qrCard(u, qid, chatId, 0); return true; }
-            case OM_NARX -> { s.reset();
-                try { OmborNarx n = narx.addManual(text, u); sender.send(chatId, "✅ Narx saqlandi: " + fmtTiyin(n.getPrice()) + " so'm" + (n.getLeadDays() == null ? "" : " · muddat " + n.getLeadDays() + " kun")); }
-                catch (Exception e) { sender.send(chatId, "⚠️ " + esc(String.valueOf(e.getMessage())) + "\nFormat: <code>Yetkazuvchi nomi; artikul; 120000; 3; izoh</code>"); }
-                return true; }
             default -> { return false; }
         }
     }
@@ -90,10 +86,6 @@ public class OmborFlowHandler {
             case "qrq" -> { String[] p = arg.split("\\."); s.state = Session.State.OM_QR_QTY; s.data.put("qrId", Long.parseLong(p[0])); s.data.put("qrLine", Long.parseLong(p[1]));
                 sender.edit(chatId, msgId, "✍️ Yangi miqdorni yozing:", inline(List.of(irow(btn("⬅️ Orqaga", "om:qrv:" + p[0]))))); }
             case "qrb" -> { if (!isZakupshik(u)) return true; sender.edit(chatId, msgId, "⏳ Qoralama tuzilmoqda…"); int n = draft.buildAll(); sender.send(chatId, "🧾 Qoralama tuzildi: " + n + " ta"); qrList(u, "", chatId, 0); }
-            case "hk" -> hamkorList(u, chatId, msgId);
-            case "nx" -> { if (!isZakupshik(u)) return true; s.state = Session.State.OM_NARX;
-                sender.edit(chatId, msgId, "💵 <b>Yetkazuvchi narxi</b> — bir qatorda:\n<code>Yetkazuvchi nomi; tovar artikuli; narx so'm; muddat kun; izoh</code>\nMasalan: <code>Ортик ака; AK-NN-06165; 95000; 2</code>\n\n"
-                        + "Priyomkalardagi haqiqiy narxlar avtomatik yoziladi; bu — taklif narxi.", inline(List.of(irow(btn("⬅️ Orqaga", "om:m"))))); }
             case "nxl" -> narxList(u, arg, chatId, msgId);
             default -> { return false; }
         }
@@ -103,7 +95,7 @@ public class OmborFlowHandler {
     private long pickKassa(AppUser u, String arg) {
         if (!arg.isBlank()) try { return Long.parseLong(arg); } catch (NumberFormatException ignored) { }
         if (u.getKassaId() != null) return u.getKassaId();
-        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) if (!k.isCashless()) return k.getId();
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) if (k.getMoyskladWarehouseId() != null) return k.getId();
         return 0;
     }
 
@@ -124,10 +116,10 @@ public class OmborFlowHandler {
         }
         List<InlineKeyboardButton> kr = new ArrayList<>();
         if (u.getRole() == Role.KASSIR) kr.add(btn("➕ Yangi so'rov", "om:srn"));
-        else for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) if (!k.isCashless()) { kr.add(btn("➕ " + cut(k.getName().replace("Отдел ", ""), 12), "om:srn:" + k.getId())); if (kr.size() == 3) { rows.add(kr); kr = new ArrayList<>(); } }
+        else for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) if (k.getMoyskladWarehouseId() != null) { kr.add(btn("➕ " + cut(k.getName().replace("Отдел ", ""), 12), "om:srn:" + k.getId())); if (kr.size() == 3) { rows.add(kr); kr = new ArrayList<>(); } }
         if (!kr.isEmpty()) rows.add(kr);
         rows.add(irow(btn("⬅️ Омбор", "om:m")));
-        sb.append("\nSabab kodlari: tovar yo'q · kam · mijoz · yangi tovar · hamkor · tender loti.");
+        sb.append("\nSabab kodlari: tovar yo'q · kam · mijoz · yangi tovar · tender loti.");
         if (msgId > 0) sender.edit(chatId, msgId, sb.toString(), inline(rows)); else sender.send(chatId, sb.toString(), inline(rows));
     }
 
@@ -294,45 +286,13 @@ public class OmborFlowHandler {
     }
 
 
-    /* ==================== 🤝 Ҳамкорлар ==================== */
-
-    private void hamkorList(AppUser u, long chatId, int msgId) {
-        StringBuilder sb = new StringBuilder("🤝 <b>Hamkor do'konlar</b> (teg: " + (cfg.hamkorTag().isBlank() ? "sozlanmagan" : esc(cfg.hamkorTag())) + ")\n\n");
-        List<Map<String, Object>> debts = metrics.latest("HAMKOR_QARZ", "kassa_id = 0");
-        if (debts.isEmpty()) sb.append("Ma'lumot yo'q — ⚙️ 🏬 Омбор назорати → 🤝 Hamkor tegi ni sozlang, tunda yig'iladi.\n");
-        long total = 0; int n = 0;
-        debts.sort((a, b) -> ((BigDecimal) b.get("value")).compareTo((BigDecimal) a.get("value")));
-        for (Map<String, Object> m : debts) {
-            long v = ((BigDecimal) m.get("value")).longValue();
-            if (v > 0) total += v;
-            if (++n > 20) continue;
-            String id = (String) m.get("product_ms_id");
-            sb.append(v > 0 ? "🔴 " : "• ").append(esc(KorsatkichChegaraChecker.hamkorNames.getOrDefault(id, id))).append(": <b>").append(fmt(v)).append("</b> so'm\n");
-        }
-        if (!debts.isEmpty()) sb.append("Σ qarz: <b>").append(fmt(total)).append("</b> so'm\n");
-        List<Map<String, Object>> iv = metrics.latest("HAMKOR_INTERVAL", "kassa_id = 0");
-        if (!iv.isEmpty()) {
-            sb.append("\n<b>Tugagan bo'lishi mumkin</b> (xarid intervali o'tgan):\n");
-            n = 0;
-            for (Map<String, Object> m : iv) {
-                if (++n > 15) { sb.append("… yana ").append(iv.size() - 15).append("\n"); break; }
-                String key = (String) m.get("product_ms_id");
-                String agent = key.substring(0, key.indexOf('|')), pid = key.substring(key.indexOf('|') + 1);
-                sb.append("• ").append(esc(KorsatkichChegaraChecker.hamkorNames.getOrDefault(agent, agent))).append(" — ")
-                  .append(esc(tovarRepo.findById(pid).map(OmborTovar::getName).orElse(pid))).append(" (").append(((BigDecimal) m.get("value")).intValue()).append(" kun)\n");
-            }
-        }
-        sender.edit(chatId, msgId, sb.toString(), inline(List.of(irow(btn("📝 Hamkor so'rovi", "om:srn"), btn("🏬 Омбор", "om:m")))));
-    }
-
-
     /* ==================== 💵 Нарх ro'yxati ==================== */
 
     private void narxList(AppUser u, String pid, long chatId, int msgId) {
         OmborTovar t = tovarRepo.findById(pid).orElse(null);
-        StringBuilder sb = new StringBuilder("💵 <b>" + esc(t == null ? pid : t.getName()) + "</b> — yetkazuvchi narxlari\n\n");
+        StringBuilder sb = new StringBuilder("💵 <b>" + esc(t == null ? pid : t.getName()) + "</b> — priyomka narxlari (yetkazuvchi bo'yicha)\n\n");
         Map<String, OmborNarx> last = narx.lastPrices(pid);
-        if (last.isEmpty()) sb.append("Narx yo'q. Zakupshik 💵 Нарх киритиш orqali qo'shadi; priyomkalardan avtomatik keladi.\n");
+        if (last.isEmpty()) sb.append("Narx yo'q — oxirgi 365 kunda bu tovar bo'yicha priyomka bo'lmagan.\n");
         for (var e : last.entrySet()) {
             OmborYetkazuvchi s = supRepo.findById(e.getKey()).orElse(null);
             OmborNarx[] two = narx.lastTwo(e.getKey(), pid);
@@ -342,7 +302,6 @@ public class OmborFlowHandler {
             sb.append("\n");
         }
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        if (isZakupshik(u)) rows.add(irow(btn("💵 Narx kiritish", "om:nx")));
         rows.add(irow(btn("📦 Qoldiqlar", "om:t:" + pid), btn("🏬 Омбор", "om:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
     }

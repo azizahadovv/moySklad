@@ -19,20 +19,44 @@ services:
     env_file: .env
     environment:
       TZ: Asia/Tashkent
-    ports:
-      - "${WEBAPP_PORT:-8080}:8080"
+      WEBAPP_PORT: 8080          # контейнер ичида ДОИМ 8080 (ташқари порт — HOST_PORT)
+      SESSIONS_DIR: /sessions    # 📨 TDLib userbot сессиялари (TgTdlibService)
+    # МУҲИМ: серверда ҳеч қандай порт ЧИҚАРИЛМАЙДИ — Caddy `app:8080` га ички тармоқ
+    # орқали уланади. Шунинг учун сервердаги банд 8080 ҳеч нарсага халақит қилмайди.
+    # Локал тест учун порт: docker-compose.dev.yml (HOST_PORT, BIND_ADDR).
     volumes:
       - applogs:/app/logs
+      - tgsessions:/sessions
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
-  # TEST tunnel: Mini App uchun vaqtinchalik ommaviy HTTPS (trycloudflare.com, har startda yangi URL).
-  # URL: `docker compose logs tunnel | grep trycloudflare` → .env WEBAPP_URL → `docker compose up -d app`.
-  # Ishlab chiqarishda o'rniga server + buxgalteriya.nsb.uz (Caddy/nginx reverse proxy → app:8080).
+  # ИШЛАБ ЧИҚАРИШ: домен + автомат HTTPS (Let's Encrypt). `./deploy.sh` шуни кўтаради.
+  # Талаб: DOMAIN .env да, A-ёзуви шу серверга, 80/443 портлар очиқ.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["prod"]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # ТЕСТ: доменсиз вақтинчалик HTTPS (trycloudflare.com, ҳар ишга туширишда ЯНГИ манзил).
+  # `./deploy.sh --tunnel` буни кўтаради ва WEBAPP_URL'ни ўзи ёзади.
   tunnel:
     image: cloudflare/cloudflared:latest
+    profiles: ["dev"]
     command: tunnel --no-autoupdate --url http://app:8080
     depends_on:
       - app
@@ -41,3 +65,6 @@ services:
 volumes:
   pgdata:
   applogs:
+  caddydata:
+  caddyconfig:
+  tgsessions:

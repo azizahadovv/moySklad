@@ -21,6 +21,7 @@ public class MenuSupport {
     private final PermService permSvc;
     private final uz.kassa.service.notify.NotifyService notifySvc;
     private final uz.kassa.config.AppProps props;
+    private final uz.kassa.webapp.WebUrlService webUrl;
 
 
     /** Salomlashishda rol o'rniga foydalanuvchining O'Z otdeli ko'rsatiladi. */
@@ -40,7 +41,7 @@ public class MenuSupport {
         return switch (user.getRole()) {
             case KASSIR -> Keyboards.kassirMenu(vis, extra);
             case BUXGALTER, SUPERADMIN -> Keyboards.buxMenu(vis, extra,
-                    user.getRole() == Role.SUPERADMIN, props.getWebappUrl());
+                    user.getRole() == Role.SUPERADMIN, webUrl.url());
         };
     }
 

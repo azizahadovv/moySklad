@@ -1,0 +1,7 @@
+# Фақат ЛОКАЛ тест учун: иловани компьютер портига чиқариш (http://localhost:HOST_PORT).
+# Серверда ишлатилмайди — у ерда ташқарига фақат Caddy (80/443) чиқади, 8080 банд бўлмайди.
+# Ишлатиш: docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile dev up -d
+services:
+  app:
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${HOST_PORT:-8080}:8080"

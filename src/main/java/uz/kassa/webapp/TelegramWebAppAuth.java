@@ -29,12 +29,19 @@ public class TelegramWebAppAuth {
 
     private final AppProps props;
     private final AppUserRepo userRepo;
+    private final WebSessionService sessions;
     private final ObjectMapper om = new ObjectMapper();
 
     /** initData yaroqli bo'lsa faol AppUser, aks holda null. */
     public AppUser authenticate(String initData) {
         try {
-            if (initData == null || initData.isBlank()) { log.info("WebApp auth: initData bo'sh"); return null; }
+            if (initData == null || initData.isBlank()) {
+                // Telegram'dan tashqarida (brauzer): bir martalik havola bergan sessiya kuki'si
+                AppUser byCookie = sessions.fromRequest();
+                if (byCookie != null) return byCookie;
+                log.info("WebApp auth: initData bo'sh va brauzer sessiyasi yo'q");
+                return null;
+            }
 
             Map<String, String> params = new TreeMap<>();
             for (String pair : initData.split("&")) {

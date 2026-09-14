@@ -53,7 +53,7 @@ public class OmborExcelService {
         sheets.add(new ExcelReportService.SheetDef("Хулоса", new String[]{"Қоида", "Даража", "Сони", "Варақ"}, sum));
 
         List<Object[]> tovar = new ArrayList<>(), narxA = new ArrayList<>(), hujjat = new ArrayList<>(), sanoq = new ArrayList<>(), narxS = new ArrayList<>(),
-                hamkor = new ArrayList<>(), sorov = new ArrayList<>(), qoralama = new ArrayList<>(), boshqa = new ArrayList<>();
+                sorov = new ArrayList<>(), qoralama = new ArrayList<>(), boshqa = new ArrayList<>();
         boolean dup = false;
         Map<String, Map<Long, BigDecimal>> stock = byProduct(OmborMetrics.QOLDIQ), avg = byProduct(OmborCalcService.ORTACHA_90), rop = byProduct(OmborCalcService.BUYURTMA_NUQTA),
                 cover = byProduct(OmborCalcService.QOPLASH_KUN), days = byProduct(OmborMetrics.AYLANMA_KUN), abc = byProduct(OmborCalcService.ABC);
@@ -110,14 +110,6 @@ public class OmborExcelService {
                             two[0] == null ? "" : two[0].getAtDate().toString(), two[0] == null ? "" : two[0].getSource().toLowerCase(), chg == null ? null : chg / 10.0,
                             k.getRuleCode().equals("NARX_OSHDI") ? "↑ ошди" : "↓ тушди", found});
                 }
-                case "Ҳамкорлар" -> {
-                    String key = k.getSubjectKey();
-                    String agent = key.contains("|") ? key.substring(0, key.indexOf('|')) : key, pid = key.contains("|") ? key.substring(key.indexOf('|') + 1) : "";
-                    OmborTovar t = pid.isBlank() ? null : tovarRepo.findById(pid).orElse(null);
-                    BigDecimal debt = firstVal("HAMKOR_QARZ", agent), interval = pid.isBlank() ? null : firstVal("HAMKOR_INTERVAL", key);
-                    hamkor.add(new Object[]{hamkor.size() + 1, title, KorsatkichChegaraChecker.hamkorNames.getOrDefault(agent, agent), t == null ? "" : t.getName(), t == null ? "" : t.getCode(),
-                            debt, interval, reason, found});
-                }
                 case "Сўровлар" -> sorovRepo.findById(Long.parseLong(k.getSubjectKey())).ifPresent(s -> sorov.add(new Object[]{sorov.size() + 1, s.getId(),
                         s.getKassaId() == null ? "" : rec.notifier().kassaName(s.getKassaId()),
                         s.getProductMsId() != null ? tovarRepo.findById(s.getProductMsId()).map(OmborTovar::getName).orElse(s.getProductMsId()) : "🆕 " + s.getText(),
@@ -139,7 +131,6 @@ public class OmborExcelService {
                 "Режа санаси", "Статус", "Ким"}, sanoq));
         if (!narxS.isEmpty()) sheets.add(new ExcelReportService.SheetDef("Етказувчи нархи", new String[]{"№", "Товар", "Код", "Артикул", "Етказувчи", "Олдинги нарх (сўм)",
                 "Олдинги сана", "Янги нарх (сўм)", "Янги сана", "Манба", "Ўзгариш %", "Йўналиш", "Топилди"}, narxS));
-        if (!hamkor.isEmpty()) sheets.add(new ExcelReportService.SheetDef("Ҳамкорлар", new String[]{"№", "Қоида", "Ҳамкор", "Товар", "Код", "Қарз (сўм)", "Интервал ўтди (кун)", "Причина", "Топилди"}, hamkor));
         if (!sorov.isEmpty()) sheets.add(new ExcelReportService.SheetDef("Сўровлар", new String[]{"№", "ID", "Дўкон", "Товар / матн", "Миқдор", "Сабаб", "Ҳолат", "Ким", "Сана", "Жавоб"}, sorov));
         if (!qoralama.isEmpty()) sheets.add(new ExcelReportService.SheetDef("Қоралама", new String[]{"№", "ID", "Дўкон", "Етказувчи", "Ҳолат", "Сумма (сўм)", "Мавжуд пул (сўм)", "Янгиланган", "Изоҳ"}, qoralama));
         if (dup) {
@@ -163,7 +154,6 @@ public class OmborExcelService {
             case "HARAKAT_OTKAZILMAGAN", "QABUL_FARQ", "INVENT_FARQ", "QAYTARISH_OSILDI", "MIJOZ_QAYTARISH", "SPISANIYA_TASDIQ" -> "Ҳужжатлар";
             case "SANOQ_FARQ", "SANOQ_TASDIQLANMAGAN" -> "Санoq";
             case "NARX_OSHDI", "NARX_TUSHDI" -> "Етказувчи нархи";
-            case "HAMKOR_QARZ", "HAMKOR_INTERVAL" -> "Ҳамкорлар";
             case "SOROV_JAVOBSIZ" -> "Сўровлар";
             case "QORALAMA_KUTMOQDA" -> "Қоралама";
             default -> "Бошқа";
@@ -172,7 +162,7 @@ public class OmborExcelService {
 
     private Object[] sanoqRow(int n, String title, OmborSanoq s) {
         OmborTovar t = tovarRepo.findById(s.getProductMsId()).orElse(null);
-        return new Object[]{n, title, rec.notifier().kassaName(s.getKassaId()), t == null ? s.getProductMsId() : t.getName(), t == null ? "" : t.getCode(), s.getAbc(),
+        return new Object[]{n, title, rec.notifier().kassaName(s.getKassaId()), t == null ? s.getProductMsId() : t.getName(), t == null ? "" : t.getCode(), s.eski() ? "🐢 eski" : s.getAbc(),
                 s.getSystemQty(), s.getFactQty(), s.getFactQty() == null ? null : s.getFactQty().subtract(s.getSystemQty()), s.getPlanDate().toString(), s.getStatus(),
                 s.getByUserId() == null ? "" : rec.notifier().userName(s.getByUserId())};
     }

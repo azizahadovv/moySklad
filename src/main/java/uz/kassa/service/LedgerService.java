@@ -47,7 +47,8 @@ public class LedgerService {
     @Transactional
     public void wipeAllFinancialData() {
         opRepo.deleteAllInBatch();
-        subRepo.deleteAll();          // submission_days bolalari bilan birga
+        subRepo.deleteAll();          // submission_days bolalari bilan birga (em.remove — flush'gacha kutadi)
+        subRepo.flush();              // MUHIM: keyingi bulk `delete from days` submission_days FK'siga urilmasin
         dayRepo.deleteAllInBatch();
         for (Balance b : balanceRepo.findAll()) {
             b.setAmount(0);

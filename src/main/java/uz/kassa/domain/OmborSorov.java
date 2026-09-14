@@ -5,7 +5,7 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.Instant;
 
-/** 🏬 Do'kon so'rovi: YANGI → KORILDI | QORALAMADA | RAD | BAJARILDI. reason: YOQ/KAM/MIJOZ/YANGI/HAMKOR/LOT. */
+/** 🏬 Do'kon so'rovi: YANGI → KORILDI | QORALAMADA | RAD | BAJARILDI. reason: YOQ/KAM/MIJOZ/YANGI/LOT (HAMKOR — eski qatorlar, bo'lim olib tashlangan). */
 @Entity @Table(name = "ombor_sorov")
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class OmborSorov {

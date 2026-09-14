@@ -1,0 +1,20 @@
+# Ишлаб чиқариш: домен → app:8080, HTTPS сертификати автомат (Let's Encrypt).
+# DOMAIN ва ACME_EMAIL .env дан келади (docker-compose caddy сервиси).
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	# Mini App ва браузер панели бир хил манзилдан ишлайди
+	reverse_proxy app:8080 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+	log {
+		output file /data/access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}

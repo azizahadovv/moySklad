@@ -40,9 +40,10 @@ public class HujjatOtkazilmaganChecker implements OmborChecker {
         LocalDateTime now = LocalDateTime.now(cfg.zone());
         LocalDate today = now.toLocalDate();
         List<Found> out = new ArrayList<>();
+        LocalDateTime window = now.minusDays(cfg.docsDays());   // tarix 365 kun (V37), tekshiruv oynasi docs_days
         for (OmborHujjat h : repo.findByTypeInAndApplicableFalseAndDeletedFalse(types)) {
             LocalDateTime created = h.getMsCreated() != null ? h.getMsCreated() : h.getMoment();
-            if (created == null || created.plusMinutes(ageMin).isAfter(now)) continue;
+            if (created == null || created.plusMinutes(ageMin).isAfter(now) || created.isBefore(window)) continue;
             if (untilHour >= 0 && created.toLocalDate().equals(today) && now.toLocalTime().isBefore(LocalTime.of(untilHour, 0))) continue;
             if (!docs.stillExists(h) || !Boolean.FALSE.equals(h.getApplicable())) continue;
             out.add(new Found("hujjat", h.getMsId(), h.getKassaId(), h.getOwnerUserId(),

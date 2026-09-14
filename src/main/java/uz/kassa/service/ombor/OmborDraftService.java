@@ -41,7 +41,7 @@ public class OmborDraftService {
     public int buildAll() {
         int n = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
-            if (!k.isCashless() && k.getMoyskladWarehouseId() != null) n += build(k.getId());
+            if (k.getMoyskladWarehouseId() != null) n += build(k.getId());
         return n;
     }
 
@@ -165,7 +165,7 @@ public class OmborDraftService {
     public long cashAvailableSom() {
         long s = 0;
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-            if (k.isCashless()) continue;
+            if (k.getMoyskladWarehouseId() == null) continue;
             s += ledger.view(OwnerType.KASSA, k.getId(), MoneyType.NAQD).available() + ledger.view(OwnerType.KASSA, k.getId(), MoneyType.KLIK).available();
         }
         s += ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.NAQD).available() + ledger.view(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID, MoneyType.KLIK).available();

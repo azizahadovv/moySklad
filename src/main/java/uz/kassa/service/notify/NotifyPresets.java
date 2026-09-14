@@ -40,14 +40,13 @@ public final class NotifyPresets {
             {ombor.royxat}"""),
 
         new Preset("ombor_hafta", "🏬 Омбор ҳафталик (rahbarga)",
-            "Dushanba: fill rate, neliqvid, dublikat, hamkor qarzi, sanoq bajarilishi.",
+            "Dushanba: fill rate, neliqvid, dublikat, sanoq bajarilishi.",
             "🏬 Омбор ҳафталик (namuna)", "times:09:00", "1", "rol:SUPERADMIN", 0,
             """
             🏬 <b>ОМБОР — ҳафталик</b> · {sana}
             📈 Fill rate (A, 30 кун): <b>{ombor.fill_rate}</b>
             🐢 Неликвид (90+ кун): {ombor.nelikvid_soni} · 🧬 Дубликат: {ombor.dublikat_soni}
             🔢 Санoq бажарилди (7 кун): {ombor.sanoq_bajarildi_foiz}
-            🤝 Ҳамкорлар қарзи: {ombor.hamkor_qarz_summa} сўм
             🗂 Фаол товарлар: {ombor.tovar_soni}
             ━━━━━━━━━━━━━━━━━━━━
             {ombor.dokon}"""),

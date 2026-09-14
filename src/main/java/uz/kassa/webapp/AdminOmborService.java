@@ -55,13 +55,13 @@ public class AdminOmborService {
         List<Map<String, Object>> kassalar = new ArrayList<>();
         LocalDate today = LocalDate.now(zone());
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-            if (k.isCashless()) continue;
+            if (k.getMoyskladWarehouseId() == null) continue;
             long[] st = metrics.stockStats(k.getId());
             var fr = metrics.latest(OmborCalcService.FILL_RATE_30, "kassa_id = ? AND product_ms_id = ''", k.getId());
             kassalar.add(mapOf("id", k.getId(), "name", k.getName(), "bound", k.getMoyskladWarehouseId() != null, "tovar", st[0], "manfiy", st[1],
                     "fill", fr.isEmpty() ? null : ((BigDecimal) fr.get(0).get("value")).doubleValue(),
                     "open", kRepo.countByResolvedAtIsNullAndKassaId(k.getId()),
-                    "sanoq", sanoq.repo().countByKassaIdAndStatusNotAndPlanDateLessThanEqual(k.getId(), "TASDIQ", today)));
+                    "sanoq", sanoq.openCount(k.getId())));
         }
         List<Map<String, Object>> syncRows = new ArrayList<>();
         for (OmborSinxron s : sync.status())
@@ -94,7 +94,7 @@ public class AdminOmborService {
         List<Map<String, Object>> ruleRows = new ArrayList<>();
         for (var e : byRule.entrySet()) { OmborQoida r = rules.get(e.getKey()); ruleRows.add(mapOf("code", e.getKey(), "title", r == null ? e.getKey() : r.getTitle(), "severity", r == null ? "" : r.getSeverity(), "count", e.getValue())); }
         List<Map<String, Object>> kassalar = new ArrayList<>();
-        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) if (!k.isCashless()) kassalar.add(mapOf("id", k.getId(), "name", k.getName()));
+        for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) if (k.getMoyskladWarehouseId() != null) kassalar.add(mapOf("id", k.getId(), "name", k.getName()));
         return mapOf("rows", rows, "total", all.size(), "page", page, "pages", (all.size() + PAGE - 1) / PAGE, "rules", ruleRows, "kassalar", kassalar);
     }
 
@@ -168,14 +168,15 @@ public class AdminOmborService {
         LocalDate today = LocalDate.now(zone());
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-            if (k.isCashless() || k.getMoyskladWarehouseId() == null) continue;
+            if (k.getMoyskladWarehouseId() == null) continue;
             List<OmborSanoq> open = sanoq.open(k.getId());
             List<Map<String, Object>> items = new ArrayList<>();
             for (OmborSanoq s : open) items.add(mapOf("id", s.getId(), "name", tovarRepo.findById(s.getProductMsId()).map(OmborTovar::getName).orElse(s.getProductMsId()),
                     "abc", s.getAbc(), "system", s.getSystemQty(), "fact", s.getFactQty(), "status", s.getStatus(), "date", s.getPlanDate().toString()));
             rows.add(mapOf("id", k.getId(), "name", k.getName(), "open", open.size(), "today", sanoq.repo().countByKassaIdAndPlanDate(k.getId(), today), "items", items));
         }
-        return mapOf("rows", rows, "majburiy", cfg.sanoqMajburiy(), "abc", List.of(cfg.abcDays('A'), cfg.abcDays('B'), cfg.abcDays('C')));
+        return mapOf("rows", rows, "majburiy", cfg.sanoqMajburiy(), "abc", List.of(cfg.abcDays('A'), cfg.abcDays('B'), cfg.abcDays('C')),
+                "soni", cfg.sanoqSoni(), "havza", cfg.sanoqHavza(), "vaqt", cfg.sanoqVaqt().toString(), "yopish", cfg.sanoqYopishVaqt().toString());
     }
 
     public Map<String, Object> sorovlar() {

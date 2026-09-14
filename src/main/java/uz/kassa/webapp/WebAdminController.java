@@ -45,27 +45,27 @@ public class WebAdminController {
     }
 
     @GetMapping("/dashboard")
-    public Map<String, Object> dashboard(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public Map<String, Object> dashboard(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         admin(init);
         return api.dashboard();
     }
 
     @GetMapping("/kassa/{id}")
-    public Map<String, Object> kassa(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> kassa(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                      @PathVariable long id) {
         admin(init);
         return api.kassa(id);
     }
 
     @GetMapping("/pending/{id}")
-    public Map<String, Object> pending(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> pending(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                        @PathVariable long id) {
         admin(init);
         return api.pending(id);
     }
 
     @GetMapping("/cards")
-    public Map<String, Object> cards(@RequestHeader("X-Telegram-Init-Data") String init) {
+    public Map<String, Object> cards(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init) {
         admin(init);
         return api.cardsPage();
     }
@@ -73,13 +73,13 @@ public class WebAdminController {
     /* ---------------- 🏪 Kassa amallari ---------------- */
 
     @PostMapping("/kassa/{id}/collect")
-    public Map<String, Object> collect(@RequestHeader("X-Telegram-Init-Data") String init, @PathVariable long id,
+    public Map<String, Object> collect(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init, @PathVariable long id,
                                        @RequestBody AdminActionService.CollectReq r) {
         return actions.collect(admin(init), id, r);
     }
 
     @PostMapping("/kassa/{id}/adjust")
-    public Map<String, Object> adjust(@RequestHeader("X-Telegram-Init-Data") String init, @PathVariable long id,
+    public Map<String, Object> adjust(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init, @PathVariable long id,
                                       @RequestBody AdminActionService.AdjustReq r) {
         return actions.adjust(admin(init), id, r);
     }
@@ -95,21 +95,21 @@ public class WebAdminController {
     }
 
     @GetMapping("/report/daily")
-    public Map<String, Object> daily(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> daily(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                      @RequestParam(required = false) String date) {
         admin(init);
         return reports.daily(date(date));
     }
 
     @PostMapping("/report/daily/confirm")
-    public Map<String, Object> dailyConfirm(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> dailyConfirm(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                             @RequestBody DateReq r) {
         AppUser u = admin(init);
         return Map.of("fresh", reports.confirmDaily(date(r.date()), u));
     }
 
     @PostMapping("/report/daily/send")
-    public Map<String, Object> dailySend(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> dailySend(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                          @RequestBody DateReq r) {
         AppUser u = admin(init);
         reports.sendDaily(date(r.date()), u);
@@ -117,14 +117,14 @@ public class WebAdminController {
     }
 
     @GetMapping("/report/tushum")
-    public Map<String, Object> tushum(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> tushum(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                       @RequestParam(required = false) String date) {
         admin(init);
         return reports.tushum(date(date));
     }
 
     @GetMapping("/report/money")
-    public Map<String, Object> money(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> money(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                      @RequestParam(required = false) String from, @RequestParam(required = false) String to,
                                      @RequestParam(required = false, defaultValue = "0") long kassaId) {
         admin(init);
@@ -132,13 +132,13 @@ public class WebAdminController {
     }
 
     @PostMapping("/report/money/excel")
-    public Map<String, Object> moneyExcel(@RequestHeader("X-Telegram-Init-Data") String init, @RequestBody ExcelReq r) {
+    public Map<String, Object> moneyExcel(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init, @RequestBody ExcelReq r) {
         moneyReport.sendExcel(admin(init), date(r.from()), date(r.to()), r.kassaId());
         return Map.of("ok", true);
     }
 
     @PostMapping("/report/excel")
-    public Map<String, Object> excel(@RequestHeader("X-Telegram-Init-Data") String init,
+    public Map<String, Object> excel(@RequestHeader(name = "X-Telegram-Init-Data", required = false) String init,
                                      @RequestBody ExcelReq r) {
         AppUser u = admin(init);
         return Map.of("label", reports.sendExcel(date(r.from()), date(r.to()), r.kassaId(), u));

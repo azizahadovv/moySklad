@@ -63,11 +63,14 @@ public class OmborSyncService {
 
     /* ==================== kirish nuqtalari ==================== */
 
-    /** Har 10 daqiqa: omborlar + tovarlar (inkremental). */
-    public void tick() {
-        if (!cfg.enabled() || !lock.tryLock()) return;
-        try { for (EntityDef d : registry) runOne(d); }
-        finally { lock.unlock(); }
+    /** Har 10 daqiqa: omborlar + tovarlar + hujjatlar (inkremental). Qaytadi: o'zgargan otgruzka (demand) soni — naqd sotuvni yangilash uchun. */
+    public int tick() {
+        if (!cfg.enabled() || !lock.tryLock()) return 0;
+        try {
+            int demands = 0;
+            for (EntityDef d : registry) { String r = runOne(d); if (d.entity().equals("demand") && r.matches("\\d+ ta")) demands = Integer.parseInt(r.replace(" ta", "")); }
+            return demands;
+        } finally { lock.unlock(); }
     }
 
     /** Tunlik (stock_time dan keyin kuniga bir) yoki qo'lda: qoldiqlar → ko'rsatkichlar. */
@@ -111,7 +114,7 @@ public class OmborSyncService {
                 if (n > 0) { changed.add(uz.kassa.domain.OmborHujjat.typeTitle(t) + " " + n); docTotal += n; }
             }
             sb.append("📄 Hujjatlar (o'zgargan): ").append(docTotal == 0 ? "o'zgarish yo'q" : "<b>" + docTotal + "</b> — " + String.join(", ", changed)).append("\n");
-            long bound = kassaRepo.findByActiveTrueOrderByIdAsc().stream().filter(k -> !k.isCashless() && k.getMoyskladWarehouseId() != null).count();
+            long bound = kassaRepo.findByActiveTrueOrderByIdAsc().stream().filter(k -> k.getMoyskladWarehouseId() != null).count();
             sb.append("📦 Qoldiqlar: <b>").append(val(stock, errors, "qoldiqlar")).append("</b> qator (").append(bound).append(" do'kon)\n");
             if (!errors.isEmpty()) sb.append("⚠️ Xato: ").append(String.join("; ", errors)).append("\n");
             sb.append("<i>0 — oxirgi sinxrondan beri MoySklad'da o'zgarish yo'q, avvalgi ma'lumot saqlanadi.</i>\n");
@@ -144,34 +147,6 @@ public class OmborSyncService {
     }
 
     public List<OmborSinxron> status() { return syncRepo.findAll(); }
-
-    /** 🤝 Hamkor do'konlar (kontragent tegi ombor.hamkor_tag) qarzi → HAMKOR_QARZ ko'rsatkichi (so'm, kassa 0, product = kontragent). */
-    public int syncHamkorlar() { return hamkorIds().size(); }
-
-    /** Hamkor kontragentlar ro'yxati + HAMKOR_QARZ ko'rsatkichi. */
-    public List<String> hamkorIds() {
-        String tag = cfg.hamkorTag();
-        if (tag.isBlank()) return List.of();
-        String norm = MoySkladClient.normAttr(tag);
-        List<String> ids = new ArrayList<>();
-        for (MoySkladClient.MsAgentFull a : ms.fetchAgentsAll()) {
-            if (a.archived()) continue;
-            boolean hit = false;
-            for (String t : a.tags()) if (MoySkladClient.normAttr(t).equals(norm)) hit = true;
-            if (!hit) continue;
-            ids.add(a.id());
-            uz.kassa.service.ombor.checks.KorsatkichChegaraChecker.hamkorNames.put(a.id(), a.name());
-        }
-        if (ids.isEmpty()) return ids;
-        LocalDate d = LocalDate.now(cfg.zone());
-        List<OmborMetrics.Row> rows = new ArrayList<>();
-        for (var e : ms.fetchAgentBalancesSom(ids).entrySet())
-            rows.add(new OmborMetrics.Row(d, 0, e.getKey(), "HAMKOR_QARZ", BigDecimal.valueOf(-e.getValue())));   // manfiy balans = bizga qarzdor
-        metrics.clear(d, "HAMKOR_QARZ");
-        metrics.upsert(rows);
-        return ids;
-    }
-
 
     /* ==================== STORE ==================== */
 

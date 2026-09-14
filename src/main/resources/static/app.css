@@ -44,7 +44,7 @@
 
 * { box-sizing: border-box; margin: 0; }
 html { -webkit-text-size-adjust: 100%; }
-body { background: var(--bg); color: var(--text); font: 500 14.5px/1.45 var(--sans); padding-bottom: 32px; min-height: 100vh; }
+body { background: var(--bg); color: var(--text); font: 500 15px/1.5 var(--sans); padding-bottom: 32px; min-height: 100vh; }
 a { color: var(--link); text-decoration: none; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -193,3 +193,121 @@ tr:last-child td { border-bottom: 0; } tr.total td { font-weight: 700; backgroun
 .rc.on { color: var(--good); border-color: var(--good); } .rc.off { color: var(--bad); border-color: var(--bad); }
 .rc.inh { border-style: dashed; } .rc.sa { color: var(--muted); border-style: dotted; } .rc.ex { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
 .rc:disabled { opacity: .45; }
+
+
+/* ============================================================
+   🍱 BENTO — плиткали тартиб. Телефон: 6 устунли тўр (s = ярим, m/l = тўлиқ).
+   ≥620px: 12 устун (s = чорак, m = ярим, l = тўлиқ). ≥1024px: чап менюли десктоп.
+   Плиткалар «✥ Тартиб» режимида сурилади, тартиб браузерда сақланади.
+   ============================================================ */
+.bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; align-items: start; grid-auto-flow: dense; }
+.bt { grid-column: span 6; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 12px 13px; display: flex; flex-direction: column; gap: 7px; min-width: 0; position: relative; text-align: left; }
+.bt[data-w="s"] { grid-column: span 3; }
+.bt.tap:active { background: var(--surface-2); }
+.bt.accent { border-top: 3px solid var(--accent); }
+.bt.good { border-top: 3px solid var(--good); } .bt.warn { border-top: 3px solid var(--warn); } .bt.bad { border-top: 3px solid var(--bad); }
+.bt > .l { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.bt > .l .chev { margin-left: auto; color: var(--muted); font-size: 17px; line-height: 1; }
+.bt > .v { font-family: var(--mono); font-weight: 600; font-size: 23px; letter-spacing: -.02em; line-height: 1.08; }
+.bt > .v small { font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 5px; }
+.bt > .v.good { color: var(--good); } .bt > .v.warn { color: var(--warn); } .bt > .v.bad { color: var(--bad); }
+.bt > .s { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.bt.hero > .v { font-size: 38px; }
+.bt > .fig { margin-top: 3px; }
+.bt > .rows { margin: 0 -13px -12px; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
+
+@media (min-width: 620px) {
+  .bento { grid-template-columns: repeat(12, 1fr); }
+  .bt { grid-column: span 6; }
+  .bt[data-w="s"] { grid-column: span 4; }
+  .bt[data-w="l"] { grid-column: span 12; }
+  .bt.hero > .v { font-size: 44px; }
+}
+@media (min-width: 1024px) {
+  .bt[data-w="s"] { grid-column: span 3; }
+  .bt[data-w="m"] { grid-column: span 6; }
+  .bt[data-w="w"] { grid-column: span 8; }
+  .bt[data-w="l"] { grid-column: span 12; }
+}
+
+/* ---------- ✥ тартиблаш режими ---------- */
+.arrangebar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.arrangebar .hint { font-size: 12px; flex: 1 1 120px; min-width: 0; }
+.arrangebar .grp { display: flex; gap: 6px; flex: 0 0 auto; }
+.abtn { flex: 0 0 auto; width: auto; padding: 6px 11px; font-size: 12.5px; font-weight: 700; border-radius: var(--radius);
+        border: 1px solid var(--line); background: var(--surface); color: var(--text); white-space: nowrap; }
+.abtn.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+body.arrange .bt { border-style: dashed; cursor: grab; }
+body.arrange .bt .chev { display: none; }
+.bt.dragging { opacity: .4; }
+.bt.dropzone { box-shadow: inset 0 0 0 2px var(--accent); }
+.btmove { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; }
+.btmove button { width: 26px; height: 24px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 3px; font-size: 12px; line-height: 1; }
+
+/* ---------- 📊 график примитивлари (viz.js) ---------- */
+:root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; } }
+:root[data-theme="dark"] { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; }
+:root[data-theme="light"] { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; }
+
+.vz-bars { display: flex; flex-direction: column; gap: 2px; }
+.vz-b, .vz-g { display: grid; grid-template-columns: minmax(54px, 32%) 1fr auto; align-items: center; gap: 9px; padding: 2px 0; }
+.vz-l { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vz-t { display: block; height: 10px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.vz-f { display: block; height: 100%; border-radius: 0 4px 4px 0; }
+.vz-v { font-family: var(--mono); font-size: 12.5px; font-weight: 600; white-space: nowrap; text-align: right; }
+.vz-v small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.vz-gt { display: flex; flex-direction: column; gap: 2px; }
+.vz-leg { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-bottom: 3px; }
+.vz-leg i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.vz-spark { width: 100%; height: 28px; display: block; }
+.vz-line { width: 100%; height: 96px; display: block; }
+.vz-pt { cursor: pointer; }
+.vz-ax { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.vz-ax b { font-family: var(--mono); font-size: 13px; color: var(--text); }
+.vz-meter { display: flex; align-items: center; gap: 9px; }
+.vz-mt { position: relative; flex: 1; height: 10px; border-radius: 3px; overflow: hidden; background: var(--accent-soft); }
+.vz-mf { display: block; height: 100%; border-radius: 0 4px 4px 0; background: var(--accent); }
+.vz-meter.warn .vz-mt { background: var(--warn-soft); } .vz-meter.warn .vz-mf { background: var(--warn); }
+.vz-meter.bad .vz-mt { background: var(--bad-soft); } .vz-meter.bad .vz-mf { background: var(--bad); }
+.vz-mk { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); opacity: .5; }
+.vz-mv { font-family: var(--mono); font-weight: 600; font-size: 13px; }
+.vz-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.vz-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.vz-chip i { font-style: normal; } .vz-chip b { font-family: var(--mono); }
+.vz-chip.ok { border-color: var(--good); color: var(--good); }
+.vz-chip.warn { border-color: var(--warn); color: var(--warn); }
+.vz-chip.bad { border-color: var(--bad); color: var(--bad); }
+.vz-empty { font-size: 12px; color: var(--muted); padding: 5px 0; }
+.vz-tip { position: fixed; z-index: 60; pointer-events: none; background: var(--brand); color: var(--brand-text); padding: 6px 10px;
+          border-radius: 4px; font-size: 12px; font-weight: 600; line-height: 1.35; max-width: 250px; box-shadow: 0 6px 18px rgba(0,0,0,.28); }
+
+/* ---------- 🖥 десктоп: чап меню, кенг майдон ---------- */
+@media (min-width: 1024px) {
+  .nav { position: fixed; top: 52px; left: 0; bottom: 0; width: 210px; grid-template-columns: 1fr; align-content: start;
+         background: var(--surface); border-right: 1px solid var(--line); border-bottom: 0; z-index: 4; }
+  .nav button { flex-direction: row; justify-content: flex-start; gap: 10px; padding: 13px 18px; font-size: 14px;
+                border-bottom: 0; border-left: 3px solid transparent; margin-bottom: 0; }
+  .nav button.on { border-left-color: var(--accent); background: var(--accent-soft); }
+  .nav .dot { position: static; margin-left: auto; }
+  .head { margin-left: 210px; padding-top: 18px; }
+  main { margin-left: 210px; max-width: 1400px; padding: 6px 24px 32px; }
+  .head h1 { font-size: 26px; }
+  .kpis { grid-template-columns: repeat(4, 1fr); }
+  .tiles { grid-template-columns: repeat(4, 1fr); }
+  .actions { flex-direction: row; flex-wrap: wrap; }
+  .actions .btn { width: auto; min-width: 190px; }
+  .sheet-bg { align-items: center; justify-content: center; }
+  .sheet { max-width: 580px; border-radius: 10px; }
+  .seg button { font-size: 13px; }
+}
+
+/* ---------- зичлик: 🅰 тугмаси (ихчам / кенг) ---------- */
+body[data-d="w"] { font-size: 16.5px; }
+body[data-d="w"] .bt > .v { font-size: 26px; } body[data-d="w"] .bt.hero > .v { font-size: 44px; }
+body[data-d="w"] .bt > .s, body[data-d="w"] .row .t span { font-size: 13.5px; }
+body[data-d="w"] .row { padding: 13px 14px; }
+body[data-d="w"] table { font-size: 14px; } body[data-d="w"] th, body[data-d="w"] td { padding: 9px 12px; }
+body[data-d="w"] .vz-l, body[data-d="w"] .vz-v { font-size: 13.5px; }
+body[data-d="w"] .tile b { font-size: 14.5px; } body[data-d="w"] .tile span { font-size: 12px; }

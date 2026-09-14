@@ -312,6 +312,25 @@ public class Sender {
         }
     }
 
+    /**
+     * СТАНДАРТ (default) меню тугмаси — chat_id'сиз: Telegram уни БАРЧА фойдаланувчиларга қўяди.
+     * Манзил ўзгарганда (туннель/домен) шуни чақириш кифоя, ҳар кимга алоҳида `/start` шарт эмас.
+     */
+    public boolean setDefaultMenuButton(String text, String url) {
+        try {
+            bot().execute(org.telegram.telegrambots.meta.api.methods.menubutton.SetChatMenuButton.builder()
+                    .menuButton(org.telegram.telegrambots.meta.api.objects.menubutton.MenuButtonWebApp.builder()
+                            .text(text)
+                            .webAppInfo(org.telegram.telegrambots.meta.api.objects.webapp.WebAppInfo.builder().url(url).build())
+                            .build())
+                    .build());
+            return true;
+        } catch (TelegramApiException e) {
+            log.warn("Стандарт меню тугмаси қўйилмади ({}): {}", url, e.getMessage());
+            return false;
+        }
+    }
+
     /** Inline tugma bilan Mini App — initData to'liq keladi (reply-klaviatura tugmasidan farqli). */
     public void sendWebAppButton(long chatId, String text, String button, String url) {
         var b = org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton.builder()

@@ -84,11 +84,13 @@ public class AdminFinanceService {
 
     public record InitReq(String owner, Long naqd, Long klik, String date) {}
 
+    /** Boshlang'ich qoldiq FAQAT Основной отдел (Buxgalteriya)ga — bot 💼 Бошланғич қолдиқ bilan bir xil. */
     public Map<String, Object> initBalance(AppUser by, InitReq r) {
-        Owner o = parse(r.owner());
+        if (r.owner() != null && !r.owner().isBlank() && !r.owner().equals("B"))
+            throw new BusinessException("Бошланғич қолдиқ фақат Отдел основной учун киритилади");
+        Owner o = new Owner(OwnerType.BUXGALTERIYA, LedgerService.BUX_ID);
         long naqd = r.naqd() == null ? 0 : r.naqd(), klik = r.klik() == null ? 0 : r.klik();
         if (naqd <= 0 && klik <= 0) throw new BusinessException("Камида битта сумма 0 дан катта бўлсин");
-        if (o.ot() == OwnerType.CLICK && naqd > 0) throw new BusinessException("Click ҳисобида нақд юритилмайди");
         LocalDate date = parseDate(r.date());
         if (naqd > 0) ledger.postAdjustment(OpType.BOSHLANGICH, o.ot(), o.oid(), MoneyType.NAQD, naqd, "Boshlang'ich qoldiq", by.getId(), date);
         if (klik > 0) ledger.postAdjustment(OpType.BOSHLANGICH, o.ot(), o.oid(), MoneyType.KLIK, klik, "Boshlang'ich qoldiq", by.getId(), date);

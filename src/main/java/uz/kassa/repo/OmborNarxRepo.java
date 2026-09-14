@@ -12,8 +12,8 @@ public interface OmborNarxRepo extends JpaRepository<OmborNarx, Long> {
     List<OmborNarx> findByProductMsIdOrderByAtDateDesc(String product);
     List<OmborNarx> findByAgentMsIdAndProductMsIdOrderByAtDateDescIdDesc(String agent, String product);
     List<OmborNarx> findByAtDateAfterOrderByAtDateDesc(LocalDate after);
-    /** Har (yetkazuvchi, tovar) juftligi — oxirgi sana. */
-    @Query("select n.agentMsId, n.productMsId from OmborNarx n group by n.agentMsId, n.productMsId")
+    /** Har (yetkazuvchi, tovar) juftligi — faqat priyomka narxlari. */
+    @Query("select n.agentMsId, n.productMsId from OmborNarx n where n.source = 'PRIYOMKA' group by n.agentMsId, n.productMsId")
     List<Object[]> pairs();
     long countByAgentMsId(String agent);
 }

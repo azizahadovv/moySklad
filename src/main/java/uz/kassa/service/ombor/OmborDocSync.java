@@ -24,6 +24,8 @@ import java.util.*;
  * Tur ro'yxati {@link #TYPES}; birinchi yuklash moment>= (ombor.docs_days), keyin updated>= kursor.
  * Pozitsiyalar expand bilan (100 tagacha), ko'p bo'lsa /positions sahifalab. Bog'lanishlar (links):
  * purchaseorder.supplies/invoicesIn, invoicein.supplies, loss/enter.inventory, salesreturn.demand.
+ * <p>{@code demand} (otgruzka) — sotuv tahlili manbai (2026-09-14): birinchi yuklash ombor.sales_days (365) kun,
+ * 30 kunlik bo'laklarda (xotira), status va chegirma bilan; SOTUV_* faqat naqd statuslardan ({@link OmborSalesService}).
  */
 @Service
 @RequiredArgsConstructor
@@ -31,7 +33,13 @@ import java.util.*;
 public class OmborDocSync {
 
     public static final List<String> TYPES = List.of("move", "supply", "purchaseorder", "invoicein", "purchasereturn",
-            "inventory", "loss", "enter", "salesreturn", "retailsalesreturn");
+            "inventory", "loss", "enter", "salesreturn", "retailsalesreturn", "demand");
+    /**
+     * Qoldiq harakati turlari — birinchi yuklash oynasi sales_days (365), docs_days emas, 30 kunlik bo'laklarda:
+     * partiya tahlili (kelish → tugash) va naqd sotuv uchun bir yillik tarix kerak (2026-09-14, V37 kursorlarni qayta boshladi).
+     */
+    public static final Set<String> LONG_TYPES = Set.of("demand", "supply", "move", "salesreturn", "retailsalesreturn", "loss", "enter", "purchasereturn");
+    private static final int BACKFILL_CHUNK_DAYS = 30;
 
     private final MoySkladClient ms;
     private final OmborHujjatRepo repo;
@@ -42,17 +50,34 @@ public class OmborDocSync {
     /** Bitta tur: qaytadi — o'qilgan hujjatlar soni. storeToKassa — ombor UUID → kassa. */
     public int syncType(String type, OmborSinxron st, Map<String, Long> storeToKassa) {
         LocalDateTime start = LocalDateTime.now(cfg.zone());
-        String filter = st.getCursorAt() == null
-                ? "moment>=" + ms.filterTime(start.minusDays(cfg.docsDays()))
-                : "updated>=" + ms.filterTime(st.getCursorAt().minusMinutes(30));
-        String q = "entity/" + type + "?limit=100&expand=positions,agent,owner&order=updated,asc&filter="
+        int n = 0;
+        if (st.getCursorAt() == null && LONG_TYPES.contains(type)) {
+            // birinchi yuklash: sales_days kun, 30 kunlik bo'laklarda (otgruzka 365 kun ≈ 19 000 hujjat — bir yo'la xotiraga sig'maydi)
+            LocalDateTime from = start.minusDays(cfg.salesDays());
+            while (from.isBefore(start)) {
+                LocalDateTime to = from.plusDays(BACKFILL_CHUNK_DAYS);
+                n += load(type, "moment>=" + ms.filterTime(from) + ";moment<" + ms.filterTime(to), storeToKassa);
+                from = to;
+            }
+        } else {
+            String filter = st.getCursorAt() == null
+                    ? "moment>=" + ms.filterTime(start.minusDays(cfg.docsDays()))
+                    : "updated>=" + ms.filterTime(st.getCursorAt().minusMinutes(30));
+            n = load(type, filter, storeToKassa);
+        }
+        st.setCursorAt(start);
+        return n;
+    }
+
+    private int load(String type, String filter, Map<String, Long> storeToKassa) {
+        // state expand shart: usiz state.name kelmaydi (2026-09-14 gacha barcha hujjatlarda status bo'sh edi)
+        String q = "entity/" + type + "?limit=100&expand=positions,agent,owner,state&order=updated,asc&filter="
                 + URLEncoder.encode(filter, StandardCharsets.UTF_8);
         int n = 0;
         for (JsonNode r : ms.listAll(q, 300)) {
             try { upsert(type, r, storeToKassa); n++; }
             catch (Exception e) { log.warn("Ombor hujjat {} {} yozilmadi: {}", type, r.path("name").asText(""), e.getMessage()); }
         }
-        st.setCursorAt(start);
         return n;
     }
 
@@ -108,6 +133,7 @@ public class OmborDocSync {
             OmborPozitsiya x = agg.computeIfAbsent(pid, k -> OmborPozitsiya.builder().hujjatId(saved.getId()).productMsId(pid).build());
             x.setQty(x.getQty().add(BigDecimal.valueOf(p.path("quantity").asDouble(0))));
             x.setPrice(p.path("price").asLong(0));
+            x.setDiscount(BigDecimal.valueOf(p.path("discount").asDouble(0)));
             if (p.has("calculatedQuantity")) {
                 BigDecimal c = BigDecimal.valueOf(p.path("calculatedQuantity").asDouble(0));
                 x.setCalculatedQty(x.getCalculatedQty() == null ? c : x.getCalculatedQty().add(c));

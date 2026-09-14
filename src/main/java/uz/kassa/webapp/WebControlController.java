@@ -35,7 +35,7 @@ public class WebControlController {
     public record IdReq(long id, String reason, Long kassaId) {}
 
     @GetMapping("/debts")
-    public Map<String, Object> debts(@RequestHeader(H) String init,
+    public Map<String, Object> debts(@RequestHeader(name = H, required = false) String init,
                                      @RequestParam(defaultValue = "0") long kassa,
                                      @RequestParam(defaultValue = "0") int page,
                                      @RequestParam(defaultValue = "") String state) {
@@ -43,53 +43,53 @@ public class WebControlController {
     }
 
     @GetMapping("/debts/{id}")
-    public Map<String, Object> debt(@RequestHeader(H) String init, @PathVariable long id) {
+    public Map<String, Object> debt(@RequestHeader(name = H, required = false) String init, @PathVariable long id) {
         return svc.debt(admin(init), id);
     }
 
     @PostMapping("/debts/refresh")
-    public Map<String, Object> refresh(@RequestHeader(H) String init, @RequestBody IdReq r) {
+    public Map<String, Object> refresh(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) {
         return svc.refresh(admin(init), r.id());
     }
 
     @PostMapping("/debts/close")
-    public Map<String, Object> close(@RequestHeader(H) String init, @RequestBody IdReq r) {
+    public Map<String, Object> close(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) {
         return svc.close(admin(init), r.id(), r.reason());
     }
 
     @PostMapping("/debts/excel")
-    public Map<String, Object> debtsExcel(@RequestHeader(H) String init, @RequestBody IdReq r) {
+    public Map<String, Object> debtsExcel(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) {
         return svc.excelDebts(admin(init), r.kassaId());
     }
 
     @GetMapping("/stats")
-    public Map<String, Object> stats(@RequestHeader(H) String init, @RequestParam(defaultValue = "30") int days) {
+    public Map<String, Object> stats(@RequestHeader(name = H, required = false) String init, @RequestParam(defaultValue = "30") int days) {
         return svc.stats(admin(init), days);
     }
 
     @PostMapping("/refresh-all")
-    public Map<String, Object> refreshAll(@RequestHeader(H) String init) {
+    public Map<String, Object> refreshAll(@RequestHeader(name = H, required = false) String init) {
         return svc.refreshAll(admin(init));
     }
 
     @GetMapping("/errors")
-    public Map<String, Object> errors(@RequestHeader(H) String init) {
+    public Map<String, Object> errors(@RequestHeader(name = H, required = false) String init) {
         return svc.errors(admin(init));
     }
 
     @GetMapping("/errors/{id}")
-    public Map<String, Object> error(@RequestHeader(H) String init, @PathVariable long id,
+    public Map<String, Object> error(@RequestHeader(name = H, required = false) String init, @PathVariable long id,
                                      @RequestParam(defaultValue = "false") boolean recheck) {
         return svc.error(admin(init), id, recheck);
     }
 
     @PostMapping("/errors/ignore")
-    public Map<String, Object> ignore(@RequestHeader(H) String init, @RequestBody IdReq r) {
+    public Map<String, Object> ignore(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) {
         return svc.ignore(admin(init), r.id());
     }
 
     @PostMapping("/errors/excel")
-    public Map<String, Object> errorsExcel(@RequestHeader(H) String init) {
+    public Map<String, Object> errorsExcel(@RequestHeader(name = H, required = false) String init) {
         return svc.excelErrors(admin(init));
     }
 }

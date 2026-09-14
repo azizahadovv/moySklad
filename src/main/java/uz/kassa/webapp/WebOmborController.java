@@ -34,44 +34,44 @@ public class WebOmborController {
     public record IdReq(long id, String answer, String reason, String status, String note, Long kassaId, String rule) {}
 
     @GetMapping("/dashboard")
-    public Map<String, Object> dashboard(@RequestHeader(H) String init) { admin(init); return svc.dashboard(); }
+    public Map<String, Object> dashboard(@RequestHeader(name = H, required = false) String init) { admin(init); return svc.dashboard(); }
 
     @GetMapping("/issues")
-    public Map<String, Object> issues(@RequestHeader(H) String init, @RequestParam(defaultValue = "0") long kassa,
+    public Map<String, Object> issues(@RequestHeader(name = H, required = false) String init, @RequestParam(defaultValue = "0") long kassa,
                                       @RequestParam(defaultValue = "") String rule, @RequestParam(defaultValue = "0") int page) {
         return svc.issues(admin(init), kassa, rule, page);
     }
 
     @GetMapping("/issues/{id}")
-    public Map<String, Object> issue(@RequestHeader(H) String init, @PathVariable long id) { return svc.issue(admin(init), id); }
+    public Map<String, Object> issue(@RequestHeader(name = H, required = false) String init, @PathVariable long id) { return svc.issue(admin(init), id); }
 
     @PostMapping("/issues/resolve")
-    public Map<String, Object> resolve(@RequestHeader(H) String init, @RequestBody IdReq r) { return svc.resolve(admin(init), r.id(), r.answer()); }
+    public Map<String, Object> resolve(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) { return svc.resolve(admin(init), r.id(), r.answer()); }
 
     @PostMapping("/issues/excel")
-    public Map<String, Object> issuesExcel(@RequestHeader(H) String init, @RequestBody IdReq r) { return svc.issuesExcel(admin(init), r.kassaId(), r.rule()); }
+    public Map<String, Object> issuesExcel(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) { return svc.issuesExcel(admin(init), r.kassaId(), r.rule()); }
 
     @GetMapping("/drafts")
-    public Map<String, Object> drafts(@RequestHeader(H) String init, @RequestParam(defaultValue = "false") boolean all) { return svc.drafts(admin(init), all); }
+    public Map<String, Object> drafts(@RequestHeader(name = H, required = false) String init, @RequestParam(defaultValue = "false") boolean all) { return svc.drafts(admin(init), all); }
 
     @GetMapping("/drafts/{id}")
-    public Map<String, Object> draft(@RequestHeader(H) String init, @PathVariable long id) { admin(init); return svc.draftCard(id); }
+    public Map<String, Object> draft(@RequestHeader(name = H, required = false) String init, @PathVariable long id) { admin(init); return svc.draftCard(id); }
 
     @PostMapping("/drafts/advance")
-    public Map<String, Object> draftAdvance(@RequestHeader(H) String init, @RequestBody IdReq r) { return svc.draftAdvance(admin(init), r.id()); }
+    public Map<String, Object> draftAdvance(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) { return svc.draftAdvance(admin(init), r.id()); }
 
     @PostMapping("/drafts/cancel")
-    public Map<String, Object> draftCancel(@RequestHeader(H) String init, @RequestBody IdReq r) { return svc.draftCancel(admin(init), r.id(), r.reason()); }
+    public Map<String, Object> draftCancel(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) { return svc.draftCancel(admin(init), r.id(), r.reason()); }
 
     @GetMapping("/sanoq")
-    public Map<String, Object> sanoq(@RequestHeader(H) String init) { admin(init); return svc.sanoqSummary(); }
+    public Map<String, Object> sanoq(@RequestHeader(name = H, required = false) String init) { admin(init); return svc.sanoqSummary(); }
 
     @GetMapping("/sorov")
-    public Map<String, Object> sorov(@RequestHeader(H) String init) { admin(init); return svc.sorovlar(); }
+    public Map<String, Object> sorov(@RequestHeader(name = H, required = false) String init) { admin(init); return svc.sorovlar(); }
 
     @PostMapping("/sorov/answer")
-    public Map<String, Object> sorovAnswer(@RequestHeader(H) String init, @RequestBody IdReq r) { return svc.sorovAnswer(admin(init), r.id(), r.status(), r.note()); }
+    public Map<String, Object> sorovAnswer(@RequestHeader(name = H, required = false) String init, @RequestBody IdReq r) { return svc.sorovAnswer(admin(init), r.id(), r.status(), r.note()); }
 
     @PostMapping("/refresh")
-    public Map<String, Object> refresh(@RequestHeader(H) String init) { return svc.refresh(admin(init)); }
+    public Map<String, Object> refresh(@RequestHeader(name = H, required = false) String init) { return svc.refresh(admin(init)); }
 }

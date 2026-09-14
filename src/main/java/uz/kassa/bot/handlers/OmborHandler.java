@@ -32,6 +32,7 @@ public class OmborHandler {
 
     public static final String LABEL = "🏬 Омбор";
     private static final int PAGE = 10;
+    private static final DateTimeFormatter SANOQ_DF = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("dd.MM HH:mm");
 
     private final Sender sender;
@@ -53,6 +54,9 @@ public class OmborHandler {
     private final uz.kassa.repo.OmborYetkazuvchiRepo supRepo;
     private final uz.kassa.service.ombor.checks.DublikatChecker dublikat;
     private final OmborExcelService omborExcel;
+    private final OmborChempionService chempion;
+    private final OmborTrendService trend;
+    private final OmborPartiyaService partiya;
 
 
     /* ============================ MATN ============================ */
@@ -81,8 +85,10 @@ public class OmborHandler {
         sb.append("🗂 Tovarlar: <b>").append(tovarRepo.countByArchivedFalse()).append("</b> ta faol\n");
         long sn = sanoqOpenFor(u);
         if (sn > 0) sb.append("🔢 Sanoq kutmoqda: <b>").append(sn).append("</b> ta tovar\n");
+        String cf = chempion.fillSummary();
+        if (cf != null) sb.append("🏆 Chempionlar javonda: <b>").append(esc(cf)).append("</b>\n");
         var fr = metrics.latest(OmborCalcService.FILL_RATE_30, "kassa_id = 0 AND product_ms_id = ''");
-        if (!fr.isEmpty()) sb.append("📈 Fill rate (30 kun, A): <b>").append(((BigDecimal) fr.get(0).get("value")).stripTrailingZeros().toPlainString()).append("%</b>\n");
+        if (!fr.isEmpty()) sb.append("📈 Fill rate (A sinf, 30 kun): <b>").append(((BigDecimal) fr.get(0).get("value")).stripTrailingZeros().toPlainString()).append("%</b>\n");
         return sb.toString();
     }
 
@@ -90,11 +96,8 @@ public class OmborHandler {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(sbtn("⚠️ Камчиликлар", "om:l", uz.kassa.bot.StyledButton.DANGER), sbtn("📦 Қолдиқ (qidirish)", "om:s", uz.kassa.bot.StyledButton.PRIMARY)));
         rows.add(irow(sbtn("🔢 Санoq", "om:sn", uz.kassa.bot.StyledButton.SUCCESS), sbtn("📝 Сўров", "om:sr", uz.kassa.bot.StyledButton.SUCCESS)));
-        rows.add(irow(sbtn("🧾 Қоралама", "om:qr", uz.kassa.bot.StyledButton.PRIMARY), btn("🤝 Ҳамкорлар", "om:hk")));
-        List<InlineKeyboardButton> r3 = new ArrayList<>();
-        r3.add(btn("📊 Ҳолат", "om:st"));
-        if (flow.isZakupshik(u)) r3.add(btn("💵 Нарх киритиш", "om:nx"));
-        rows.add(r3);
+        rows.add(irow(sbtn("🧾 Қоралама", "om:qr", uz.kassa.bot.StyledButton.PRIMARY), btn("📊 Ҳолат", "om:st")));
+        rows.add(irow(btn("🏆 Чемпионлар", "om:ch"), btn("📈 Тренд", "om:tr")));
         if (u.getRole() != Role.KASSIR) rows.add(irow(btn("🔄 Yangilash (MoySklad)", "om:rf")));
         return inline(rows);
     }
@@ -134,6 +137,17 @@ public class OmborHandler {
             case "sn" -> sanoqList(u, s, arg, chatId, msgId);
             case "snv" -> sanoqAsk(u, s, Long.parseLong(arg), chatId, msgId);
             case "snc" -> sanoqConfirm(u, s, Long.parseLong(arg), chatId, msgId);
+            case "snx" -> sanoqExcel(u, chatId, msgId);
+            case "ch" -> chempionScreen(u, arg, chatId, msgId);
+            case "tr" -> trendScreen(u, arg, chatId, msgId);
+            case "tre" -> excludedScreen(u, arg, chatId, msgId);
+            case "trx" -> { if (u.getRole() != Role.KASSIR) {
+                List<uz.kassa.webapp.ExcelReportService.SheetDef> sh = new ArrayList<>(trend.excelSheets()); sh.addAll(partiya.excelSheets());
+                sender.sendDocument(chatId, excel.buildSheets(sh), "trend-" + java.time.LocalDate.now(cfg.zone()) + ".xlsx",
+                    "📈 Trend · naqd sotuv: 7/30 kun o'sish, narx oraliqlari, partiyalar (kelish → tugash), do'kon kesimida"); } }
+            case "pt" -> partiyaScreen(u, s, arg, chatId, msgId);
+            case "chx" -> { if (u.getRole() != Role.KASSIR) sender.sendDocument(chatId, chempion.excel(), "chempionlar-" + java.time.LocalDate.now(cfg.zone()) + ".xlsx",
+                    "🏆 Chempionlar (" + OmborChempionService.KUN + " kun, do'kon kesimida) va fill rate"); }
             case "rf" -> refresh(u, chatId, msgId);
             case "st" -> status(u, chatId, msgId);
             default -> { return flow.onCallback(u, s, cmd, arg, chatId, msgId); }
@@ -177,10 +191,10 @@ public class OmborHandler {
         String withPage(int p) { return enc(kassa, p, rule, sev, type); }
     }
 
-    private static final String[] TYPES = {"tovar", "hujjat", "sanoq", "sorov", "qoralama", "hamkor", "narx", "sinxron"};
+    private static final String[] TYPES = {"tovar", "hujjat", "sanoq", "sorov", "qoralama", "narx", "sinxron"};
     private static String typeTitle(String t) {
         return switch (t) { case "tovar" -> "📦 Tovar"; case "hujjat" -> "📄 Hujjat"; case "sanoq" -> "🔢 Sanoq"; case "sorov" -> "📝 So'rov";
-            case "qoralama" -> "🧾 Qoralama"; case "hamkor" -> "🤝 Hamkor"; case "narx" -> "💵 Narx"; case "sinxron" -> "🔄 Sinxron"; default -> t; };
+            case "qoralama" -> "🧾 Qoralama"; case "narx" -> "💵 Narx"; case "sinxron" -> "🔄 Sinxron"; default -> t; };
     }
 
     /** Filtrlangan ochiq kamchiliklar (foydalanuvchi ko'ra oladiganlar). q — matn (tovar nomi/artikul) bo'yicha. */
@@ -292,7 +306,7 @@ public class OmborHandler {
                 List<InlineKeyboardButton> kr = new ArrayList<>();
                 kr.add(sbtn((f.kassa == 0 ? "✔️ " : "") + "Hammasi", "om:l:" + f.withKassa(0), D));
                 for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-                    if (k.isCashless()) continue;
+                    if (k.getMoyskladWarehouseId() == null) continue;
                     long c = baseKassa.stream().filter(x -> k.getId().equals(x.getKassaId())).count();
                     kr.add(sbtn((f.kassa == k.getId() ? "✔️ " : "") + cut(k.getName().replace("Отдел ", ""), 12) + " " + c, "om:l:" + f.withKassa(k.getId()), D));
                     if (kr.size() == 3) { rows.add(kr); kr = new ArrayList<>(); }
@@ -502,7 +516,8 @@ public class OmborHandler {
         } else sb.append("\n✅ Bu tovar bo'yicha ochiq kamchilik yo'q\n");
         String msUrl = "https://online.moysklad.ru/app/#" + (t.getType().equals("variant") ? "variant" : t.getType().equals("bundle") ? "bundle" : "good") + "/edit?id=" + msId;
         rows.add(irow(uz.kassa.service.control.ControlNotifier.urlBtn("🔗 MoySklad'da ochish", msUrl), btn("💵 Narxlar", "om:nxl:" + msId)));
-        rows.add(irow(btn("📝 So'rov berish", "om:srn"), btn("🔎 Qidirish", "om:s")));
+        rows.add(irow(btn("📦 Partiyalar", "om:pt:" + msId), btn("📝 So'rov berish", "om:srn")));
+        rows.add(irow(btn("🔎 Qidirish", "om:s")));
         rows.add(irow(btn("⬅️ Ro'yxat", back(s)), btn("🏬 Омбор", "om:m")));
         sender.edit(chatId, msgId, sb.toString(), inline(rows));
     }
@@ -517,7 +532,7 @@ public class OmborHandler {
     /* ==================== 🔢 Санoq ==================== */
 
     private long sanoqOpenFor(AppUser u) {
-        if (u.getRole() != Role.KASSIR) return sanoq.repo().countByStatusNotAndPlanDateLessThanEqual("TASDIQ", java.time.LocalDate.now(cfg.zone()));
+        if (u.getRole() != Role.KASSIR) return sanoq.openCountAll();
         long n = u.getKassaId() == null ? 0 : sanoq.openCount(u.getKassaId());
         for (Long k : rec.notifier().headOf(u)) if (!k.equals(u.getKassaId())) n += sanoq.openCount(k);
         return n;
@@ -537,11 +552,12 @@ public class OmborHandler {
         if (kassa == 0) {
             List<List<InlineKeyboardButton>> rows = new ArrayList<>();
             for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc())
-                if (!k.isCashless() && k.getMoyskladWarehouseId() != null)
+                if (k.getMoyskladWarehouseId() != null)
                     rows.add(irow(btn(k.getName() + " · " + sanoq.openCount(k.getId()) + " ta", "om:sn:" + k.getId())));
+            if (u.getRole() != Role.KASSIR) rows.add(irow(btn("📥 Excel (7 kun)", "om:snx")));
             rows.add(irow(btn("⬅️ Омбор", "om:m")));
-            sender.edit(chatId, msgId, "🔢 <b>Rotatsion sanoq</b>\n\nA tovarlar har " + cfg.abcDays('A') + ", B har " + cfg.abcDays('B') + ", C har " + cfg.abcDays('C')
-                    + " kunda bir sanaladi. Do'konni tanlang:", inline(rows));
+            sender.edit(chatId, msgId, "🔢 <b>Kunlik sanoq</b>\n\nHar kuni " + OmborSanoqService.SOTUV_KUN + " kunlik eng ko'p sotilgan tovarlardan tasodifiy <b>"
+                    + cfg.sanoqSoni() + "</b> tasi (shundan 🐢 " + cfg.sanoqEski() + " ta eski qoldiq); so'rov " + cfg.sanoqVaqt() + ", yakun " + cfg.sanoqYopishVaqt() + " da rahbarga. Do'konni tanlang:", inline(rows));
             return;
         }
         if (!canCount(u, kassa)) { sender.edit(chatId, msgId, "⛔ Bu do'kon sanog'i sizga ochiq emas."); return; }
@@ -550,13 +566,14 @@ public class OmborHandler {
         long entered = list.stream().filter(x -> x.getFactQty() != null).count();
         if (list.isEmpty()) sb.append("\nBugungi sanoq yo'q yoki hammasi tasdiqlangan ✅");
         else sb.append("Kutmoqda: <b>").append(list.size()).append("</b> ta · kiritilgan: ").append(entered)
-                .append("\n\nTovarni bosing, fakt miqdorni yozing; hammasini kiritgach «✅ Tasdiqlash»:");
+                .append("\n\nTovarni bosing, haqiqiy (sanalgan) miqdorni yozing; hammasini kiritgach «✅ Tasdiqlash». ")
+                .append(cfg.sanoqYopishVaqt()).append(" da kiritilganlar o'zi tasdiqlanadi, kiritilmaganlar «sanalmadi» bo'lib rahbarga chiqadi:");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         int from = page * PAGE;
         for (int i = from; i < Math.min(list.size(), from + PAGE); i++) {
             OmborSanoq x = list.get(i);
             String name = tovarRepo.findById(x.getProductMsId()).map(OmborTovar::getName).orElse(x.getProductMsId());
-            String label = (x.getFactQty() == null ? "▫️ " : (x.diff() ? "⚠️ " : "✅ ")) + x.getAbc() + " · " + name
+            String label = (x.getFactQty() == null ? "▫️ " : (x.diff() ? "⚠️ " : "✅ ")) + x.mark() + " · " + name
                     + (x.getFactQty() == null ? "" : " = " + x.getFactQty().stripTrailingZeros().toPlainString())
                     + (x.getPlanDate().isBefore(java.time.LocalDate.now(cfg.zone())) ? " · " + x.getPlanDate().getDayOfMonth() + "-kun" : "");
             rows.add(irow(btn(cut(label, 60), "om:snv:" + x.getId())));
@@ -596,6 +613,122 @@ public class OmborHandler {
                 + (x.diff() ? " · hisob " + x.getSystemQty().stripTrailingZeros().toPlainString() + " · farq <b>" + v.subtract(x.getSystemQty()).stripTrailingZeros().toPlainString() + "</b>" : ""),
                 null);
         if (sent != null) sanoqList(u, s, String.valueOf(x.getKassaId()), chatId, sent);
+    }
+
+    /* ==================== 🏆 Чемпионлар ==================== */
+
+    /** arg: "" — do'kon tanlash (kassir: o'z do'koni) | "<kassa>" (0 — kompaniya). */
+    private void chempionScreen(AppUser u, String arg, long chatId, int msgId) {
+        List<Kassa> stores = chempion.stores();
+        if (arg.isBlank() && u.getRole() == Role.KASSIR && u.getKassaId() != null) arg = String.valueOf(u.getKassaId());
+        if (arg.isBlank()) {
+            StringBuilder sb = new StringBuilder("🏆 <b>Chempion tovarlar</b>\n\nHar do'konda oxirgi " + OmborChempionService.KUN + " kunda eng ko'p <b>foyda</b> keltirgan <b>"
+                    + cfg.chempionSoni() + "</b> ta tovar (yuqoridan pastga) va ulardan nechtasi hozir javonda bor (fill rate). Faqat naqd savdo ("
+                    + esc(String.join(", ", cfg.naqdStates())) + "), MoySklad otgruzkalaridan, ombor kesimida. Omborni tanlang:\n");
+            List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+            for (Kassa k : stores) {
+                Integer p = OmborChempionService.fillPct(chempion.list(k.getId()));
+                rows.add(irow(btn(chempion.storeName(k.getId()) + (p == null ? "" : " · " + p + "%"), "om:ch:" + k.getId())));
+            }
+            if (u.getRole() != Role.KASSIR) rows.add(irow(btn("📥 Excel", "om:chx")));
+            rows.add(irow(btn("⬅️ Омбор", "om:m")));
+            sender.edit(chatId, msgId, sb.toString(), inline(rows));
+            return;
+        }
+        String[] pa = arg.split("\\.");
+        long kassa = Long.parseLong(pa[0]);
+        String sort = OmborChempionService.sortOf(pa.length > 1 ? pa[1] : "");
+        int page = 0;
+        if (pa.length > 2) try { page = Integer.parseInt(pa[2]); } catch (NumberFormatException ignored) { }
+        if (!canSeeStore(u, kassa)) { sender.edit(chatId, msgId, "⛔ Bu do'kon sizga ochiq emas."); return; }
+        if (kassa == 0) { sender.edit(chatId, msgId, "⚠️ Ombor tanlanmagan."); return; }
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        List<InlineKeyboardButton> srt = new ArrayList<>();
+        for (String k : List.of(OmborChempionService.SORT_FOYDA, OmborChempionService.SORT_QTY, OmborChempionService.SORT_SUMMA))
+            srt.add(btn((k.equals(sort) ? "✅ " : "") + OmborChempionService.sortTitle(k), "om:ch:" + kassa + "." + k));
+        rows.add(srt);
+        int pages = OmborChempionService.pages(chempion.list(kassa, sort).size());
+        page = Math.max(0, Math.min(page, pages - 1));
+        if (pages > 1) {
+            List<InlineKeyboardButton> nav = new ArrayList<>();
+            if (page > 0) nav.add(btn("⬅️ Oldingi", "om:ch:" + kassa + "." + sort + "." + (page - 1)));
+            if (page < pages - 1) nav.add(btn("Keyingi ➡️", "om:ch:" + kassa + "." + sort + "." + (page + 1)));
+            rows.add(nav);
+        }
+        List<InlineKeyboardButton> r = new ArrayList<>();
+        for (Kassa k : stores) if (k.getId() != kassa) { r.add(btn(cut(chempion.storeName(k.getId()).replace("Склад ", ""), 14), "om:ch:" + k.getId() + "." + sort)); if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); } }
+        if (!r.isEmpty()) rows.add(r);
+        rows.add(irow(btn("📈 Trend", "om:tr:" + kassa + ".7"), btn("🚫 Chiqarilganlar", "om:tre:" + kassa)));
+        rows.add(irow(btn("⬅️ Ro'yxat", "om:ch"), btn("🏬 Омбор", "om:m")));
+        sender.edit(chatId, msgId, chempion.screen(kassa, sort, page), inline(rows));
+    }
+
+    /* ==================== 📈 Тренд ==================== */
+
+    /** arg: "" — do'kon tanlash (kassir: o'z do'koni) | "<kassa>.<7|30>[.<tab>]" (tab: o — o'sish, k — kamayish, n — narx, p — partiya). */
+    private void trendScreen(AppUser u, String arg, long chatId, int msgId) {
+        List<Kassa> stores = chempion.stores();
+        if (arg.isBlank() && u.getRole() == Role.KASSIR && u.getKassaId() != null) arg = u.getKassaId() + ".7";
+        if (arg.isBlank()) {
+            String text = "📈 <b>Trend</b>\n\nHar do'kon uchun naqd savdo o'sayotgan va so'nayotgan tovarlar (oxirgi 7 yoki 30 kun ↔ oldingi davr), "
+                    + "naqd narxi o'zgargan tovarlar (qachon, qanchaga) va 📦 partiyalar — kelgan tovar necha kunda tugagan. Faqat naqd statuslar ("
+                    + esc(String.join(", ", cfg.naqdStates())) + "). Omborni tanlang:\n";
+            List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+            for (Kassa k : stores) rows.add(irow(btn(chempion.storeName(k.getId()), "om:tr:" + k.getId() + ".7")));
+            if (u.getRole() != Role.KASSIR) rows.add(irow(btn("📥 Excel", "om:trx")));
+            rows.add(irow(btn("⬅️ Омбор", "om:m")));
+            sender.edit(chatId, msgId, text, inline(rows));
+            return;
+        }
+        String[] pa = arg.split("\\.");
+        long kassa = Long.parseLong(pa[0]);
+        int win = pa.length > 1 && pa[1].equals("30") ? 30 : 7;
+        String tab = OmborTrendService.tabOf(pa.length > 2 ? pa[2] : "");
+        if (!canSeeStore(u, kassa)) { sender.edit(chatId, msgId, "⛔ Bu do'kon sizga ochiq emas."); return; }
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        List<InlineKeyboardButton> tabs = new ArrayList<>();
+        for (String t : List.of(OmborTrendService.TAB_UP, OmborTrendService.TAB_DOWN, OmborTrendService.TAB_PRICE, OmborTrendService.TAB_BATCH))
+            tabs.add(btn((t.equals(tab) ? "✅ " : "") + OmborTrendService.tabTitle(t), "om:tr:" + kassa + "." + win + "." + t));
+        rows.add(irow(tabs.get(0), tabs.get(1)));
+        rows.add(irow(tabs.get(2), tabs.get(3)));
+        if (tab.equals(OmborTrendService.TAB_UP) || tab.equals(OmborTrendService.TAB_DOWN))
+            rows.add(irow(btn((win == 7 ? "✅ " : "") + "7 kun", "om:tr:" + kassa + ".7." + tab), btn((win == 30 ? "✅ " : "") + "30 kun", "om:tr:" + kassa + ".30." + tab)));
+        List<InlineKeyboardButton> r = new ArrayList<>();
+        for (Kassa k : stores) if (k.getId() != kassa) { r.add(btn(cut(chempion.storeName(k.getId()).replace("Склад ", ""), 14), "om:tr:" + k.getId() + "." + win + "." + tab)); if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); } }
+        if (!r.isEmpty()) rows.add(r);
+        rows.add(irow(btn("🏆 Chempionlar", "om:ch:" + kassa), btn("🚫 Chiqarilganlar", "om:tre:" + kassa)));
+        if (u.getRole() != Role.KASSIR) rows.add(irow(btn("📥 Excel", "om:trx")));
+        rows.add(irow(btn("⬅️ Ro'yxat", "om:tr"), btn("🏬 Омбор", "om:m")));
+        String text = tab.equals(OmborTrendService.TAB_BATCH) ? partiya.storeScreen(kassa) : trend.screen(kassa, win, tab);
+        sender.edit(chatId, msgId, text, inline(rows));
+    }
+
+    /** 📦 Tovar partiyalari (kelish → tugash), ko'rinadigan do'konlar bo'yicha. */
+    private void partiyaScreen(AppUser u, Session s, String pid, long chatId, int msgId) {
+        List<Kassa> stores = new ArrayList<>();
+        for (Kassa k : chempion.stores()) if (canSeeStore(u, k.getId())) stores.add(k);
+        sender.edit(chatId, msgId, partiya.productScreen(pid, stores),
+                inline(List.of(irow(btn("⬅️ Tovar", "om:t:" + pid), btn("🏬 Омбор", "om:m")))));
+    }
+
+    /** 🚫 Tahlilga kirmagan otgruzkalar (bank statusi / chegaradan katta), 30 kun. */
+    private void excludedScreen(AppUser u, String arg, long chatId, int msgId) {
+        long kassa = Long.parseLong(arg);
+        if (!canSeeStore(u, kassa)) { sender.edit(chatId, msgId, "⛔ Bu do'kon sizga ochiq emas."); return; }
+        sender.edit(chatId, msgId, trend.excludedScreen(kassa),
+                inline(List.of(irow(btn("📈 Trend", "om:tr:" + kassa + ".7"), btn("🏆 Chempionlar", "om:ch:" + kassa)), irow(btn("🏬 Омбор", "om:m")))));
+    }
+
+    private boolean canSeeStore(AppUser u, long kassa) {
+        return u.getRole() != Role.KASSIR || kassa == (u.getKassaId() == null ? -1 : u.getKassaId()) || rec.notifier().headOf(u).contains(kassa);
+    }
+
+    /** 📥 Oxirgi 7 kun sanoq natijalari — Excel (rahbar/admin). */
+    private void sanoqExcel(AppUser u, long chatId, int msgId) {
+        if (u.getRole() == Role.KASSIR) return;
+        java.time.LocalDate to = java.time.LocalDate.now(cfg.zone());
+        sender.sendDocument(chatId, sanoq.weeklyExcel(to.minusDays(6), to), "sanoq-" + to.minusDays(6) + "_" + to + ".xlsx",
+                "📊 Sanoq · " + SANOQ_DF.format(to.minusDays(6)) + " – " + SANOQ_DF.format(to) + " (do'kon kesimida xulosa, barcha qatorlar, farqlar)");
     }
 
     private void sanoqConfirm(AppUser u, Session s, long kassa, long chatId, int msgId) {
@@ -644,14 +777,17 @@ public class OmborHandler {
         sb.append("📦 Qoldiqlar: ").append(stock == null || stock.getLastOkAt() == null ? "hali o'qilmagan" : "<b>" + stock.getRowsN() + "</b> qator · " + stock.getLastOkAt().atZone(z).format(DTF)).append(" (kuniga bir, ").append(cfg.stockTime()).append(" dan keyin)\n");
         long docs = 0; List<String> byType = new ArrayList<>();
         for (String t : OmborDocSync.TYPES) { long c = hujjatRepo.countByType(t); docs += c; if (c > 0) byType.add(OmborHujjat.typeTitle(t) + " " + c); }
-        sb.append("📄 Hujjatlar (oxirgi ").append(cfg.docsDays()).append(" kun): <b>").append(docs).append("</b> — ").append(esc(String.join(", ", byType))).append("\n");
+        sb.append("📄 Hujjatlar (").append(cfg.docsDays()).append(" kun, otgruzka ").append(cfg.salesDays()).append(" kun): <b>").append(docs).append("</b> — ").append(esc(String.join(", ", byType))).append("\n");
         sb.append("   oxirgi sinxronda o'zgargan: ").append(changed.isEmpty() ? "yo'q" : esc(String.join(", ", changed))).append("\n");
-        sb.append("📈 Sotuv tarixi: ").append(sales.backfillDone() ? "to'liq (" + cfg.salesDays() + " kun)" : "yuklanmoqda, " + cfg.get(OmborConfig.SALES_CURSOR).orElse("boshlanmagan") + " gacha").append("\n");
+        sb.append("📈 Sotuv tarixi (MoySklad hisoboti): ").append(sales.backfillDone() ? "to'liq (" + cfg.salesDays() + " kun)" : "yuklanmoqda, " + cfg.get(OmborConfig.SALES_CURSOR).orElse("boshlanmagan") + " gacha").append("\n");
+        sb.append("💵 Naqd sotuv (otgruzka, ").append(esc(String.join(", ", cfg.naqdStates()))).append("): ")
+          .append(!sales.demandLoaded() ? "otgruzkalar yuklanmoqda" : sales.progress() != null ? "qayta hisoblanmoqda " + sales.progress() : sales.naqdReady() ? "tayyor" : "hisob kutilmoqda")
+          .append(cfg.sotuvMaxHujjat() == 0 ? "" : " · chegara " + OmborChempionService.pul(cfg.sotuvMaxHujjat() * 100) + " so'm").append("\n");
         var d = metrics.lastDate(OmborCalcService.ABC);
         sb.append("🧮 Hisoblar (ABC, buyurtma nuqtasi, fill rate): ").append(d == null ? "hali yo'q" : d + " holatiga").append("\n");
         sb.append("\n<b>Do'konlar</b>\n");
         for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
-            if (k.isCashless()) continue;
+            if (k.getMoyskladWarehouseId() == null) continue;
             long[] ss = metrics.stockStats(k.getId());
             String fr = metricOf(OmborCalcService.FILL_RATE_30, k.getId(), "");
             sb.append(k.getMoyskladWarehouseId() == null ? "⚪ " : "🏪 ").append(esc(k.getName())).append(": ")

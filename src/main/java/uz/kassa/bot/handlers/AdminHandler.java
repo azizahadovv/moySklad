@@ -32,6 +32,7 @@ public class AdminHandler {
     private final NotifyAdminHandler notifyAdmin;
     private final ControlAdminHandler controlAdmin;
     private final OmborAdminHandler omborAdmin;
+    private final TgHandler tg;
     private final MenuSchemaHandler menuSchemaH;
     private final NotifySwitchHandler switchH;
     private final MenuSupport menus;
@@ -83,6 +84,7 @@ public class AdminHandler {
             case ADM_CT_VAL -> { controlAdmin.onText(u, s, text, chatId); return true; }
             case ADM_OM_VAL -> { omborAdmin.onText(u, s, text, chatId); return true; }
             case ADM_OM_DAVR -> { omborAdmin.onDavrText(u, s, text, chatId); return true; }
+            case ADM_TG_VAL -> { tg.onText(u, s, text, chatId); return true; }
             case ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN -> {
                 if (notifyAdmin.onText(u, s, text, chatId)) return true;
             }
@@ -158,6 +160,7 @@ public class AdminHandler {
         if (cmd.startsWith("ct")) return controlAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
         // 🏬 Омбор назорати (a:om*)
         if (cmd.startsWith("om")) return omborAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
+        if (cmd.startsWith("tg")) return tg.adminCallback(u, s, cmd, arg, chatId, msgId);
 
         switch (cmd) {
             case "p" -> panel(u, s, arg, chatId, msgId);
@@ -432,6 +435,7 @@ public class AdminHandler {
                     case NotifySwitchHandler.LABEL -> switchH.menu(s, chatId, 0);
                     case "🕵️ Назорат" -> controlAdmin.menu(s, chatId, 0);
                     case OmborAdminHandler.LABEL -> omborAdmin.menu(s, chatId, 0);
+                    case TgHandler.LABEL -> tg.menu(s, chatId, 0);
                     case "💳 Карта масъуллари" -> settingsH.kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> msH.ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> msH.diagMenu(s, chatId, 0);
@@ -574,7 +578,8 @@ public class AdminHandler {
             case "m" -> {
                 String key = nav.substring(2);
                 String parent = schema.parentOf(key);
-                if (parent == null) toMain(u, s, chatId); else sup.navMenu(u, s, parent, chatId);
+                // ota menyu bosh menyu (main.*) bo'lsa — reply-klaviatura Orqaga qatorisiz (toMain), panel darajasi emas
+                if (parent == null || parent.startsWith("main.")) toMain(u, s, chatId); else sup.navMenu(u, s, parent, chatId);
             }
             case "kassa", "kassab" -> sup.navTo(u, s, "otdel", chatId,
                     "🏪 <b>Кассалар</b>\n\nKassani tanlang:", sup.otdelLabels());
@@ -663,6 +668,7 @@ public class AdminHandler {
         ACTIONS.put(NotifySwitchHandler.LABEL, (u, s, c) -> switchH.menu(s, c, 0));
         ACTIONS.put("🕵️ Назорат", (u, s, c) -> controlAdmin.menu(s, c, 0));
         ACTIONS.put(OmborAdminHandler.LABEL, (u, s, c) -> omborAdmin.menu(s, c, 0));
+        ACTIONS.put(TgHandler.LABEL, (u, s, c) -> tg.menu(s, c, 0));
         ACTIONS.put("💳 Карта масъуллари", (u, s, c) -> settingsH.kartaMasList(c, 0));
         ACTIONS.put("📅 Ledger санаси", (u, s, c) -> msH.ledgerMenu(s, c, 0));
         ACTIONS.put("🩺 Диагностика", (u, s, c) -> msH.diagMenu(s, c, 0));

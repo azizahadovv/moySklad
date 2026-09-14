@@ -12,11 +12,10 @@ import uz.kassa.service.ombor.OmborMetrics;
 import java.math.BigDecimal;
 import java.util.*;
 import static uz.kassa.bot.TextUtil.esc;
-import static uz.kassa.bot.TextUtil.fmt;
 
 /**
  * KORSATKICH_CHEGARA — istalgan ko'rsatkich (oxirgi sana) chegara bilan.
- *   subject: tovar (standart) | hamkor (product_ms_id = kontragent) | kassa (product_ms_id = '' — do'kon darajasi)
+ *   subject: tovar (standart) | kassa (product_ms_id = '' — do'kon darajasi)
  *   scope: store (kassa>0) | company (kassa=0); abc_in; min_stock (faqat qoldiq ≥ bo'lsa, company QOLDIQ).
  */
 @Component
@@ -28,7 +27,7 @@ public class KorsatkichChegaraChecker implements OmborChecker {
     private final KassaRepo kassaRepo;
 
     @Override public String code() { return "KORSATKICH_CHEGARA"; }
-    @Override public String help() { return "Ko'rsatkich chegara bilan. params: {\"code\":\"AYLANMA_KUN\",\"op\":\">\",\"threshold\":90,\"scope\":\"company|store\",\"subject\":\"tovar|hamkor|kassa\",\"abc_in\":\"A,B\",\"min_stock\":1}"; }
+    @Override public String help() { return "Ko'rsatkich chegara bilan. params: {\"code\":\"AYLANMA_KUN\",\"op\":\">\",\"threshold\":90,\"scope\":\"company|store\",\"subject\":\"tovar|kassa\",\"abc_in\":\"A,B\",\"min_stock\":1}"; }
 
     @Override
     public List<Found> run(OmborQoida rule, JsonNode p) {
@@ -41,7 +40,7 @@ public class KorsatkichChegaraChecker implements OmborChecker {
         double minStock = p.path("min_stock").asDouble(-1);
         Map<String, Integer> abc = abcIn.isEmpty() ? Map.of() : abcMap();
         Map<String, BigDecimal> stock = minStock < 0 ? Map.of() : companyStock();
-        String where = subject.equals("kassa") ? "product_ms_id = '' AND kassa_id > 0" : subject.equals("hamkor_tovar") ? "kassa_id = 0 AND product_ms_id LIKE '%|%'" : (scope.equals("company") ? "kassa_id = 0" : "kassa_id > 0") + " AND product_ms_id <> ''";
+        String where = subject.equals("kassa") ? "product_ms_id = '' AND kassa_id > 0" : (scope.equals("company") ? "kassa_id = 0" : "kassa_id > 0") + " AND product_ms_id <> ''";
         List<Found> out = new ArrayList<>();
         for (Map<String, Object> m : metrics.latest(code, where)) {
             long kassa = ((Number) m.get("kassa_id")).longValue();
@@ -56,14 +55,6 @@ public class KorsatkichChegaraChecker implements OmborChecker {
             switch (subject) {
                 case "kassa" -> out.add(Found.of("kassa", code + ":" + kassa, kassa, kassaName(kassa) + " · " + code + " " + val,
                         "<b>" + esc(kassaName(kassa)) + "</b>: " + code + " = <b>" + val + "</b> (chegara " + op + " " + thr.stripTrailingZeros().toPlainString() + ")"));
-                case "hamkor_tovar" -> {
-                    String agent = pid.contains("|") ? pid.substring(0, pid.indexOf('|')) : pid, prod = pid.contains("|") ? pid.substring(pid.indexOf('|') + 1) : "";
-                    String pn = tovarRepo.findById(prod).map(OmborTovar::getName).orElse(prod);
-                    out.add(Found.of("hamkor", pid, null, hamkorName(agent) + " · " + (pn.length() > 40 ? pn.substring(0, 40) : pn) + " · " + val + " kun",
-                            "🤝 <b>" + esc(hamkorName(agent)) + "</b> — <b>" + esc(pn) + "</b>: odatdagi xarid intervalidan <b>" + val + " kun</b> o'tdi, tugagan bo'lishi mumkin. Taklif qiling."));
-                }
-                case "hamkor" -> out.add(Found.of("hamkor", pid, null, hamkorName(pid) + " · " + fmt(v.longValue()) + " so'm",
-                        "🤝 <b>" + esc(hamkorName(pid)) + "</b> — qarz <b>" + fmt(v.longValue()) + "</b> so'm (limit " + fmt(thr.longValue()) + ")"));
                 default -> {
                     OmborTovar t = tovarRepo.findById(pid).orElse(null);
                     String name = t == null ? pid : t.getName();
@@ -97,8 +88,4 @@ public class KorsatkichChegaraChecker implements OmborChecker {
     }
 
     private String kassaName(long id) { return kassaRepo.findById(id).map(k -> k.getName()).orElse("#" + id); }
-    private String hamkorName(String agentId) { return hamkorNames.getOrDefault(agentId, agentId); }
-
-    /** Sinxron paytida to'ldiriladi (OmborSyncService.hamkorlar). */
-    public static final Map<String, String> hamkorNames = new java.util.concurrent.ConcurrentHashMap<>();
 }
