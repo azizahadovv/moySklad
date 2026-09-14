@@ -1,0 +1,3 @@
+Bu papka bo'sh bo'lishi mumkin — Dockerfile COPY buni har doim kutadi.
+Haqiqiy TDLib keshini (server, ishlaydigan `docker run` usuli bilan) to'ldirish uchun
+docs/BOT-XABARLARI.md dagi "Bir martalik TDLib keshi" bo'limiga qarang.

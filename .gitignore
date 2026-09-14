@@ -1,5 +1,8 @@
 target/
 .env
+# 📨 TDLib bir martalik kesh (docs/BOT-XABARLARI.md) — mashinaga xos, katta; .gitkeep saqlanadi
+.m2-tdlib-cache/*
+!.m2-tdlib-cache/.gitkeep
 *.iml
 .idea/
 .github
