@@ -345,11 +345,8 @@ public class TgHandler {
             case "kw" -> "🔔 OGOH beradigan kalit so'zlar (vergul bilan). Xabar matnida shu so'z bo'lsa darhol ogohlantirish.\nMasalan: <code>бекор, қайтарилди, возврат</code>\nHozir: " + (cfg.keywords().isEmpty() ? "—" : String.join(", ", cfg.keywords()));
             case "silence" -> "🔇 Necha soat xabar/ulanish kelmasa ogohlantirilsin? (1–168)\nHozir: " + cfg.silenceHours();
             case "tol" -> "± Summani solishtirishda ruxsat etilgan farq (so'm, 0 — aniq)\nHozir: " + fmt(cfg.matchTol());
-            case "api" -> "🔑 TDLib api_id va api_hash (my.telegram.org → API development tools), bo'sh joy bilan:
-<code>123456 0123456789abcdef0123456789abcdef</code>
-Hozir: " + (cfg.apiId() > 0 ? cfg.apiId() + " · hash ****" : "yo'q");
-            case "source" -> "🤖 Qaysi bot xabarlari o'qilsin (@ siz)? Masalan <code>HUMOcardbot</code>
-Hozir: " + (cfg.sourceBot().isBlank() ? "yo'q" : "@" + cfg.sourceBot());
+            case "api" -> "🔑 TDLib api_id va api_hash (my.telegram.org → API development tools), bo'sh joy bilan:\n<code>123456 0123456789abcdef0123456789abcdef</code>\nHozir: " + (cfg.apiId() > 0 ? cfg.apiId() + " · hash ****" : "yo'q");
+            case "source" -> "🤖 Qaysi bot xabarlari o'qilsin (@ siz)? Masalan <code>HUMOcardbot</code>\nHozir: " + (cfg.sourceBot().isBlank() ? "yo'q" : "@" + cfg.sourceBot());
             case "rep" -> "⏰ Karta qoldiqlari guruh hisoboti: <b>интервал соатлар</b> ва <b>ойна</b>, масалан <code>3 8 22</code> (ҳар 3 соат, 8–22). Интервал 0 — ўчиқ. Гуруҳ: tgreader.chat_ids ёки Click гуруҳи.\nҲозир: " + cfg.reportEveryH() + " " + cfg.reportFrom() + " " + cfg.reportTo();
             default -> null;
         };
@@ -368,9 +365,9 @@ Hozir: " + (cfg.sourceBot().isBlank() ? "yo'q" : "@" + cfg.sourceBot());
             else if ("silence".equals(key)) cfg.set(TgReaderConfig.SILENCE_H, String.valueOf(Math.max(1, Math.min(168, Integer.parseInt(t.replaceAll("\\D", ""))))));
             else if ("tol".equals(key)) cfg.set(TgReaderConfig.MATCH_TOL, String.valueOf(Long.parseLong(t.replaceAll("\\D", "").isEmpty() ? "0" : t.replaceAll("\\D", ""))));
             else if ("api".equals(key)) {
-                String[] a = t.split("[\s,]+");
+                String[] a = t.split("[\\s,]+");
                 if (a.length < 2) throw new IllegalArgumentException("api_id va api_hash kerak (bo'sh joy bilan)");
-                cfg.setApi(Integer.parseInt(a[0].replaceAll("\D", "")), a[1]);
+                cfg.setApi(Integer.parseInt(a[0].replaceAll("\\D", "")), a[1]);
             }
             else if ("source".equals(key)) cfg.setSourceBot(t);
             else if ("rep".equals(key)) {

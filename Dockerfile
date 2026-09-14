@@ -5,12 +5,20 @@
 # ochilmasa build shu bosqichda to'xtaydi — TDLib'siz build uchun `--build-arg TDLIB=` bering.
 FROM maven:3.9-eclipse-temurin-17 AS build
 ARG TDLIB=-Ptdlib
+# IPv4'ga majburlash (ba'zi serverlarda konteyner tarmog'ida IPv6 marshruti buzuq — ulanish
+# "Connect timed out" bilan osilib qoladi) + mchv.eu resolve/connect uzoqroq kutilsin (sekin tarmoq).
+ENV MAVEN_OPTS="-Djava.net.preferIPv4Stack=true -Dmaven.wagon.http.connectionTimeout=60000 -Dmaven.wagon.http.readTimeout=60000"
 WORKDIR /app
 COPY pom.xml .
 RUN --mount=type=cache,target=/root/.m2 mvn -q -B $TDLIB dependency:go-offline || true
 COPY src ./src
-RUN --mount=type=cache,target=/root/.m2 mvn -q -B -o $TDLIB -DskipTests package \
-    || mvn -q -B $TDLIB -DskipTests package
+# Vaqtinchalik tarmoq nosozligiga chidamli: 3 marta urinadi (mchv.eu bir zumda javob bermasa ham).
+RUN --mount=type=cache,target=/root/.m2 \
+    for i in 1 2 3; do \
+      mvn -q -B $TDLIB -DskipTests package && break; \
+      echo "mvn urinish $i muvaffaqiyatsiz, qayta..." >&2; sleep 5; \
+      if [ "$i" = 3 ]; then exit 1; fi; \
+    done
 
 # 2-bosqich: run
 FROM eclipse-temurin:17-jre
