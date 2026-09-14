@@ -3,7 +3,6 @@ package uz.kassa.tg;
 import it.tdlight.Init;
 import it.tdlight.client.APIToken;
 import it.tdlight.client.AuthenticationSupplier;
-import it.tdlight.client.SimpleAuthenticationSupplier;
 import it.tdlight.client.SimpleTelegramClient;
 import it.tdlight.client.SimpleTelegramClientBuilder;
 import it.tdlight.client.SimpleTelegramClientFactory;
@@ -53,8 +52,10 @@ public final class TgLoginMain {
                     ready.countDown();
                 }
             });
-            // Interaktiv: telefon (shu +998...), kod, 2FA parol terminaldan so'raladi
-            SimpleAuthenticationSupplier<?> auth = AuthenticationSupplier.consoleLogin();
+            // Interaktiv: telefon (shu +998...), kod, 2FA parol terminaldan so'raladi.
+            // consoleLogin() ConsoleInteractiveAuthenticationData qaytaradi — u SimpleAuthenticationSupplier
+            // EMAS (faqat AuthenticationSupplier<AuthenticationData>), build(...) esa AuthenticationSupplier<?> kutadi.
+            AuthenticationSupplier<?> auth = AuthenticationSupplier.consoleLogin();
             try (SimpleTelegramClient client = builder.build(auth)) {
                 if (!ready.await(5, TimeUnit.MINUTES)) System.err.println("⏳ Login vaqti tugadi (5 daqiqa).");
                 try { client.send(new TdApi.GetMe()).get(20, TimeUnit.SECONDS); } catch (Exception ignored) { }
