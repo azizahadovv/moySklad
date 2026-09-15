@@ -37,9 +37,17 @@ import java.util.stream.Stream;
 /**
  * 📨 To'liq Java TDLib (userbot) mijozi — akkauntga kirib FAQAT bitta botning ({@code TG_SOURCE_BOT}) xabarlarini
  * o'qiydi va {@link TgReaderService#ingest} ga uzatadi (parsing/balans/hisobot Java'da). Hech narsa yozmaydi.
- * <p><b>Login bot ichida</b> ({@link TgAccountGateway}): xodim telefon → kod → 2FA parolni botga kiritadi;
- * {@link ClientInteraction#onParameterRequest} orqali TDLib'ga uzatiladi. Sessiyalar {@code SESSIONS_DIR}/&lt;telefon&gt;.
- * Faqat «tdlib» Maven profilida kompilyatsiya bo'ladi (src/tdlib/java).
+ * Sessiyalar {@code SESSIONS_DIR}/&lt;telefon&gt;. Faqat «tdlib» Maven profilida kompilyatsiya bo'ladi
+ * (src/tdlib/java) — standart build bunga UMUMAN murojaat qilmaydi ({@code Dockerfile}dagi {@code ARG TDLIB}
+ * bo'sh, sabab: mvn.mchv.eu tarmoqdan yopiq). Aktiv login-darvoza endi {@code TgReaderHttpGateway} (Python/
+ * Telethon, {@code tg-reader} xizmati) — shu klass DORMANT, faqat mavjud (avtorizatsiya qilingan) sessiyalarni
+ * avto-ulash/pauza/uzish/test uchun saqlanadi.
+ * <p><b>DIQQAT — QR-login shu klassda AMALGA OSHIRILMAGAN:</b> {@link #startQrLogin}/{@link #pollQr}/
+ * {@link #submitPassword} atayin {@link UnsupportedOperationException} otadi. Sabab: TDLib'ning QR-login API'si
+ * ({@code TdApi.RequestQrCodeAuthentication}, {@code AuthorizationStateWaitOtherDeviceConfirmation.link})
+ * bu yerda lokal kompilyatsiya/tekshirish imkoni bo'lmagani uchun yozilmadi (mvn.mchv.eu network bloklangan).
+ * Agar bu profil kelajakda qayta jonlantirilsa — server build orqali TDLib QR API'sini shu yerga qo'shish kerak;
+ * aks holda (ehtimolroq) bu fayl butunlay o'chirilishi mumkin, chunki Python xizmati uni to'liq almashtirgan.
  */
 @Component
 @Slf4j
@@ -53,8 +61,6 @@ public class TgTdlibService implements TgAccountGateway {
     private SimpleTelegramClientFactory factory;
     private final Map<String, SimpleTelegramClient> clients = new ConcurrentHashMap<>();
     private final Map<String, Long> botChatId = new ConcurrentHashMap<>();
-    private final Map<String, Login> logins = new ConcurrentHashMap<>();
-    private final Map<String, Long> loginUserId = new ConcurrentHashMap<>();
     private final ScheduledExecutorService beat = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "tg-heartbeat"); t.setDaemon(true); return t; });
 
     public TgTdlibService(TgReaderService reader, uz.kassa.service.tg.TgReaderConfig cfg) { this.reader = reader; this.cfg = cfg; }
@@ -72,7 +78,7 @@ public class TgTdlibService implements TgAccountGateway {
         if (!available()) { log.info("📨 TDLib: kalitlar yo'q (⚙️ 📨 → 🔑 API) — kutilmoqda"); return; }
         for (String phone : sessions()) {
             if (!reader.isActive(phone)) { log.info("📨 TDLib {}: o'chirilgan — o'tkazildi", phone); continue; }
-            try { connect(phone, null); }
+            try { connect(phone); }
             catch (Exception e) { log.error("📨 TDLib {} ulanmadi: {}", phone, e.toString()); reader.heartbeat(phone, "ulanmadi: " + e.getMessage()); }
         }
         beat.scheduleAtFixedRate(this::heartbeat, 60, 60, TimeUnit.SECONDS);
@@ -87,74 +93,36 @@ public class TgTdlibService implements TgAccountGateway {
         } catch (Exception e) { return List.of(); }
     }
 
-    /* ==================== TgAccountGateway (bot login) ==================== */
+    /* ==================== TgAccountGateway (bot login) — DORMANT, qarang klass javadoc'i ==================== */
 
-    /** Login holati: TDLib qaysi parametrni kutmoqda (pending) va botga signal (step). */
-    private static final class Login {
-        volatile CompletableFuture<String> pending;
-        volatile CompletableFuture<TgAccountGateway.Step> step = new CompletableFuture<>();
+    @Override
+    public Result startQrLogin(long userId) {
+        throw new UnsupportedOperationException("QR-login TDLib (tdlib profil) mijozida amalga oshirilmagan — tg-reader (Python) ishlatiladi");
     }
 
     @Override
-    public synchronized Result startLogin(String phone, long userId) {
-        if (!available()) return Result.error("TDLib o'chiq (TG_API_ID/HASH yo'q)");
-        cancelLogin(phone);
-        loginUserId.put(phone, userId);
-        Login login = new Login();
-        logins.put(phone, login);
-        try {
-            connect(phone, login);
-            return await(login.step, phone, userId);
-        } catch (Exception e) {
-            logins.remove(phone);
-            return Result.error(msg(e));
-        }
+    public Result pollQr(long userId) {
+        throw new UnsupportedOperationException("QR-login TDLib (tdlib profil) mijozida amalga oshirilmagan — tg-reader (Python) ishlatiladi");
     }
 
     @Override
-    public synchronized Result submitCode(String phone, String code) {
-        return submit(phone, code);
+    public Result submitPassword(long userId, String password) {
+        throw new UnsupportedOperationException("QR-login TDLib (tdlib profil) mijozida amalga oshirilmagan — tg-reader (Python) ishlatiladi");
     }
 
     @Override
-    public synchronized Result submitPassword(String phone, String password) {
-        return submit(phone, password);
-    }
-
-    private Result submit(String phone, String value) {
-        Login l = logins.get(phone);
-        if (l == null || l.pending == null) return Result.error("Login sessiyasi topilmadi — qaytadan boshlang");
-        CompletableFuture<Step> next = new CompletableFuture<>();
-        l.step = next;
-        l.pending.complete(value.trim());
-        return await(next, phone, loginUserId.getOrDefault(phone, 0L));
-    }
-
-    /** Signalni kutish; CONNECTED bo'lsa akkauntni yakunlash. */
-    private Result await(CompletableFuture<Step> step, String phone, long userId) {
-        try {
-            Step st = step.get(90, TimeUnit.SECONDS);
-            if (st == Step.CONNECTED) { finishConnected(phone, userId); logins.remove(phone); }
-            return Result.of(st);
-        } catch (java.util.concurrent.TimeoutException te) {
-            return Result.error("Telegram javob bermadi (90s) — qaytadan urinib ko'ring");
-        } catch (Exception e) {
-            return Result.error(msg(e));
-        }
+    public synchronized void cancelLogin(long userId) {
+        // login boshlanmagan — hech narsa qilinmaydi
     }
 
     @Override
-    public synchronized void cancelLogin(String phone) {
-        logins.remove(phone);
-        loginUserId.remove(phone);
+    public synchronized void pause(String phone) {
         close(phone);
-        // yakunlanmagan sessiya fayllarini o'chirish (keyingi login toza boshlansin)
-        if (!isAuthorizedDir(phone)) deleteDir(Paths.get(sessionsDir, phone));
+        reader.setActive(phone, false);
     }
 
     @Override
     public synchronized void disconnect(String phone) {
-        logins.remove(phone);
         close(phone);
         deleteDir(Paths.get(sessionsDir, phone));
         reader.setActive(phone, false);
@@ -166,72 +134,80 @@ public class TgTdlibService implements TgAccountGateway {
         if (!Files.isDirectory(Paths.get(sessionsDir, phone))) return false;
         reader.setActive(phone, true);
         if (clients.containsKey(phone)) return true;
-        try { connect(phone, null); return true; }
+        try { connect(phone); return true; }
         catch (Exception e) { log.error("📨 TDLib {} qayta ulanmadi: {}", phone, e.toString()); return false; }
     }
 
-    /* ==================== ulanish ==================== */
+    @Override
+    public TestResult test(String phone) {
+        SimpleTelegramClient client = clients.get(phone);
+        if (client == null) return new TestResult(false, "Ulanmagan — avval «▶️ Yoqish» bosing");
+        try {
+            TdApi.User me = client.send(new TdApi.GetMe()).get(15, TimeUnit.SECONDS);
+            String text = "✅ NSB bot — ulanish tekshiruvi\n🕒 "
+                    + java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Tashkent"))
+                            .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss"));
+            // DIQQAT: SendMessage/InputMessageText maydon tartibi TDLib versiyasiga bog'liq — bu loyihada
+            // «tdlib» profili faqat serverda build bo'ladi (mvn.mchv.eu bu yerdan ochilmaydi), shuning
+            // uchun bu qator lokal kompilyatsiya qilinmadi. Server build xato bersa — shu ikki qatorni
+            // joriy tdlight-java TdApi.java (target/generated yoki jar ichida) bilan solishtirib to'g'rilang.
+            TdApi.InputMessageContent content = new TdApi.InputMessageText(new TdApi.FormattedText(text, null), null, false);
+            client.send(new TdApi.SendMessage(me.id, 0, null, null, null, content)).get(15, TimeUnit.SECONDS);
+            return new TestResult(true, "Saqlangan xabarlarga test xabar yuborildi ✅");
+        } catch (Exception e) {
+            return new TestResult(false, msg(e));
+        }
+    }
 
-    private void connect(String phone, Login login) {
+    @Override
+    public List<PendingLogin> pendingLogins() {
+        return List.of();  // QR-login shu klassda amalga oshirilmagan — hech qachon "jarayonda" bo'lmaydi
+    }
+
+    /* ==================== ulanish (faqat mavjud, avtorizatsiya qilingan sessiyalarni avto-ulash) ==================== */
+
+    private void connect(String phone) {
         TDLibSettings settings = TDLibSettings.create(new APIToken(cfg.apiId(), cfg.apiHash()));
         Path dir = Paths.get(sessionsDir, phone);
         settings.setDatabaseDirectoryPath(dir.resolve("data"));
         settings.setDownloadedFilesDirectoryPath(dir.resolve("downloads"));
         SimpleTelegramClientBuilder builder = factory.builder(settings);
-        builder.addUpdateHandler(TdApi.UpdateAuthorizationState.class, u -> onAuth(phone, login, u));
+        builder.addUpdateHandler(TdApi.UpdateAuthorizationState.class, u -> onAuth(phone, u));
         builder.addUpdateHandler(TdApi.UpdateNewMessage.class, u -> onMessage(phone, u));
-        builder.setClientInteraction(new BotInteraction(phone, login));
+        builder.setClientInteraction(new AutoInteraction(phone));
         SimpleAuthenticationSupplier<?> auth = AuthenticationSupplier.user(phone);
         SimpleTelegramClient client = builder.build(auth);
         clients.put(phone, client);
-        log.info("📨 TDLib {}: sessiya ochildi ({})", phone, login == null ? "avto" : "login");
+        log.info("📨 TDLib {}: sessiya ochildi (avto)", phone);
     }
 
-    /** Bot ichidan kod/parolni beruvchi ClientInteraction. login==null — avto ulanish (kod so'ralsa yopamiz). */
-    private final class BotInteraction implements ClientInteraction {
+    /** Faqat mavjud sessiyani ochadi — kod/parol so'ralsa (avtorizatsiya tugallanmagan) yopib qo'yadi, chunki bu klassda interaktiv login yo'q. */
+    private final class AutoInteraction implements ClientInteraction {
         private final String phone;
-        private final Login login;
-        BotInteraction(String phone, Login login) { this.phone = phone; this.login = login; }
+        AutoInteraction(String phone) { this.phone = phone; }
 
         @Override
         public CompletableFuture<String> onParameterRequest(InputParameter parameter, ParameterInfo info) {
             switch (parameter) {
-                case ASK_CODE:
-                    return need(Step.NEED_CODE);
-                case ASK_PASSWORD:
-                    return need(Step.NEED_PASSWORD);
                 case TERMS_OF_SERVICE:
                 case NOTIFY_LINK:
                     return CompletableFuture.completedFuture("");
                 default:
-                    // ASK_FIRST_NAME / EMAIL … — bu akkaunt Telegram'da ro'yxatdan o'tmagan; login mumkin emas
-                    if (login != null && !login.step.isDone()) login.step.complete(Step.ERROR);
-                    return CompletableFuture.completedFuture("");
+                    // ASK_CODE / ASK_PASSWORD / ASK_FIRST_NAME … — sessiya avtorizatsiyalanmagan, yopamiz
+                    reader.heartbeat(phone, "login kerak (sessiya tugallanmagan)");
+                    CompletableFuture<String> f = new CompletableFuture<>();
+                    f.completeExceptionally(new IllegalStateException("login kerak"));
+                    closeAsync(phone);
+                    return f;
             }
-        }
-
-        private CompletableFuture<String> need(Step step) {
-            if (login == null) {   // avto ulanishda kod so'ralsa — sessiya avtorizatsiyalanmagan, yopamiz
-                reader.heartbeat(phone, "login kerak (sessiya tugallanmagan)");
-                CompletableFuture<String> f = new CompletableFuture<>();
-                f.completeExceptionally(new IllegalStateException("login kerak"));
-                closeAsync(phone);
-                return f;
-            }
-            CompletableFuture<String> p = new CompletableFuture<>();
-            login.pending = p;
-            if (!login.step.isDone()) login.step.complete(step);
-            return p;
         }
     }
 
-    private void onAuth(String phone, Login login, TdApi.UpdateAuthorizationState u) {
+    private void onAuth(String phone, TdApi.UpdateAuthorizationState u) {
         TdApi.AuthorizationState st = u.authorizationState;
         if (st instanceof TdApi.AuthorizationStateReady) {
             resolveBotAndAccount(phone);
-            if (login != null && !login.step.isDone()) login.step.complete(Step.CONNECTED);
         } else if (st instanceof TdApi.AuthorizationStateClosed) {
-            if (login != null && !login.step.isDone()) login.step.complete(Step.ERROR);
             clients.remove(phone);
             botChatId.remove(phone);
         }
@@ -254,11 +230,6 @@ public class TgTdlibService implements TgAccountGateway {
             log.error("📨 TDLib {}: @{} topilmadi ({}) — akkaunt bu bot bilan yozishmagan bo'lishi mumkin", phone, cfg.sourceBot(), e.toString());
             reader.heartbeat(phone, "@" + cfg.sourceBot() + " topilmadi");
         }
-    }
-
-    private void finishConnected(String phone, long userId) {
-        if (userId > 0) reader.linkUser(phone, userId);
-        reader.setActive(phone, true);
     }
 
     private void onMessage(String phone, TdApi.UpdateNewMessage u) {
@@ -292,13 +263,6 @@ public class TgTdlibService implements TgAccountGateway {
     }
 
     /* ==================== yordamchi ==================== */
-
-    private boolean isAuthorizedDir(String phone) {
-        // TDLib avtorizatsiyalangan sessiya data/ da binlog qoldiradi
-        Path data = Paths.get(sessionsDir, phone, "data");
-        if (!Files.isDirectory(data)) return false;
-        try (Stream<Path> s = Files.list(data)) { return s.findAny().isPresent(); } catch (Exception e) { return false; }
-    }
 
     private static void deleteDir(Path dir) {
         if (!Files.exists(dir)) return;

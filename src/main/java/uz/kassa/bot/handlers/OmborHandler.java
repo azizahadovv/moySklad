@@ -347,7 +347,7 @@ public class OmborHandler {
         String qn = q == null ? "" : OmborTovar.norm(q);
         List<Object[]> rows = new ArrayList<>();
         int n = 0;
-        for (var pr : dublikat.pairs("name,barcode,article")) {
+        for (var pr : dublikat.pairs("name,barcode,article,name_fuzzy")) {
             if (!qn.isEmpty() && !OmborTovar.norm(pr.a().getName() + " " + pr.b().getName() + " " + pr.a().getArticle() + " " + pr.b().getArticle()).contains(qn)) continue;
             rows.add(new Object[]{++n, pr.a().getName(), pr.a().getCode(), pr.a().getArticle(), stockOf(pr.a().getMsId()), pr.a().getFolderName(),
                     pr.b().getName(), pr.b().getCode(), pr.b().getArticle(), stockOf(pr.b().getMsId()), pr.b().getFolderName(), pr.reason(), "Дубликат"});

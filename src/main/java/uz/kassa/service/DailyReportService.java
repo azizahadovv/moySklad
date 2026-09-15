@@ -176,8 +176,7 @@ public class DailyReportService {
               .append("</b>, ").append(LocalDateTime.ofInstant(c.getConfirmedAt(), props.zoneId())
                       .format(DateTimeFormatter.ofPattern("dd.MM HH:mm")));
         else sb.append("⏳ Moliya menejeri tasdig'i kutilmoqda");
-        String s = sb.toString();
-        return s.length() > 1000 ? s.substring(0, 1000) : s;   // photo caption limiti 1024
+        return TextUtil.capCaption(sb.toString());
     }
 
     private List<Long> clickChatIds() {
@@ -328,20 +327,7 @@ public class DailyReportService {
         }
     }
 
-    private static Font font(int style, int size) {
-        for (String n : new String[]{"DejaVu Sans", "Liberation Sans", "Arial", "SansSerif"}) {
-            Font f = new Font(n, style, size);
-            if (!f.getFamily().equalsIgnoreCase("Dialog") || n.equals("SansSerif")) return f;
-        }
-        return new Font("SansSerif", style, size);
-    }
+    private static Font font(int style, int size) { return uz.kassa.bot.TableImage.font(style, size); }
 
-    private static String clip(Graphics2D g, String s, int maxW) {
-        if (s == null) return "";
-        FontMetrics fm = g.getFontMetrics();
-        if (fm.stringWidth(s) <= maxW) return s;
-        String t = s;
-        while (t.length() > 1 && fm.stringWidth(t + "…") > maxW) t = t.substring(0, t.length() - 1);
-        return t + "…";
-    }
+    private static String clip(Graphics2D g, String s, int maxW) { return uz.kassa.bot.TableImage.clip(g, s, maxW); }
 }

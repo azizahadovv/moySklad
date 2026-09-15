@@ -604,13 +604,17 @@ public class MoySkladClient {
         List<String> tags = new ArrayList<>();
         for (JsonNode t : r.path("tags")) tags.add(t.asText(""));
         JsonNode owner = r.path("owner");
+        // companyType "legalUZ"/"entrepreneurUZ"/"individualUZ" (O'zbekiston lokalizatsiyasi) — ИНН
+        // bu turda umuman "inn" maydonida emas, "mod__requisites__uz.inn" ichida saqlanadi.
+        String inn = r.path("inn").asText("");
+        if (inn.isBlank()) inn = r.path("mod__requisites__uz").path("inn").asText("");
         return new MsAgentFull(
                 r.path("id").asText(""),
                 r.path("name").asText(""),
                 r.path("phone").asText(""),
                 r.path("email").asText(""),
                 r.path("companyType").asText(""),
-                r.path("inn").asText(""),
+                inn,
                 r.path("legalTitle").asText(""),
                 r.path("legalAddress").asText(""),
                 tags,

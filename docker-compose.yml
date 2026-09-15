@@ -20,7 +20,8 @@ services:
     environment:
       TZ: Asia/Tashkent
       WEBAPP_PORT: 8080          # контейнер ичида ДОИМ 8080 (ташқари порт — HOST_PORT)
-      SESSIONS_DIR: /sessions    # 📨 TDLib userbot сессиялари (TgTdlibService)
+      SESSIONS_DIR: /sessions    # 📨 TDLib userbot сессиялари (эски, tdlib профили — ҳозир ишлатилмайди)
+      TGREADER_URL: http://tg-reader:8081   # 📨 Python (Telethon) хизмати — akkaunt ulash боshqaruvi
     # МУҲИМ: серверда ҳеч қандай порт ЧИҚАРИЛМАЙДИ — Caddy `app:8080` га ички тармоқ
     # орқали уланади. Шунинг учун сервердаги банд 8080 ҳеч нарсага халақит қилмайди.
     # Локал тест учун порт: docker-compose.dev.yml (HOST_PORT, BIND_ADDR).
@@ -30,6 +31,21 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  # 📨 Telegram akkaunt(lar)iga (Telethon/MTProto) кириб, faqat TG_SOURCE_BOT xabarlarini o'qiydi va
+  # HTTP orqali `app`ga uzatadi. mvn.mchv.eu tarmoq muammosidan mustaqil (PyPI orqali quriladi).
+  tg-reader:
+    build: ./tg-reader
+    env_file: .env
+    environment:
+      TZ: Asia/Tashkent
+      APP_URL: http://app:8080
+      SESSIONS_DIR: /sessions
+    volumes:
+      - tgreadersessions:/sessions
+    depends_on:
+      - app
     restart: unless-stopped
 
   # ИШЛАБ ЧИҚАРИШ: домен + автомат HTTPS (Let's Encrypt). `./deploy.sh` шуни кўтаради.
@@ -68,3 +84,4 @@ volumes:
   caddydata:
   caddyconfig:
   tgsessions:
+  tgreadersessions:

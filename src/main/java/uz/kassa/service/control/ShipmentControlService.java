@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import uz.kassa.bot.ReportDispatcher;
+import uz.kassa.bot.TableImage;
 import uz.kassa.domain.AppUser;
 import uz.kassa.domain.Reminder;
 import uz.kassa.domain.Role;
@@ -15,11 +17,13 @@ import uz.kassa.repo.ShipmentRepo;
 import uz.kassa.service.AuditService;
 import uz.kassa.service.moysklad.MoySkladClient;
 import uz.kassa.service.moysklad.MoySkladClient.MsDemand;
+import java.awt.Color;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import static uz.kassa.bot.Keyboards.*;
+import static uz.kassa.bot.TextUtil.capCaption;
 import static uz.kassa.bot.TextUtil.esc;
 import static uz.kassa.bot.TextUtil.fmt;
 
@@ -37,6 +41,8 @@ public class ShipmentControlService {
 
     static final DateTimeFormatter DF = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+    /** Fayl nomlari uchun (Excel/PNG) — ':' kabi belgilarsiz. */
+    static final DateTimeFormatter FDF = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm");
 
     private final ShipmentRepo repo;
     private final ReminderRepo reminderRepo;
@@ -47,6 +53,7 @@ public class ShipmentControlService {
     private final ControlNotifier notifier;
     private final AuditService audit;
     private final uz.kassa.service.NotifySwitches sw;
+    private final uz.kassa.webapp.ExcelReportService excel;
 
     /** balanceTick'da QARZ otgruzkalarni navbat bilan qayta o'qish (o'chirilganini sezish). */
     private int refreshCursor = 0;
@@ -506,11 +513,13 @@ public class ShipmentControlService {
             if (u == null || u.getTelegramId() == null) continue;
             long iss = e.getValue().stream().filter(x -> !x.getIssues().isEmpty()).count();
             long[] qv = quietByUser.get(e.getKey());
-            String text = "🔔 <b>Qarzdorlaringiz</b> — " + today.format(DF) + digestLines(e.getValue(), 25, false)
-                    + (qv == null ? "" : "🏦 Перечисление (bank): " + qv[0] + " ta · " + fmt(qv[1]) + " so'm — faqat ro'yxatda\n")
+            String head = "🔔 <b>Qarzdorlaringiz</b> — " + today.format(DF);
+            String tail = (qv == null ? "" : "🏦 Перечисление (bank): " + qv[0] + " ta · " + fmt(qv[1]) + " so'm — faqat ro'yxatda\n")
                     + (iss > 0 ? "\n📦 Kamchilikli otgruzkalar: <b>" + iss + "</b> ta (muddat/masul/telefon) — MoySklad'da to'ldiring\n" : "\n")
                     + "Ro'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар · ⚠️ Хатолар → 📦 Otgruzkalar";
-            notifier.sendOne(uz.kassa.service.NotifySwitches.OT_KUNLIK_XODIM, u, text, null);
+            var report = debtReport("Qarzdorlaringiz — " + today.format(DF), e.getValue(), false, head, tail,
+                    "qarzdorlar-" + u.getId() + "-" + today);
+            notifier.sendReportOne(uz.kassa.service.NotifySwitches.OT_KUNLIK_XODIM, u, report, null);
             sentUsers.add(u.getId());
         }
         // otdel rahbarlari — o'z otdeli
@@ -518,17 +527,48 @@ public class ShipmentControlService {
         for (Shipment s : debts) byKassa.computeIfAbsent(s.getKassaId() == null ? -1L : s.getKassaId(), k -> new ArrayList<>()).add(s);
         for (var e : byKassa.entrySet()) {
             if (e.getKey() < 0) continue;
-            String text = "🔔 <b>Otdel qarzdorlari</b> — " + esc(notifier.kassaName(e.getKey())) + " · " + today.format(DF)
-                    + digestLines(e.getValue(), 30, true);
+            String head = "🔔 <b>Otdel qarzdorlari</b> — " + esc(notifier.kassaName(e.getKey())) + " · " + today.format(DF);
+            var report = debtReport("Otdel qarzdorlari — " + notifier.kassaName(e.getKey()), e.getValue(), true, head, "",
+                    "otdel-qarzdorlari-" + e.getKey() + "-" + today);
             Set<AppUser> to = new LinkedHashSet<>(notifier.heads(e.getKey()));
             for (AppUser u : notifier.designated(e.getKey())) if (u.getKassaId() != null) to.add(u);
-            notifier.send(uz.kassa.service.NotifySwitches.OT_KUNLIK_RAHBAR, to, text, null);
+            notifier.sendReport(uz.kassa.service.NotifySwitches.OT_KUNLIK_RAHBAR, to, report, null);
         }
-        // SuperAdmin + belgilanganlar (otdelsiz) — umumiy
-        StringBuilder sb = new StringBuilder("🔔 <b>Qarzdorlar — umumiy</b> · " + today.format(DF) + "\n");
+        // SuperAdmin + belgilanganlar (otdelsiz) — umumiy: PNG jadval (otdel→xodim jamlama) + 2 ta Excel (jamlama + to'liq)
         long total = 0;
         for (Shipment s : debts) total += s.remain();
-        sb.append("Jami: <b>").append(debts.size()).append("</b> ta otgruzka · <b>").append(fmt(total)).append("</b> so'm\n\n");
+        List<TableImage.Row> aggRows = new ArrayList<>();
+        List<Object[]> aggExcel = new ArrayList<>();
+        for (var e : byKassa.entrySet()) {
+            long sum = 0;
+            String otdelName = e.getKey() < 0 ? "Otdel bog'lanmagan" : notifier.kassaName(e.getKey());
+            Map<String, long[]> byEmp = new LinkedHashMap<>();
+            for (Shipment s : e.getValue()) {
+                sum += s.remain();
+                long[] v = byEmp.computeIfAbsent(ownerLabel(s), k -> new long[2]);
+                v[0]++; v[1] += s.remain();
+            }
+            aggRows.add(TableImage.Row.group(otdelName + " — " + e.getValue().size() + " ta · " + fmt(sum) + " so'm"));
+            for (var x : byEmp.entrySet()) {
+                aggRows.add(TableImage.Row.of(x.getKey(), String.valueOf(x.getValue()[0]), fmt(x.getValue()[1])));
+                aggExcel.add(new Object[]{otdelName, x.getKey(), x.getValue()[0], x.getValue()[1]});
+            }
+        }
+        TableImage.Spec aggSpec = new TableImage.Spec("Qarzdorlar — umumiy · " + today.format(DF),
+                new TableImage.Col[]{TableImage.Col.of("Xodim"), TableImage.Col.right("Soni"), TableImage.Col.right("Summa")},
+                aggRows, null);
+        List<Shipment> overdue = debts.stream().filter(s -> s.getDueAt() != null && s.getDueAt().isBefore(today)).toList();
+        long noDue = debts.stream().filter(s -> s.getDueAt() == null).count();
+        long issN = debts.stream().filter(s -> !s.getIssues().isEmpty()).count();
+        String adminCaption = capCaption("🔔 <b>Qarzdorlar — umumiy</b> · " + today.format(DF) + "\n"
+                + "Jami: <b>" + debts.size() + "</b> ta otgruzka · <b>" + fmt(total) + "</b> so'm\n"
+                + (overdue.isEmpty() ? "" : "⚠️ Muddati o'tgan: <b>" + overdue.size() + "</b> ta\n")
+                + (noDue > 0 ? "❗ Muddati kiritilmagan: <b>" + noDue + "</b> ta\n" : "")
+                + (quietN > 0 ? "🏦 Перечисление (bank, jim): <b>" + quietN + "</b> ta · " + fmt(quietSum) + " so'm — faqat ro'yxatda\n" : "")
+                + (issN > 0 ? "📦 Kamchilikli otgruzkalar: <b>" + issN + "</b> ta (⚠️ Хатолар → 📦 Otgruzkalar)\n" : "")
+                + "\nTo'liq ro'yxat — biriktirilgan Excel'da.");
+        StringBuilder fb = new StringBuilder("🔔 <b>Qarzdorlar — umumiy</b> · " + today.format(DF) + "\n");
+        fb.append("Jami: <b>").append(debts.size()).append("</b> ta otgruzka · <b>").append(fmt(total)).append("</b> so'm\n\n");
         for (var e : byKassa.entrySet()) {
             long sum = 0;
             Map<String, long[]> byEmp = new LinkedHashMap<>();
@@ -537,22 +577,25 @@ public class ShipmentControlService {
                 long[] v = byEmp.computeIfAbsent(ownerLabel(s), k -> new long[2]);
                 v[0]++; v[1] += s.remain();
             }
-            sb.append("🏪 <b>").append(esc(e.getKey() < 0 ? "Otdel bog'lanmagan" : notifier.kassaName(e.getKey())))
+            fb.append("🏪 <b>").append(esc(e.getKey() < 0 ? "Otdel bog'lanmagan" : notifier.kassaName(e.getKey())))
               .append("</b>: ").append(e.getValue().size()).append(" ta · ").append(fmt(sum)).append(" so'm\n");
             for (var x : byEmp.entrySet())
-                sb.append("   • ").append(esc(x.getKey())).append(": ").append(x.getValue()[0]).append(" ta · ")
+                fb.append("   • ").append(esc(x.getKey())).append(": ").append(x.getValue()[0]).append(" ta · ")
                   .append(fmt(x.getValue()[1])).append("\n");
         }
-        List<Shipment> overdue = debts.stream().filter(s -> s.getDueAt() != null && s.getDueAt().isBefore(today)).toList();
-        if (!overdue.isEmpty()) sb.append("\n⚠️ <b>Muddati o'tganlar</b>:").append(digestLines(overdue, 15, true));
-        long noDue = debts.stream().filter(s -> s.getDueAt() == null).count();
-        if (noDue > 0) sb.append("\n❗ Muddati kiritilmagan: <b>").append(noDue).append("</b> ta");
-        if (quietN > 0) sb.append("\n🏦 Перечисление (bank, jim): <b>").append(quietN).append("</b> ta · ").append(fmt(quietSum)).append(" so'm — faqat ro'yxatda");
-        long issN = debts.stream().filter(s -> !s.getIssues().isEmpty()).count();
-        if (issN > 0) sb.append("\n📦 Kamchilikli otgruzkalar: <b>").append(issN).append("</b> ta (⚠️ Хатолар → 📦 Otgruzkalar)");
+        if (!overdue.isEmpty()) fb.append("\n⚠️ <b>Muddati o'tganlar</b>:").append(digestLines(overdue, 15, true));
+        if (noDue > 0) fb.append("\n❗ Muddati kiritilmagan: <b>").append(noDue).append("</b> ta");
+        if (quietN > 0) fb.append("\n🏦 Перечисление (bank, jim): <b>").append(quietN).append("</b> ta · ").append(fmt(quietSum)).append(" so'm — faqat ro'yxatda");
+        if (issN > 0) fb.append("\n📦 Kamchilikli otgruzkalar: <b>").append(issN).append("</b> ta (⚠️ Хатолар → 📦 Otgruzkalar)");
+        byte[] aggXlsx = excel.buildTable("Umumiy", new String[]{"Otdel", "Xodim", "Soni", "Summa"}, aggExcel);
+        byte[] fullXlsx = excel.buildDebts(debts, notifier::userName, notifier::kassaName, cfg.zone());
+        var adminReport = new ReportDispatcher.Report(TableImage.render(aggSpec), "qarzdorlar-umumiy-" + today + ".png",
+                adminCaption, fb.toString(), List.of(
+                        new ReportDispatcher.Doc(aggXlsx, "qarzdorlar-umumiy-" + today + ".xlsx"),
+                        new ReportDispatcher.Doc(fullXlsx, "qarzdorlar-toliq-" + today + ".xlsx")));
         Set<AppUser> admins = new LinkedHashSet<>(notifier.superadmins());
         for (AppUser u : notifier.designated(null)) if (u.getKassaId() == null) admins.add(u);
-        notifier.send(uz.kassa.service.NotifySwitches.OT_KUNLIK_ADMIN, admins, sb.toString(), null);
+        notifier.sendReport(uz.kassa.service.NotifySwitches.OT_KUNLIK_ADMIN, admins, adminReport, null);
     }
 
 
@@ -596,11 +639,13 @@ public class ShipmentControlService {
             if (u == null || u.getTelegramId() == null) continue;
             List<Shipment> list = e.getValue();
             long overdue = list.stream().filter(x -> x.getDueAt() != null && x.getDueAt().isBefore(today)).count();
-            String text = "🔔 <b>Qarz eslatmasi</b> — " + today.format(DF) + digestLines(list, 30, false)
-                    + (overdue > 0 ? "⚠️ Muddati o'tgan: <b>" + overdue + "</b> ta" + (repeat > 0 ? " — har " + repeat + " kunda eslatiladi" : "") + "\n" : "")
+            String head = "🔔 <b>Qarz eslatmasi</b> — " + today.format(DF);
+            String tail = (overdue > 0 ? "⚠️ Muddati o'tgan: <b>" + overdue + "</b> ta" + (repeat > 0 ? " — har " + repeat + " kunda eslatiladi" : "") + "\n" : "")
                     + "\nMijoz bilan bog'lanib to'lovni undiring. To'langach bot o'zi yopadi.\n"
                     + "Ro'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар";
-            notifier.sendOne(uz.kassa.service.NotifySwitches.OT_QARZ_ESLATMA, u, text, null);
+            var report = debtReport("Qarz eslatmasi — " + today.format(DF), list, false, head, tail,
+                    "qarz-eslatmasi-" + u.getId() + "-" + today);
+            notifier.sendReportOne(uz.kassa.service.NotifySwitches.OT_QARZ_ESLATMA, u, report, null);
             sent++;
         }
         if (sent > 0) log.info("Qarzdor eslatmalari: {} xodimga yuborildi", sent);
@@ -608,7 +653,7 @@ public class ShipmentControlService {
 
 
     /** Xodimning barcha ochiq qarzdorlari (ega + Масъул), kunlik jamlama ko'rinishida — Telegram ulanganda. Bo'sh — null. */
-    public String debtorsDigest(AppUser u) {
+    public ReportDispatcher.Report debtorsDigest(AppUser u) {
         List<Shipment> list = new ArrayList<>(repo.findByControlStatusAndOwnerUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()));
         for (Shipment s : repo.findByControlStatusAndMasulUserIdOrderByDueAtAscMomentAsc(Shipment.Status.QARZ, u.getId()))
             if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
@@ -621,12 +666,12 @@ public class ShipmentControlService {
         loud.sort(Comparator.comparing((Shipment s) -> s.getDueAt() == null ? LocalDate.MAX : s.getDueAt())
                 .thenComparing(s -> s.getMoment() == null ? LocalDateTime.MIN : s.getMoment()));
         LocalDate today = LocalDate.now(cfg.zone());
-        return "🧾 <b>Qarzdorlaringiz</b> — " + today.format(DF)
-                + (loud.isEmpty() ? " (0 ta)\n" : digestLines(loud, 25, false))
-                + (quietN == 0 ? "" : "🏦 Перечисление (bank): " + quietN + " ta · " + fmt(quietSum) + " so'm — faqat ro'yxatda\n")
+        String head = "🧾 <b>Qarzdorlaringiz</b> — " + today.format(DF);
+        String tail = (quietN == 0 ? "" : "🏦 Перечисление (bank): " + quietN + " ta · " + fmt(quietSum) + " so'm — faqat ro'yxatda\n")
                 + "\nEslatmalar: muddatdan " + (cfg.remindBefore().isEmpty() ? "" : cfg.remindBefore() + " kun oldin, ")
                 + "muddat kuni" + (cfg.remindRepeatDays() > 0 ? ", o'tgach har " + cfg.remindRepeatDays() + " kunda" : "")
                 + " · kunlik jamlama " + cfg.dailyTime() + "\nRo'yxat: 🤝 КОНТРАГЕНТ → 🧾 Қарздорлар";
+        return debtReport("Qarzdorlaringiz — " + today.format(DF), loud, false, head, tail, "qarzdorlaringiz-" + u.getId() + "-" + today);
     }
 
 
@@ -641,10 +686,134 @@ public class ShipmentControlService {
             if (++n > max) { sb.append("… yana ").append(list.size() - max).append(" ta\n"); break; }
             sb.append(n).append(". ").append(esc(s.getAgentName())).append(" · №").append(esc(s.getDocNo()))
               .append(" · <b>").append(fmt(s.remain())).append("</b> · ").append(dueLabel(s, today));
+            if (s.getAgentBalance() != null)
+                sb.append(" · 📊 balans: ").append(s.getAgentBalance() < 0 ? "−" : "")
+                  .append(fmt(Math.abs(s.getAgentBalance())));
             if (withOwner) sb.append(" · 👤 ").append(esc(ownerLabel(s)));
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+
+    /* ==================== 🖼 RASM+EXCEL HISOBOTLAR ==================== */
+
+    private static final int IMG_ROW_CAP = 60;
+
+    private static TableImage.Col[] shipmentCols(boolean withOwner) {
+        List<TableImage.Col> c = new ArrayList<>(List.of(TableImage.Col.of("Kontragent"), TableImage.Col.of("№"),
+                TableImage.Col.right("Qoldiq"), TableImage.Col.of("Muddat"), TableImage.Col.right("Balans")));
+        if (withOwner) c.add(TableImage.Col.of("Xodim"));
+        return c.toArray(new TableImage.Col[0]);
+    }
+
+    /** dueLabel() kabi, lekin emojisiz — rasm jadvalida headless shrift emoji chizmaydi (bo'sh katakcha bo'lib qoladi), rang bilan yetarli. */
+    private static String dueLabelPlain(Shipment s, LocalDate today) {
+        if (s.getDueAt() == null) return "muddat yo'q";
+        long left = ChronoUnit.DAYS.between(today, s.getDueAt());
+        if (left > 0) return left + " kun qoldi";
+        if (left == 0) return "BUGUN";
+        return (-left) + " kun o'tdi";
+    }
+
+    private TableImage.Row shipmentRow(Shipment s, boolean withOwner, LocalDate today) {
+        List<String> cells = new ArrayList<>(List.of(s.getAgentName(), s.getDocNo(), fmt(s.remain()), dueLabelPlain(s, today),
+                s.getAgentBalance() == null ? "—" : (s.getAgentBalance() < 0 ? "−" : "") + fmt(Math.abs(s.getAgentBalance()))));
+        if (withOwner) cells.add(ownerLabel(s));
+        Color[] colors = new Color[cells.size()];
+        if (s.getDueAt() == null || s.getDueAt().isBefore(today)) colors[3] = TableImage.WARN;
+        return TableImage.Row.colored(colors, cells.toArray(new String[0]));
+    }
+
+    private List<TableImage.Row> shipmentRows(List<Shipment> list, boolean withOwner) {
+        LocalDate today = LocalDate.now(cfg.zone());
+        List<TableImage.Row> rows = new ArrayList<>();
+        int n = 0;
+        for (Shipment s : list) {
+            if (++n > IMG_ROW_CAP) {
+                rows.add(TableImage.Row.group("… yana " + (list.size() - IMG_ROW_CAP) + " ta — to'liq ro'yxat Excel faylda"));
+                break;
+            }
+            rows.add(shipmentRow(s, withOwner, today));
+        }
+        return rows;
+    }
+
+    /**
+     * Qarzdorlar ro'yxati — PNG jadval + to'liq Excel. {@code captionHead}/{@code captionTail} — hozirgi
+     * matn xabaridagi sarlavha/eslatma qismlari (ro'yxatsiz — u endi rasmda); {@code fallbackText} rasm
+     * ketmasa eski to'liq matn ko'rinishida qoladi (hech narsa yo'qolmasin).
+     */
+    private ReportDispatcher.Report debtReport(String title, List<Shipment> list, boolean withOwner,
+                                                String captionHead, String captionTail, String fileBase) {
+        TableImage.Spec spec = new TableImage.Spec(title, shipmentCols(withOwner), shipmentRows(list, withOwner), null);
+        long total = 0; for (Shipment s : list) total += s.remain();
+        String summary = " (" + list.size() + " ta, jami <b>" + fmt(total) + "</b> so'm)\n";
+        String caption = capCaption(captionHead + summary + captionTail);
+        String fallback = captionHead + digestLines(list, 60, withOwner) + captionTail;
+        byte[] xlsx = excel.buildDebts(list, notifier::userName, notifier::kassaName, cfg.zone());
+        return new ReportDispatcher.Report(TableImage.render(spec), fileBase + ".png", caption, fallback,
+                List.of(new ReportDispatcher.Doc(xlsx, fileBase + ".xlsx")));
+    }
+
+    private static TableImage.Col[] issueCols() {
+        return new TableImage.Col[]{TableImage.Col.of("№Otgruzka"), TableImage.Col.of("Kontragent"),
+                TableImage.Col.right("Qoldiq"), TableImage.Col.of("Kamchilik")};
+    }
+
+    private TableImage.Row issueRow(Shipment s) {
+        return TableImage.Row.of(s.getDocNo(), s.getAgentName(), fmt(s.remain()), issueLabelsPlain(s.issueList()));
+    }
+
+    /** Kamchilikli otgruzkalar — PNG jadval + Excel. {@code extraHead} — ustiga qo'shimcha ogohlantirish (masalan "xodim bog'lanmagan"), null — yo'q. */
+    private ReportDispatcher.Report issuesReport(List<Shipment> list, String extraHead, String fileBase) {
+        list.sort(Comparator.comparing((Shipment s) -> s.getMoment() == null ? LocalDateTime.MIN : s.getMoment()).reversed());
+        List<TableImage.Row> rows = new ArrayList<>();
+        int n = 0;
+        for (Shipment s : list) {
+            if (++n > IMG_ROW_CAP) { rows.add(TableImage.Row.group("… yana " + (list.size() - IMG_ROW_CAP) + " ta — to'liq ro'yxat Excel faylda")); break; }
+            rows.add(issueRow(s));
+        }
+        TableImage.Spec spec = new TableImage.Spec("Otgruzkalarda kamchilik bor", issueCols(), rows, null);
+        String prefix = extraHead == null ? "" : extraHead + "\n\n";
+        String head = prefix + "📦 <b>Otgruzkalarda kamchilik bor</b> — " + list.size() + " ta (" + issueSummary(list) + ")";
+        String tail = "\nMoySklad'da otgruzkani ochib to'ldiring: «Тўлов муддати» — mijoz qachon to'laydi"
+                + (cfg.ruleOn("O2") ? ", «Масъул»" : "") + ". Bot o'zi tekshiradi.\n"
+                + "Ro'yxat: 🤝 КОНТРАГЕНТ → ⚠️ Хатолар → 📦 Otgruzkalar";
+        String caption = capCaption(head + "\n" + tail);
+        String fallback = prefix + issuesMessage(list);
+        byte[] xlsx = excel.buildDebts(list, notifier::userName, notifier::kassaName, cfg.zone());
+        return new ReportDispatcher.Report(TableImage.render(spec), fileBase + ".png", caption, fallback,
+                List.of(new ReportDispatcher.Doc(xlsx, fileBase + ".xlsx")));
+    }
+
+    /** Eskalatsiya — xodim kesimida guruhlangan PNG jadval (👤 Xodim — N ta band + qatorlar) + Excel. */
+    private ReportDispatcher.Report escalationReport(String title, List<Shipment> list, String head, String tail, String fileBase) {
+        Map<String, List<Shipment>> byOwner = new LinkedHashMap<>();
+        for (Shipment s : list) {
+            String who = s.getOwnerUserId() != null ? notifier.userName(s.getOwnerUserId())
+                    : (s.getOwnerName().isBlank() ? "noma'lum xodim" : s.getOwnerName());
+            byOwner.computeIfAbsent(who, k -> new ArrayList<>()).add(s);
+        }
+        List<TableImage.Row> rows = new ArrayList<>();
+        int n = 0;
+        outer:
+        for (var e : byOwner.entrySet()) {
+            rows.add(TableImage.Row.group(e.getKey() + " — " + e.getValue().size() + " ta"));
+            for (Shipment s : e.getValue()) {
+                if (++n > IMG_ROW_CAP) {
+                    rows.add(TableImage.Row.group("… yana " + (list.size() - IMG_ROW_CAP) + " ta — to'liq ro'yxat Excel faylda"));
+                    break outer;
+                }
+                rows.add(issueRow(s));
+            }
+        }
+        TableImage.Spec spec = new TableImage.Spec(title, issueCols(), rows, null);
+        String caption = capCaption(head + "\n" + tail);
+        String fallback = head + "\n" + escalationLines(list) + tail;
+        byte[] xlsx = excel.buildDebts(list, notifier::userName, notifier::kassaName, cfg.zone());
+        return new ReportDispatcher.Report(TableImage.render(spec), fileBase + ".png", caption, fallback,
+                List.of(new ReportDispatcher.Doc(xlsx, fileBase + ".xlsx")));
     }
 
 
@@ -708,14 +877,19 @@ public class ShipmentControlService {
             else unlinked.computeIfAbsent(s.getOwnerName().isBlank() ? "noma'lum" : s.getOwnerName(), k -> new ArrayList<>()).add(s);
         }
         Instant now = Instant.now();
+        String today = LocalDate.now(cfg.zone()).format(FDF);
         for (var e : byUser.entrySet()) {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (!sw.on(uz.kassa.service.NotifySwitches.OT_KAMCHILIK)) { /* 🔕 Хабарномалар — faqat belgilanadi */ }
-            else if (u != null && u.getTelegramId() != null) notifier.sendOne(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, u, issuesMessage(e.getValue()), null);
-            else notifier.send(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, notifier.superadmins(), "⚠️ <i>Xodim " + esc(u == null ? "#" + e.getKey() : u.getFullName())
-                    + " Telegram'ga ulanmagan — pastdagi tugma bilan ulang.</i>" + notifier.inviteLine(u)
-                    + "\n\n" + issuesMessage(e.getValue()),
-                    ControlNotifier.withLink(null, u));
+            else if (u != null && u.getTelegramId() != null) {
+                var report = issuesReport(e.getValue(), null, "kamchilikli-otgruzkalar-" + u.getId() + "-" + today);
+                notifier.sendReportOne(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, u, report, null);
+            } else {
+                String extraHead = "⚠️ <i>Xodim " + esc(u == null ? "#" + e.getKey() : u.getFullName())
+                        + " Telegram'ga ulanmagan — pastdagi tugma bilan ulang.</i>" + notifier.inviteLine(u);
+                var report = issuesReport(e.getValue(), extraHead, "kamchilikli-otgruzkalar-" + e.getKey() + "-" + today);
+                notifier.sendReport(uz.kassa.service.NotifySwitches.OT_KAMCHILIK, notifier.superadmins(), report, ControlNotifier.withLink(null, u));
+            }
             for (Shipment s : e.getValue()) { s.setIssuesNotifiedAt(now); repo.save(s); }
         }
         if (!unlinked.isEmpty()) {
@@ -755,22 +929,28 @@ public class ShipmentControlService {
             Long kassa = e.getKey() < 0 ? null : e.getKey();
             Set<AppUser> heads = notifier.heads(kassa);
             if (heads.isEmpty()) continue;   // rahbar yo'q — 2-bosqichda admin oladi
-            if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA))
-            notifier.send(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA, heads, "\u23F0 <b>Otgruzka kamchiliklari " + cfg.esc1Min() + " daqiqadan beri tuzatilmadi</b> — "
-                    + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa)) + "\n"
-                    + escalationLines(e.getValue())
-                    + "\nXodimlar tuzatishini nazorat qiling. " + cfg.esc2Min()
-                    + " daqiqada tuzatilmasa admin'ga «tuzatilmadi» xabari boradi.", null);
+            if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA)) {
+                String head = "⏰ <b>Otgruzka kamchiliklari " + cfg.esc1Min() + " daqiqadan beri tuzatilmadi</b> — "
+                        + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa));
+                String tail = "Xodimlar tuzatishini nazorat qiling. " + cfg.esc2Min()
+                        + " daqiqada tuzatilmasa admin'ga «tuzatilmadi» xabari boradi.";
+                var report = escalationReport("Otgruzka kamchiliklari — eskalatsiya", e.getValue(), head, tail,
+                        "otgruzka-eskalatsiya-" + (kassa == null ? 0 : kassa) + "-" + LocalDateTime.now(cfg.zone()).format(FDF));
+                notifier.sendReport(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA, heads, report, null);
+            }
             audit.log(null, "OTG_KAMCHILIK_ESKALATSIYA", "kassa", kassa, e.getValue().size() + " ta -> rahbar");
         }
         for (var e : st2.entrySet()) {
             for (Shipment s : e.getValue()) { s.setIssuesEscalated2At(now); repo.save(s); }
             Long kassa = e.getKey() < 0 ? null : e.getKey();
-            if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA))
-            notifier.send(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA, notifier.escalation(kassa), "\u274C <b>TUZATILMADI — otgruzka kamchiliklari " + cfg.esc2Min()
-                    + " daqiqadan beri ochiq</b> — " + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa)) + "\n"
-                    + escalationLines(e.getValue())
-                    + "\nXodim ham, otdel rahbari ham tuzatmadi.", null);
+            if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA)) {
+                String head = "❌ <b>TUZATILMADI — otgruzka kamchiliklari " + cfg.esc2Min()
+                        + " daqiqadan beri ochiq</b> — " + esc(kassa == null ? "otdel bog'lanmagan" : notifier.kassaName(kassa));
+                String tail = "Xodim ham, otdel rahbari ham tuzatmadi.";
+                var report = escalationReport("Otgruzka kamchiliklari — tuzatilmadi", e.getValue(), head, tail,
+                        "otgruzka-tuzatilmadi-" + (kassa == null ? 0 : kassa) + "-" + LocalDateTime.now(cfg.zone()).format(FDF));
+                notifier.sendReport(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA, notifier.escalation(kassa), report, null);
+            }
             audit.log(null, "OTG_KAMCHILIK_TUZATILMADI", "kassa", kassa, e.getValue().size() + " ta -> admin");
         }
     }
@@ -800,12 +980,12 @@ public class ShipmentControlService {
      * Xodimga tegishli (ega yoki Масъул) kamchilikli otgruzkalar — Telegram ulanganda bir marta yuborish uchun.
      * Jim statuslar chiqarib tashlanadi. Bo'sh bo'lsa null.
      */
-    public String pendingIssuesText(AppUser u) {
+    public ReportDispatcher.Report pendingIssuesReport(AppUser u) {
         List<Shipment> list = new ArrayList<>(repo.findByIssuesNotAndOwnerUserIdOrderByMomentDesc("", u.getId()));
         for (Shipment s : repo.findByIssuesNotAndMasulUserIdOrderByMomentDesc("", u.getId()))
             if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
         list.removeIf(s -> cfg.isQuietState(s.getState()));
-        return list.isEmpty() ? null : issuesMessage(list);
+        return list.isEmpty() ? null : issuesReport(list, null, "kamchilikli-otgruzkalar-" + u.getId() + "-" + LocalDate.now(cfg.zone()).format(FDF));
     }
 
     private String issuesMessage(List<Shipment> list) {
@@ -845,6 +1025,22 @@ public class ShipmentControlService {
             case "O3" -> "🏷 status yo'q";
             case "O4" -> "💬 izoh yo'q";
             case "O5" -> "📞 kontragent telefoni yo'q";
+            default -> code;
+        };
+    }
+
+    /** issueLabels() kabi, lekin emojisiz — rasm jadvali uchun (headless shrift emoji chizmaydi). */
+    private static String issueLabelsPlain(List<String> codes) {
+        return String.join(", ", codes.stream().map(ShipmentControlService::issueShortPlain).toList());
+    }
+
+    private static String issueShortPlain(String code) {
+        return switch (code) {
+            case "O1" -> "muddat yo'q";
+            case "O2" -> "Масъул yo'q";
+            case "O3" -> "status yo'q";
+            case "O4" -> "izoh yo'q";
+            case "O5" -> "kontragent telefoni yo'q";
             default -> code;
         };
     }

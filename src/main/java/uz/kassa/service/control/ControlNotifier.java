@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import uz.kassa.bot.ReportDispatcher;
 import uz.kassa.bot.Sender;
 import uz.kassa.domain.AppUser;
 import uz.kassa.domain.Kassa;
@@ -31,6 +32,7 @@ public class ControlNotifier {
     private final KassaHeadRepo headRepo;
     private final KassaRepo kassaRepo;
     private final Sender sender;
+    private final ReportDispatcher dispatcher;
     private final ControlConfig cfg;
     private final InviteService invite;
     private final uz.kassa.service.NotifySwitches sw;
@@ -134,6 +136,28 @@ public class ControlNotifier {
 
     public void sendOne(String code, AppUser u, String text, InlineKeyboardMarkup kb) {
         if (u != null) send(code, List.of(u), text, kb);
+    }
+
+    /**
+     * Rasm (PNG jadval) + hujjat(lar) (Excel) — 🔕 Хабарномалар kodi bilan filtrlangan auditoriyaga.
+     * Bitta kontent bir nechta oluvchiga: birinchisiga rasm yuklanadi, qolganlariga file_id orqali
+     * qayta yuklamasdan yuboriladi. Rasm ketmasa — fallbackText oddiy xabar sifatida (hech narsa yo'qolmaydi).
+     */
+    public void sendReport(String code, Collection<AppUser> users, ReportDispatcher.Report r, InlineKeyboardMarkup kb) {
+        List<AppUser> to = sw.filter(code, users);
+        if (to.isEmpty()) return;
+        Set<Long> sent = new HashSet<>();
+        String fileId = null;
+        for (AppUser u : to) {
+            Long tg = u.getTelegramId();
+            if (tg == null || !sent.add(tg)) continue;
+            try { fileId = dispatcher.send(tg, r, fileId, kb); }
+            catch (Exception e) { log.warn("Nazorat hisoboti yuborilmadi ({}): {}", u.getFullName(), e.getMessage()); }
+        }
+    }
+
+    public void sendReportOne(String code, AppUser u, ReportDispatcher.Report r, InlineKeyboardMarkup kb) {
+        if (u != null) sendReport(code, List.of(u), r, kb);
     }
 
     public String kassaName(Long kassaId) {

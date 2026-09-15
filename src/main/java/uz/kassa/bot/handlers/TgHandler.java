@@ -7,27 +7,35 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import uz.kassa.bot.Sender;
 import uz.kassa.bot.Session;
 import uz.kassa.domain.AppUser;
+import uz.kassa.domain.ClickAccount;
 import uz.kassa.domain.Kassa;
 import uz.kassa.domain.Role;
 import uz.kassa.domain.TgAkkaunt;
+import uz.kassa.domain.TgCard;
 import uz.kassa.domain.TgXabar;
 import uz.kassa.repo.AppUserRepo;
 import uz.kassa.repo.KassaRepo;
 import uz.kassa.service.AuditService;
+import uz.kassa.service.tg.TgAccountGateway;
 import uz.kassa.service.tg.TgReaderConfig;
 import uz.kassa.service.tg.TgReaderService;
+import org.springframework.scheduling.annotation.Scheduled;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import static uz.kassa.bot.Keyboards.*;
 import static uz.kassa.bot.TextUtil.esc;
 import static uz.kassa.bot.TextUtil.fmt;
 
 /**
  * 📨 Bot xabarlari — ko'rish (tg:*) va SuperAdmin sozlamasi (⚙️ Настройка → 🔗 MoySklad → 📨 Бот хабарлари, a:tg*).
- * Ulangan akkauntlar TDLib Java mijozi orqali (docs/BOT-XABARLARI.md). Bu yerda faqat jurnal, tekshiruv sozlamasi va ro'yxat.
+ * Ulangan akkauntlar {@code tg-reader} (Python/Telethon) xizmati orqali, {@link uz.kassa.service.tg.TgReaderHttpGateway}
+ * bilan HTTP orqali (docs/BOT-XABARLARI.md). Bu yerda faqat jurnal, tekshiruv sozlamasi va ro'yxat.
  */
 @Component
 @RequiredArgsConstructor
@@ -42,13 +50,22 @@ public class TgHandler {
     private final TgReaderService svc;
     private final uz.kassa.service.tg.TgCardReport cardReport;
     private final uz.kassa.repo.TgCardRepo cardRepo;
+    private final uz.kassa.repo.ClickAccountRepo clickRepo;
     private final TgReaderConfig cfg;
     private final KassaRepo kassaRepo;
     private final AppUserRepo userRepo;
     private final AuditService audit;
-    private final org.springframework.beans.factory.ObjectProvider<uz.kassa.service.tg.TgAccountGateway> gatewayProvider;
+    private final org.springframework.beans.factory.ObjectProvider<TgAccountGateway> gatewayProvider;
 
-    private uz.kassa.service.tg.TgAccountGateway gw() { return gatewayProvider.getIfAvailable(); }
+    private TgAccountGateway gw() { return gatewayProvider.getIfAvailable(); }
+
+    private static final String QR_CAPTION = "📷 <b>QR kodni skanerlang</b>\n\n"
+            + "Telefoningizda: Telegram → <b>Sozlamalar</b> → <b>Ulangan qurilmalar</b> → <b>Qurilma ulash</b> → shu rasmni kamerada skanerlang.\n\n"
+            + "<i>Skanerlash uchun vaqtingiz bor — kod o'zi muntazam yangilanib turadi.</i>";
+
+    /** QR ko'rsatilgan xabar — fon rejimida (pollQr) holatini kuzatib, natijaga qarab tahrirlaymiz. Kalit — bog'lanadigan xodim (AppUser id). */
+    private record QrPending(long actorId, Session session, long chatId, int msgId, int lastGen) {}
+    private final Map<Long, QrPending> qrPending = new ConcurrentHashMap<>();
 
     /* ==================== 📨 ko'rish (tg:*) ==================== */
 
@@ -60,9 +77,10 @@ public class TgHandler {
         // xodim (har rol) uchun: o'z akkauntini ulash
         switch (cmd) {
             case "my" -> { myScreen(u, s, chatId, msgId); return true; }
-            case "add" -> { askPhone(u, s, chatId, msgId); return true; }
+            case "add" -> { startQr(u, s, u.getId(), chatId, msgId); return true; }
             case "dc" -> { disconnectOwn(u, s, arg, chatId, msgId); return true; }
-            case "cancel" -> { String ph = s.getStr("tgPhone"); if (gw() != null && ph != null) gw().cancelLogin(ph); s.reset(); myScreen(u, s, chatId, msgId); return true; }
+            case "test" -> { testOwn(u, arg, chatId); return true; }
+            case "cancel" -> { cancelQr(s); s.reset(); myScreen(u, s, chatId, msgId); return true; }
             default -> { }
         }
         // qolgani — buxgalter/admin
@@ -130,8 +148,52 @@ public class TgHandler {
         if (!cfg.enabled()) sb.append("\n\n⚪ Modul o'chirilgan.");
         List<List<InlineKeyboardButton>> kb = new ArrayList<>();
         if (u.getRole() != Role.KASSIR) kb.add(irow(btn("📤 Guruhga yuborish", "tg:cr")));
+        if (u.getRole() == Role.SUPERADMIN) kb.add(irow(btn("🔗 📲 Клик билан боғлаш", "a:tgcl")));
         kb.add(irow(btn("📨 Xabarlar", "tg:m"), btn("⬅️ Настройка", "a:p:set")));
         sender.edit(chatId, msgId, sb.toString(), inline(kb));
+    }
+
+    /** 🔗 Kartani ClickAccount'ga bog'lash ro'yxati — bog'lansa, karta balansi 📲 Клик hisobotidagi
+     * "карта қолдиғи"ni AVTOMAT to'ldiradi (qo'lda /karta o'rniga), MoySklad bilan solishtiruv o'zi ishlaydi. */
+    private void cardLinkList(long chatId, int msgId) {
+        StringBuilder sb = new StringBuilder("🔗 <b>Kartalarni Клик ҳисобига боғлаш</b>\n\n"
+                + "<i>Боғлангач, карта қолдиғи 📲 Клик ҳисоботидаги MoySklad солиштирувида АВТОМАТ ишлатилади (қўлда /karta киритиш ўрнига).</i>\n\n");
+        List<TgCard> cards = cardRepo.findAllByOrderByNameAscMaskAsc();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        if (cards.isEmpty()) sb.append("Ҳали карта хабари келмаган.");
+        for (TgCard c : cards) {
+            String linked = c.getClickAccountId() == null ? "—"
+                    : clickRepo.findById(c.getClickAccountId()).map(ClickAccount::getName).orElse("?");
+            rows.add(irow(btn(cut((c.getName().isBlank() ? "Karta" : c.getName()) + " *" + c.getMask() + " → " + linked, 40), "a:tgcli:" + c.getId())));
+        }
+        rows.add(irow(btn("⬅️ Orqaga", "tg:c")));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    private void cardLinkPick(String cardIdStr, long chatId, int msgId) {
+        long cardId = Long.parseLong(cardIdStr);
+        TgCard card = cardRepo.findById(cardId).orElse(null);
+        if (card == null) { cardLinkList(chatId, msgId); return; }
+        StringBuilder sb = new StringBuilder("🔗 <b>" + esc(card.getName().isBlank() ? "Karta" : card.getName()) + " *" + esc(card.getMask()) + "</b>\n\nQaysi Клик ҳисобига боғлансин?");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("🚫 Bog'lamaslik", "a:tgcls:" + cardId + ".0")));
+        for (ClickAccount ca : clickRepo.findByActiveTrueOrderByIdAsc())
+            rows.add(irow(btn((ca.getId().equals(card.getClickAccountId()) ? "✅ " : "") + cut(ca.getName(), 34), "a:tgcls:" + cardId + "." + ca.getId())));
+        rows.add(irow(btn("⬅️ Orqaga", "a:tgcl")));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    private void cardLinkSet(AppUser actor, String arg, long chatId, int msgId) {
+        String[] pa = arg.split("\\.");
+        long cardId = Long.parseLong(pa[0]);
+        long clickId = Long.parseLong(pa[1]);
+        TgCard card = cardRepo.findById(cardId).orElse(null);
+        if (card != null) {
+            card.setClickAccountId(clickId == 0 ? null : clickId);
+            cardRepo.save(card);
+            audit.log(actor.getId(), "TG_KARTA_KLIK", "tg_card", cardId, arg);
+        }
+        cardLinkList(chatId, msgId);
     }
 
     /* ==================== 🔗 xodim: o'z akkaunti ==================== */
@@ -144,25 +206,96 @@ public class TgHandler {
         if (gw() == null || !gw().available())
             sb.append("⚠️ Serverda hali yoqilmagan (TG_API_ID/HASH kerak). Admin sozlaydi.\n");
         else if (mine.isEmpty())
-            sb.append("Sizda ulangan akkaunt yo'q.\n<i>«➕ Ulash» → telefon raqamingizni kiriting → Telegram'dan kelgan kodni kiriting. Shundan so'ng bot o'sha akkauntga kelgan " + esc(cfg.sourceBot().isBlank() ? "bot" : "@" + cfg.sourceBot()) + " xabarlarini o'qiy boshlaydi.</i>\n");
+            sb.append("Sizda ulangan akkaunt yo'q.\n<i>«➕ Ulash» tugmasini bosing — QR kod chiqadi, uni telefoningizdagi Telegram ilovasi bilan (Sozlamalar → Ulangan qurilmalar → Qurilma ulash) skanerlang. Shundan so'ng bot o'sha akkauntga kelgan " + esc(cfg.sourceBot().isBlank() ? "bot" : "@" + cfg.sourceBot()) + " xabarlarini o'qiy boshlaydi.</i>\n");
         else for (TgAkkaunt a : mine) {
             sb.append(online(a) ? "🟢 " : "🔴 ").append("<b>").append(esc(a.getPhone())).append("</b>")
-              .append(a.isActive() ? "" : " · ⏸ o'chirilgan").append("\n");
+              .append(a.isActive() ? "" : " · ⏸ to'xtatilgan").append("\n");
             if (a.getLastError() != null) sb.append("   ⚠️ ").append(esc(a.getLastError())).append("\n");
         }
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         boolean can = gw() != null && gw().available();
         if (can) rows.add(irow(btn("➕ Ulash", "tg:add")));
-        for (TgAkkaunt a : mine) rows.add(irow(btn("🔌 Uzish · " + a.getPhone(), "tg:dc:" + a.getPhone())));
+        for (TgAkkaunt a : mine) rows.add(irow(btn("✅ Tekshirish · " + a.getPhone(), "tg:test:" + a.getPhone()), btn("🔌 Uzish", "tg:dc:" + a.getPhone())));
         show(chatId, msgId, sb.toString(), inline(rows));
     }
 
-    private void askPhone(AppUser u, Session s, long chatId, int msgId) {
-        if (gw() == null || !gw().available()) { myScreen(u, s, chatId, msgId); return; }
-        s.state = Session.State.TG_PHONE;
-        sender.edit(chatId, msgId, "📱 Telefon raqamingizni xalqaro shaklda kiriting (masalan <code>+998901234567</code>):\n"
-                + "<i>Shu raqamli Telegram akkauntga " + esc(cfg.sourceBot().isBlank() ? "bot" : "@" + cfg.sourceBot()) + " xabarlari keladi.</i>",
-                inline(List.of(irow(btn("❌ Bekor", "tg:cancel")))));
+    /** Xodim o'z akkauntini tekshiradi — «Saqlangan xabarlar»iga test xabar yuboriladi, natija xabar sifatida. */
+    private void testOwn(AppUser u, String phone, long chatId) {
+        TgAkkaunt a = svc.account(phone);
+        if (a == null || !u.getId().equals(a.getUserId())) return;
+        var gw = gw();
+        var r = gw == null ? null : gw.test(phone);
+        sender.send(chatId, r == null ? "⚠️ Server yoqilmagan" : (r.ok() ? "✅ " : "⚠️ ") + esc(r.message()));
+    }
+
+    /** QR-login boshlash: targetUserId — bu akkaunt bog'lanadigan xodim (odatda o'zi, admin boshqa xodim uchun ham boshlashi mumkin — QR kodni o'sha xodim o'z telefonida skanerlashi kerak). */
+    private void startQr(AppUser actor, Session s, long targetUserId, long chatId, int msgId) {
+        var gw = gw();
+        if (gw == null || !gw.available()) { myScreen(actor, s, chatId, msgId); return; }
+        var r = gw.startQrLogin(targetUserId);
+        if (r.step() != TgAccountGateway.Step.QR || r.qrPngBase64() == null) {
+            sender.edit(chatId, msgId, "⚠️ QR yaratilmadi: " + esc(r.error() == null ? "noma'lum xato" : r.error()),
+                    inline(List.of(irow(btn("⬅️ Orqaga", "tg:my")))));
+            return;
+        }
+        byte[] png = Base64.getDecoder().decode(r.qrPngBase64());
+        Integer photoMsgId = sender.sendPhoto(chatId, png, "qr.png", QR_CAPTION, inline(List.of(irow(btn("❌ Bekor", "tg:cancel")))));
+        if (photoMsgId == null) { sender.send(chatId, "⚠️ QR rasm yuborilmadi — qaytadan urinib ko'ring."); return; }
+        s.data.put("tgQrUser", targetUserId);
+        qrPending.put(targetUserId, new QrPending(actor.getId(), s, chatId, photoMsgId, r.gen()));
+    }
+
+    /** ❌ Bekor bosilganda: joriy sessiyada boshlangan QR (agar bor bo'lsa) Python tomonida ham bekor qilinadi. */
+    private void cancelQr(Session s) {
+        Object v = s.data.get("tgQrUser");
+        if (v instanceof Number n) {
+            long userId = n.longValue();
+            qrPending.remove(userId);
+            if (gw() != null) gw().cancelLogin(userId);
+        }
+    }
+
+    /** Fon rejimida (har 3s) barcha QR kutilayotgan loginlarni tekshiradi: token yangilansa rasmni, natija chiqsa xabarni yangilaydi. */
+    @Scheduled(fixedDelay = 3000)
+    public void pollQr() {
+        if (qrPending.isEmpty()) return;
+        var gw = gw();
+        if (gw == null) return;
+        for (var e : List.copyOf(qrPending.entrySet())) {
+            long userId = e.getKey();
+            QrPending p = e.getValue();
+            TgAccountGateway.Result r;
+            try { r = gw.pollQr(userId); } catch (Exception ex) { continue; }
+            switch (r.step()) {
+                case QR -> {
+                    if (r.gen() != p.lastGen() && r.qrPngBase64() != null) {
+                        byte[] png = Base64.getDecoder().decode(r.qrPngBase64());
+                        if (sender.editPhoto(p.chatId(), p.msgId(), png, "qr.png", QR_CAPTION, inline(List.of(irow(btn("❌ Bekor", "tg:cancel"))))))
+                            qrPending.put(userId, new QrPending(p.actorId(), p.session(), p.chatId(), p.msgId(), r.gen()));
+                    }
+                }
+                case NEED_PASSWORD -> {
+                    qrPending.remove(userId);
+                    p.session().state = Session.State.TG_PWD;
+                    p.session().data.put("tgQrUser", userId);
+                    sender.editCaption(p.chatId(), p.msgId(), "✅ Skanerlandi. Endi 2FA parolni yozing.", null);
+                    sender.send(p.chatId(), "🔒 Akkauntda 2FA (bulutli parol) yoqilgan — <b>parolni</b> kiriting:", inline(List.of(irow(btn("❌ Bekor", "tg:cancel")))));
+                }
+                case CONNECTED -> {
+                    qrPending.remove(userId);
+                    p.session().reset();
+                    audit.log(p.actorId(), "TG_ULANDI", "tg_akkaunt", null, r.phone());
+                    sender.editCaption(p.chatId(), p.msgId(), "✅ <b>Ulandi!</b> " + esc(r.phone()) + " — endi bot bu akkauntdagi "
+                            + esc(cfg.sourceBot().isBlank() ? "bot" : "@" + cfg.sourceBot()) + " xabarlarini avtomat o'qiydi.",
+                            inline(List.of(irow(btn("🔗 Akkauntlarim", "tg:my")))));
+                }
+                case ERROR -> {
+                    qrPending.remove(userId);
+                    p.session().reset();
+                    sender.editCaption(p.chatId(), p.msgId(), "⚠️ Ulanmadi: " + esc(r.error() == null ? "noma'lum" : r.error()) + "\n<i>Qayta urinish: /akkaunt</i>", null);
+                }
+            }
+        }
     }
 
     private void disconnectOwn(AppUser u, Session s, String phone, long chatId, int msgId) {
@@ -175,44 +308,28 @@ public class TgHandler {
         myScreen(u, s, chatId, msgId);
     }
 
-    /** Xodim login matni (telefon/kod/parol). Router har rol uchun shu yerga yo'naltiradi. */
+    /** Xodim login matni — endi faqat 2FA parol bosqichi (QR bosqichida matn kutilmaydi). Router faqat TG_PWD holatida shu yerga yo'naltiradi. */
     public boolean onLoginText(AppUser u, Session s, String text, long chatId) {
+        if (s.state != Session.State.TG_PWD) return false;
         var gw = gw();
         if (gw == null || !gw.available()) { s.reset(); sender.send(chatId, "⚠️ Serverda yoqilmagan."); return true; }
-        String t = text.trim();
+        Object v = s.data.get("tgQrUser");
+        if (!(v instanceof Number n)) { s.reset(); sender.send(chatId, "⚠️ Sessiya topilmadi — qaytadan boshlang: /akkaunt"); return true; }
         try {
-            if (s.state == Session.State.TG_PHONE) {
-                String phone = t.replaceAll("[^+0-9]", "");
-                if (!phone.startsWith("+") || phone.length() < 8) { sender.send(chatId, "⚠️ Raqam <code>+998...</code> shaklida bo'lsin. Qayta kiriting:"); return true; }
-                s.data.put("tgPhone", phone);
-                Object forU = s.data.get("tgForUser");
-                long ownerId = forU instanceof Long ? (Long) forU : u.getId();
-                sender.send(chatId, "⏳ Telegram'ga so'rov yuborilmoqda…");
-                var r = gw.startLogin(phone, ownerId);
-                route(u, s, r, chatId);
-            } else if (s.state == Session.State.TG_CODE) {
-                var r = gw.submitCode(s.getStr("tgPhone"), t.replaceAll("[^0-9]", ""));
-                route(u, s, r, chatId);
-            } else if (s.state == Session.State.TG_PWD) {
-                var r = gw.submitPassword(s.getStr("tgPhone"), t);
-                route(u, s, r, chatId);
-            } else return false;
+            var r = gw.submitPassword(n.longValue(), text.trim());
+            s.reset();
+            if (r.step() == TgAccountGateway.Step.CONNECTED) {
+                audit.log(u.getId(), "TG_ULANDI", "tg_akkaunt", null, r.phone());
+                sender.send(chatId, "✅ <b>Ulandi!</b> " + esc(r.phone()) + " — endi bot bu akkauntdagi " + esc(cfg.sourceBot().isBlank() ? "bot" : "@" + cfg.sourceBot()) + " xabarlarini avtomat o'qiydi.",
+                        inline(List.of(irow(btn("🔗 Akkauntlarim", "tg:my")))));
+            } else {
+                sender.send(chatId, "⚠️ Ulanmadi: " + esc(r.error() == null ? "noma'lum" : r.error()) + "\n<i>Qayta urinish: /akkaunt</i>");
+            }
         } catch (Exception e) {
             s.reset();
             sender.send(chatId, "⚠️ Xato: " + esc(String.valueOf(e.getMessage())));
         }
         return true;
-    }
-
-    private void route(AppUser u, Session s, uz.kassa.service.tg.TgAccountGateway.Result r, long chatId) {
-        switch (r.step()) {
-            case NEED_CODE -> { s.state = Session.State.TG_CODE; sender.send(chatId, "🔑 Telegram ilovangizga kelgan <b>kodni</b> kiriting:", inline(List.of(irow(btn("❌ Bekor", "tg:cancel"))))); }
-            case NEED_PASSWORD -> { s.state = Session.State.TG_PWD; sender.send(chatId, "🔒 Akkauntda 2FA (bulutli parol) yoqilgan — <b>parolni</b> kiriting:", inline(List.of(irow(btn("❌ Bekor", "tg:cancel"))))); }
-            case CONNECTED -> { audit.log(u.getId(), "TG_ULANDI", "tg_akkaunt", null, s.getStr("tgPhone")); s.reset();
-                sender.send(chatId, "✅ <b>Ulandi!</b> " + esc(s.getStr("tgPhone")) + " — endi bot bu akkauntdagi " + esc(cfg.sourceBot().isBlank() ? "bot" : "@" + cfg.sourceBot()) + " xabarlarini avtomat o'qiydi.",
-                        inline(List.of(irow(btn("🔗 Akkauntlarim", "tg:my"))))); }
-            case ERROR -> { s.reset(); sender.send(chatId, "⚠️ Ulanmadi: " + esc(r.error() == null ? "noma'lum" : r.error()) + "\n<i>Qayta urinish: /akkaunt</i>"); }
-        }
     }
 
     /* ==================== ⚙️ sozlama (a:tg*) ==================== */
@@ -228,8 +345,15 @@ public class TgHandler {
             case "tgau" -> { bindUser(u, arg, chatId, msgId); }
             case "tgak" -> { bindKassa(u, arg, chatId, msgId); }
             case "tgen" -> { if (gw() != null) gw().reconnect(arg); else svc.setActive(arg, true); audit.log(u.getId(), "TG_YOQILDI", "tg_akkaunt", null, arg); accountCard(arg, chatId, msgId); }
-            case "tgdis" -> { if (gw() != null) gw().disconnect(arg); else svc.setActive(arg, false); audit.log(u.getId(), "TG_OCHIRILDI", "tg_akkaunt", null, arg); accountCard(arg, chatId, msgId); }
+            case "tgdis" -> { if (gw() != null) gw().pause(arg); else svc.setActive(arg, false); audit.log(u.getId(), "TG_TOXTATILDI", "tg_akkaunt", null, arg); accountCard(arg, chatId, msgId); }
+            case "tgdel" -> confirmDelete(arg, chatId, msgId);
+            case "tgdy" -> doDelete(u, arg, chatId, msgId);
+            case "tgtest" -> runAdminTest(arg, chatId, msgId);
+            case "tgset" -> settingsScreen(chatId, msgId);
             case "tgadd" -> addPick(u, s, arg, chatId, msgId);
+            case "tgcl" -> cardLinkList(chatId, msgId);
+            case "tgcli" -> cardLinkPick(arg, chatId, msgId);
+            case "tgcls" -> cardLinkSet(u, arg, chatId, msgId);
             case "tgrn" -> { int n = cardReport.reportNow(); sender.send(chatId, n == 0 ? "⚠️ Guruh sozlanmagan (тgreader.chat_ids yoki Click guruhi)" : "📤 Karta qoldiqlari " + n + " ta guruhga yuborildi"); menu(s, chatId, 0); }
             default -> { return false; }
         }
@@ -247,9 +371,10 @@ public class TgHandler {
         sb.append("💳 Kartalar: <b>").append(cardRepo.count()).append("</b> · guruh hisoboti: <b>")
           .append(cfg.reportEveryH() == 0 ? "o'chiq" : "har " + cfg.reportEveryH() + " soat " + cfg.reportFrom() + "–" + cfg.reportTo()).append("</b> · chat <b>")
           .append(cfg.reportChatIds().size()).append("</b>\n");
-        sb.append("\n<i>Akkauntni ulash: serverda TgLoginMain (docs/BOT-XABARLARI.md).</i>");
+        sb.append("\n<i>Akkaunt ulash: 🔗 Akkauntlar → ➕ Akkaunt qo'shish (yoki xodim o'zi /akkaunt bilan).</i>");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:tgg"), btn("🔗 Akkauntlar", "a:tgacc")));
+        rows.add(irow(btn("🔑 Sozlamalar (API/bot)", "a:tgset")));
         rows.add(irow(btn("🔔 Kalit so'zlar", "a:tgv:kw"), btn("🔇 Jimlik (soat)", "a:tgv:silence")));
         rows.add(irow(btn(cfg.match() ? "💵 Solishtirish: ON" : "💵 Solishtirish: OFF", "a:tgm2"), btn("± Farq (so'm)", "a:tgv:tol")));
         rows.add(irow(btn("⏰ Hisobot interval", "a:tgv:rep"), btn("📤 Hisobotni hozir", "a:tgrn")));
@@ -258,18 +383,43 @@ public class TgHandler {
         show(chatId, msgId, sb.toString(), inline(rows));
     }
 
+    /** Bir marta, butun ilova uchun: API kaliti va manba bot — istalgan payt bu yerdan o'zgartiriladi. */
+    private void settingsScreen(long chatId, int msgId) {
+        StringBuilder sb = new StringBuilder("🔑 <b>Ulanish sozlamalari</b>\n\n");
+        sb.append("API kaliti: <b>").append(cfg.apiId() > 0 ? "kiritilgan (id " + cfg.apiId() + ")" : "kiritilmagan").append("</b>\n");
+        sb.append("Манба bot: <b>").append(cfg.sourceBot().isBlank() ? "kiritilmagan" : "@" + esc(cfg.sourceBot())).append("</b>\n");
+        sb.append("\n<i>Bular BIR MARTA, butun ilova uchun sozlanadi. Xodimlar o'z akkauntini ulashda bularni kiritmaydi — faqat QR kodni skanerlaydi va (bo'lsa) 2FA parolni kiritadi.</i>");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("🔑 API kalitini kiritish", "a:tgv:api")));
+        rows.add(irow(btn("🤖 Манба botni kiritish", "a:tgv:source")));
+        rows.add(irow(btn("⬅️ Orqaga", BACK)));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
     private void accountList(long chatId, int msgId) {
         StringBuilder sb = new StringBuilder("🔗 <b>Ulangan akkauntlar</b>\n\n");
         List<TgAkkaunt> all = svc.accounts();
         boolean can = gw() != null && gw().available();
         if (all.isEmpty()) sb.append(can
-                ? "Hali akkaunt ulanmagan.\n<i>«➕ Akkaunt qo'shish» — xodimni tanlab, uning telefoni va Telegram kodini kiritasiz. Xodim o'zi ham /akkaunt bilan ulay oladi.</i>"
-                : "⚠️ Avval 🔑 API kalitini kiriting (⚙️ 📨 → 🔑 API), so'ng bu yerdan qo'shasiz.");
+                ? "Hali akkaunt ulanmagan.\n<i>«➕ Akkaunt qo'shish» — xodimni tanlang, chiqqan QR kodni O'SHA XODIM o'z telefonida (Sozlamalar → Ulangan qurilmalar → Qurilma ulash) skanerlasin. Xodim o'zi ham /akkaunt bilan ulay oladi.</i>"
+                : "⚠️ Avval 🔑 API kalitini kiriting (pastdagi tugma), so'ng bu yerdan qo'shasiz.");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        for (TgAkkaunt a : all)
-            rows.add(irow(btn((!a.isActive() ? "⏸ " : online(a) ? "🟢 " : "🔴 ") + cut((a.getName().isBlank() ? a.getPhone() : a.getName()) + " · " + a.getPhone(), 30), "a:tgap:" + a.getPhone())));
-        if (can) rows.add(irow(btn("➕ Akkaunt qo'shish", "a:tgadd")));
-        else rows.add(irow(btn("🔑 API kalitini kiritish", "a:tgv:api")));
+        for (TgAkkaunt a : all) {
+            String owner = a.getUserId() == null ? "" : " · " + userRepo.findById(a.getUserId()).map(AppUser::getFullName).orElse("?");
+            rows.add(irow(btn((!a.isActive() ? "⏸ " : online(a) ? "🟢 " : "🔴 ") + cut((a.getName().isBlank() ? a.getPhone() : a.getName()) + " · " + a.getPhone() + owner, 34), "a:tgap:" + a.getPhone())));
+        }
+        if (can) {
+            var pending = gw().pendingLogins();
+            if (!pending.isEmpty()) {
+                sb.append("\n⏳ <b>Chala qolgan (jarayonda)</b>:\n");
+                for (var pl : pending) {
+                    String who = userRepo.findById(pl.userId()).map(AppUser::getFullName).orElse("?");
+                    sb.append("• ").append(esc(who)).append(" · boshlandi ")
+                      .append(DTF.format(pl.startedAt().atZone(ZoneId.of("Asia/Tashkent")).toLocalDateTime())).append("\n");
+                }
+            }
+            rows.add(irow(btn("➕ Akkaunt qo'shish", "a:tgadd")));
+        } else rows.add(irow(btn("🔑 API kalitini kiritish", "a:tgv:api")));
         rows.add(irow(btn("⬅️ Orqaga", BACK)));
         show(chatId, msgId, sb.toString(), inline(rows));
     }
@@ -278,11 +428,11 @@ public class TgHandler {
     private void addPick(AppUser u, Session s, String arg, long chatId, int msgId) {
         if (gw() == null || !gw().available()) { accountList(chatId, msgId); return; }
         if (!arg.isBlank()) {
-            s.data.put("tgForUser", "0".equals(arg) ? u.getId() : Long.parseLong(arg));
-            askPhone(u, s, chatId, msgId);
+            long targetId = "0".equals(arg) ? u.getId() : Long.parseLong(arg);
+            startQr(u, s, targetId, chatId, msgId);
             return;
         }
-        StringBuilder sb = new StringBuilder("➕ <b>Akkaunt qo'shish</b>\n\nBu akkaunt qaysi xodimniki? (Telegram kodi o'sha telefonga keladi)");
+        StringBuilder sb = new StringBuilder("➕ <b>Akkaunt qo'shish</b>\n\nBu akkaunt qaysi xodimniki? (QR kodni SHU XODIM o'z telefonida skanerlashi kerak)");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("👤 O'zim (admin)", "a:tgadd:0")));
         for (AppUser x : userRepo.findByActiveTrueOrderByRoleAscIdAsc())
@@ -296,15 +446,39 @@ public class TgHandler {
         if (a == null) { menu(null, chatId, msgId); return; }
         StringBuilder sb = new StringBuilder("🔗 <b>").append(esc(a.getName().isBlank() ? phone : a.getName())).append("</b>\n\n");
         sb.append("📱 ").append(esc(a.getPhone())).append(a.getUsername().isBlank() ? "" : " · @" + esc(a.getUsername())).append("\n");
-        sb.append(!a.isActive() ? "⏸ O'chirilgan" : online(a) ? "🟢 Ulangan" : "🔴 Uzilgan").append(a.getLastSeenAt() == null ? "" : " · oxirgi " + DTF.format(a.getLastSeenAt().atZone(ZoneId.of("Asia/Tashkent")).toLocalDateTime())).append("\n");
+        sb.append(!a.isActive() ? "⏸ To'xtatilgan" : online(a) ? "🟢 Ulangan" : "🔴 Uzilgan").append(a.getLastSeenAt() == null ? "" : " · oxirgi " + DTF.format(a.getLastSeenAt().atZone(ZoneId.of("Asia/Tashkent")).toLocalDateTime())).append("\n");
+        if (a.getCreatedAt() != null) sb.append("🕒 Ulangan: ").append(DTF.format(a.getCreatedAt().atZone(ZoneId.of("Asia/Tashkent")).toLocalDateTime())).append("\n");
         if (a.getLastError() != null) sb.append("⚠️ ").append(esc(a.getLastError())).append("\n");
         sb.append("👷 Xodim: <b>").append(a.getUserId() == null ? "bog'lanmagan" : esc(userRepo.findById(a.getUserId()).map(AppUser::getFullName).orElse("?"))).append("</b>\n");
         sb.append("🏪 Do'kon: <b>").append(a.getKassaId() == null ? "—" : esc(kassaRepo.findById(a.getKassaId()).map(Kassa::getName).orElse("?"))).append("</b> (summa solishtirish uchun)\n");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn("👷 Xodimga bog'lash", "a:tgau:" + phone), btn("🏪 Do'konga bog'lash", "a:tgak:" + phone)));
-        rows.add(irow(a.isActive() ? btn("⏸ O'chirish", "a:tgdis:" + phone) : btn("▶️ Yoqish", "a:tgen:" + phone), btn("📨 Xabarlari", "tg:acc:" + phone)));
+        rows.add(irow(a.isActive() ? btn("⏸ To'xtatish", "a:tgdis:" + phone) : btn("▶️ Yoqish", "a:tgen:" + phone), btn("✅ Tekshirish", "a:tgtest:" + phone)));
+        rows.add(irow(btn("📨 Xabarlari", "tg:acc:" + phone), btn("🗑 Butunlay o'chirish", "a:tgdel:" + phone)));
         rows.add(irow(btn("⬅️ Akkauntlar", "a:tgacc")));
         show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    /** ✅ Tekshirish (admin): «Saqlangan xabarlar»ga test yuboradi, natija xabar sifatida, karta o'zgarmaydi. */
+    private void runAdminTest(String phone, long chatId, int msgId) {
+        var gw = gw();
+        var r = gw == null ? null : gw.test(phone);
+        sender.send(chatId, r == null ? "⚠️ Server yoqilmagan" : (r.ok() ? "✅ " : "⚠️ ") + esc(r.message()));
+        accountCard(phone, chatId, msgId);
+    }
+
+    /** 🗑 Butunlay o'chirish — halokatli amal, tasdiq so'raladi (⏸ To'xtatish'dan farqli — bu qaytarilmaydi). */
+    private void confirmDelete(String phone, long chatId, int msgId) {
+        sender.edit(chatId, msgId, "🗑 <b>Butunlay o'chirilsinmi?</b>\n\n" + esc(phone)
+                + " — sessiya butunlay o'chadi, xodim qayta ulash uchun QR-kodni qaytadan skanerlashi kerak bo'ladi.",
+                inline(List.of(irow(btn("✅ Ha, o'chirilsin", "a:tgdy:" + phone), btn("❌ Yo'q", "a:tgap:" + phone)))));
+    }
+
+    private void doDelete(AppUser u, String phone, long chatId, int msgId) {
+        if (gw() != null) gw().disconnect(phone);
+        svc.deleteAccount(phone);
+        audit.log(u.getId(), "TG_OCHIRILDI", "tg_akkaunt", null, phone);
+        accountList(chatId, msgId);
     }
 
     /** Xodimga bog'lash: faol, tg ulangan xodimlar ro'yxati (arg — phone[.userId]). */
@@ -345,7 +519,7 @@ public class TgHandler {
             case "kw" -> "🔔 OGOH beradigan kalit so'zlar (vergul bilan). Xabar matnida shu so'z bo'lsa darhol ogohlantirish.\nMasalan: <code>бекор, қайтарилди, возврат</code>\nHozir: " + (cfg.keywords().isEmpty() ? "—" : String.join(", ", cfg.keywords()));
             case "silence" -> "🔇 Necha soat xabar/ulanish kelmasa ogohlantirilsin? (1–168)\nHozir: " + cfg.silenceHours();
             case "tol" -> "± Summani solishtirishda ruxsat etilgan farq (so'm, 0 — aniq)\nHozir: " + fmt(cfg.matchTol());
-            case "api" -> "🔑 TDLib api_id va api_hash (my.telegram.org → API development tools), bo'sh joy bilan:\n<code>123456 0123456789abcdef0123456789abcdef</code>\nHozir: " + (cfg.apiId() > 0 ? cfg.apiId() + " · hash ****" : "yo'q");
+            case "api" -> "🔑 api_id va api_hash (my.telegram.org → API development tools), bo'sh joy bilan:\n<code>123456 0123456789abcdef0123456789abcdef</code>\nHozir: " + (cfg.apiId() > 0 ? cfg.apiId() + " · hash ****" : "yo'q");
             case "source" -> "🤖 Qaysi bot xabarlari o'qilsin (@ siz)? Masalan <code>HUMOcardbot</code>\nHozir: " + (cfg.sourceBot().isBlank() ? "yo'q" : "@" + cfg.sourceBot());
             case "rep" -> "⏰ Karta qoldiqlari guruh hisoboti: <b>интервал соатлар</b> ва <b>ойна</b>, масалан <code>3 8 22</code> (ҳар 3 соат, 8–22). Интервал 0 — ўчиқ. Гуруҳ: tgreader.chat_ids ёки Click гуруҳи.\nҲозир: " + cfg.reportEveryH() + " " + cfg.reportFrom() + " " + cfg.reportTo();
             default -> null;
@@ -365,9 +539,14 @@ public class TgHandler {
             else if ("silence".equals(key)) cfg.set(TgReaderConfig.SILENCE_H, String.valueOf(Math.max(1, Math.min(168, Integer.parseInt(t.replaceAll("\\D", ""))))));
             else if ("tol".equals(key)) cfg.set(TgReaderConfig.MATCH_TOL, String.valueOf(Long.parseLong(t.replaceAll("\\D", "").isEmpty() ? "0" : t.replaceAll("\\D", ""))));
             else if ("api".equals(key)) {
-                String[] a = t.split("[\\s,]+");
-                if (a.length < 2) throw new IllegalArgumentException("api_id va api_hash kerak (bo'sh joy bilan)");
-                cfg.setApi(Integer.parseInt(a[0].replaceAll("\\D", "")), a[1]);
+                // my.telegram.org'dan butun matn (yorliqlar bilan) nusxalansa ham ishlaydi — ichidan
+                // 32 belgili hash va raqamni o'zi qidirib topadi, faqat ikkalasini emas.
+                java.util.regex.Matcher hm = java.util.regex.Pattern.compile("\\b[0-9a-fA-F]{32}\\b").matcher(t);
+                if (!hm.find()) throw new IllegalArgumentException("api_hash topilmadi (32 ta harf-raqam kerak)");
+                String hash = hm.group();
+                java.util.regex.Matcher im = java.util.regex.Pattern.compile("\\b\\d{4,10}\\b").matcher(t.replace(hash, " "));
+                if (!im.find()) throw new IllegalArgumentException("api_id topilmadi (4–10 xonali raqam kerak)");
+                cfg.setApi(Integer.parseInt(im.group()), hash);
             }
             else if ("source".equals(key)) cfg.setSourceBot(t);
             else if ("rep".equals(key)) {
@@ -380,7 +559,8 @@ public class TgHandler {
             audit.log(u.getId(), "TG_SOZLAMA", "settings", null, key + "=" + t);
             sender.send(chatId, "✅ Saqlandi");
         } catch (Exception e) {
-            sender.send(chatId, "⚠️ Qiymat noto'g'ri: " + esc(t));
+            String reason = e.getMessage();
+            sender.send(chatId, "⚠️ Qiymat noto'g'ri" + (reason == null || reason.isBlank() ? ": " + esc(t) : " — " + esc(reason)));
         }
         menu(s, chatId, 0);
     }

@@ -49,8 +49,8 @@ public class Session {
         OM_SOROV_PROD, OM_SOROV_NEW, OM_SOROV_QTY, OM_SOROV_ANS, OM_QR_QTY, OM_ISSUE_Q,
         // 📨 Bot xabarlari nazorati (SuperAdmin sozlama qiymati)
         ADM_TG_VAL,
-        // 📨 Akkaunt ulash (xodim, bot ichida): telefon, kod, 2FA parol
-        TG_PHONE, TG_CODE, TG_PWD
+        // 📨 Akkaunt ulash (xodim, bot ichida): QR ko'rsatiladi (matn kiritilmaydi), 2FA bo'lsa parol
+        TG_PWD
     }
 
     public State state = State.IDLE;

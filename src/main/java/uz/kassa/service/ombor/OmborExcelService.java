@@ -135,7 +135,7 @@ public class OmborExcelService {
         if (!qoralama.isEmpty()) sheets.add(new ExcelReportService.SheetDef("Қоралама", new String[]{"№", "ID", "Дўкон", "Етказувчи", "Ҳолат", "Сумма (сўм)", "Мавжуд пул (сўм)", "Янгиланган", "Изоҳ"}, qoralama));
         if (dup) {
             List<Object[]> rows = new ArrayList<>();
-            for (DublikatChecker.Pair pr : dublikat.pairs("name,barcode,article"))
+            for (DublikatChecker.Pair pr : dublikat.pairs("name,barcode,article,name_fuzzy"))
                 rows.add(new Object[]{rows.size() + 1, pr.a().getName(), pr.a().getCode(), pr.a().getArticle(), num(stock, pr.a().getMsId(), 0L), pr.a().getFolderName(),
                         pr.b().getName(), pr.b().getCode(), pr.b().getArticle(), num(stock, pr.b().getMsId(), 0L), pr.b().getFolderName(), pr.reason(), "Дубликат"});
             sheets.add(new ExcelReportService.SheetDef("Дубликатлар", new String[]{"№", "Название 1", "Код 1", "Артикул 1", "Остаток 1", "Группа 1",
@@ -148,7 +148,7 @@ public class OmborExcelService {
     /** Qoida → varaq. */
     public static String sheetOf(String rule) {
         return switch (rule) {
-            case "TOVAR_DUBLIKAT" -> "Дубликатлар";
+            case "TOVAR_DUBLIKAT", "TOVAR_DUBLIKAT_EHTIMOL" -> "Дубликатлар";
             case "NARX_ANOMAL" -> "Нарх аномалияси";
             case "QOLDIQ_MANFIY", "QOLDIQ_MIN", "BUYURTMA_NUQTA", "NELIKVID", "KOCHIRISH" -> "Товарлар";
             case "HARAKAT_OTKAZILMAGAN", "QABUL_FARQ", "INVENT_FARQ", "QAYTARISH_OSILDI", "MIJOZ_QAYTARISH", "SPISANIYA_TASDIQ" -> "Ҳужжатлар";

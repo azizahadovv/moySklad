@@ -3,11 +3,13 @@ package uz.kassa.service.control;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import uz.kassa.bot.ReportDispatcher;
 import uz.kassa.bot.Sender;
 import uz.kassa.domain.AgentCheck;
 import uz.kassa.domain.AppUser;
 import uz.kassa.repo.AppUserRepo;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +38,7 @@ public class ControlWelcomeService {
     private final AgentCheckService agents;
     private final ControlConfig cfg;
     private final Sender sender;
+    private final ReportDispatcher dispatcher;
     private final uz.kassa.service.NotifySwitches sw;
 
     /** userId -> keyingi urinish vaqti (chat topilmasa spam bo'lmasin). */
@@ -67,9 +70,9 @@ public class ControlWelcomeService {
     private void deliver(AppUser u) {
         long tg = u.getTelegramId();
         List<AgentCheck> open = agents.openFor(u);
-        String issueText = shipments.pendingIssuesText(u);
-        String debtText = shipments.debtorsDigest(u);
-        if (open.isEmpty() && issueText == null && debtText == null) return;
+        ReportDispatcher.Report issueReport = shipments.pendingIssuesReport(u);
+        ReportDispatcher.Report debtReport = shipments.debtorsDigest(u);
+        if (open.isEmpty() && issueReport == null && debtReport == null) return;
         if (!sw.allow(uz.kassa.service.NotifySwitches.KG_XUSH, u)) return;   // 🔕 Хабарномалар: belgilanadi, xabar ketmaydi
 
         sender.send(tg, "👋 Xush kelibsiz, <b>" + esc(u.getFullName()) + "</b>! Sizga tegishli nazorat xabarlari quyida — "
@@ -83,12 +86,13 @@ public class ControlWelcomeService {
         }
         if (open.size() > MAX_SINGLE) {
             List<AgentCheck> rest = open.subList(MAX_SINGLE, open.size());
-            sender.send(tg, agents.openListText(rest), null);
+            var report = agents.openListReport(rest, "kontragent-xatolari-" + u.getId() + "-" + LocalDate.now(cfg.zone()));
+            dispatcher.send(tg, report, null, null);
             for (AgentCheck ac : rest) agents.restartTimeline(ac);
         }
-        if (issueText != null) sender.send(tg, issueText, null);
-        if (debtText != null) sender.send(tg, debtText, null);   // eski qarzdorlari ham — to'liq ro'yxat
+        if (issueReport != null) dispatcher.send(tg, issueReport, null, null);
+        if (debtReport != null) dispatcher.send(tg, debtReport, null, null);   // eski qarzdorlari ham — to'liq ro'yxat
         log.info("Nazorat xabarlari xodimga yetkazildi: {} (kontragent {}, otgruzka {})", u.getFullName(), open.size(),
-                issueText == null ? 0 : 1);
+                issueReport == null ? 0 : 1);
     }
 }

@@ -1,22 +1,26 @@
 # syntax=docker/dockerfile:1
-# 1-bosqich: build. pom.xml/`.m2-tdlib-cache` o'zgarmasa — Docker qatlam keshi tufayli qayta yuklanmaydi.
-# 📨 «tdlib» profili: to'liq Java TDLib mijozi (src/tdlib/java). MUHIM: ba'zi serverlarda BuildKit'ning
-# RUN tarmog'i mvn.mchv.eu ga ulana olmaydi, garchi oddiy `docker run`/`curl` shu serverdan ulansa ham
-# (BuildKit alohida tarmoq yo'lidan foydalanadi — ma'lum muammo). Shuning uchun it.tdlight:* artifaktlari
-# BUILD PAYTIDA YUKLANMAYDI — `.m2-tdlib-cache/` papkasidan oldindan KO'CHIRILADI (bir martalik `docker run`
-# bilan to'ldiriladi, docs/BOT-XABARLARI.md). Bo'sh bo'lsa (.gitkeep) — hech narsa buzilmaydi, faqat
-# `-Ptdlib` bilan build mchv.eu'ga murojaat qilib xato beradi (kutilgan, kesh to'ldirilmagan bo'lsa).
+# 1-bosqich: build. Maven keshi (/root/.m2) BuildKit cache mount'da (id=kassa-m2) — build'lar orasida
+# saqlanadi, har rebuild'da hammasi qaytadan yuklanmaydi.
+# 📨 «tdlib» profili (src/tdlib/java, to'liq Java TDLib mijozi) O'CHIQ QOLDI (2026-09-15): uni ta'minlaydigan
+# it.tdlight:tdlight-java FAQAT mvn.mchv.eu'da bor, va bu server ko'p tarmoqdan (jumladan BuildKit'ning
+# alohida RUN tarmog'idan) umuman ulanmaydi — real production o'chib qolishiga sabab bo'lgan. O'rniga
+# «🔗 Ulangan akkauntlar» endi alohida `tg-reader` xizmati (Python/Telethon, PyPI'dan — tg-reader/Dockerfile)
+# orqali ishlaydi, shu jarayonga bog'liq emas. `-Ptdlib` hali profil sifatida mavjud (kerak bo'lsa qo'lda
+# yoqiladi: `--build-arg TDLIB=-Ptdlib`), lekin standart build unga UMUMAN MUROJAAT QILMAYDI.
 FROM maven:3.9-eclipse-temurin-17 AS build
-ARG TDLIB=-Ptdlib
+ARG TDLIB=
+ENV MAVEN_OPTS="-Dmaven.wagon.http.connectionTimeout=15000 -Dmaven.wagon.http.readTimeout=15000"
 WORKDIR /app
-# TDLib keshi (o'zgarsa qatlam qayta ishlaydi, o'zgarmasa Docker uni qayta ishlatadi — BuildKit cache
-# mount ISHLATILMAYDI, chunki u shu COPY qilingan /root/.m2 ni RUN vaqtida yashirib qo'yardi).
-COPY .m2-tdlib-cache/ /root/.m2/
+COPY .m2-tdlib-cache/ /opt/tdlib-seed/
 COPY pom.xml .
-RUN mvn -q -B $TDLIB dependency:go-offline || true
+RUN --mount=type=cache,target=/root/.m2 \
+    cp -rn /opt/tdlib-seed/. /root/.m2/ 2>/dev/null; \
+    mvn -q -B $TDLIB dependency:go-offline || true
 COPY src ./src
 # Vaqtinchalik tarmoq nosozligiga chidamli: 3 urinish (faqat Central uchun — TDLib yuqorida oldindan bor).
-RUN for i in 1 2 3; do \
+RUN --mount=type=cache,target=/root/.m2 \
+    cp -rn /opt/tdlib-seed/. /root/.m2/ 2>/dev/null; \
+    for i in 1 2 3; do \
       mvn -q -B $TDLIB -DskipTests package && break; \
       echo "mvn urinish $i muvaffaqiyatsiz, qayta..." >&2; sleep 5; \
       if [ "$i" = 3 ]; then exit 1; fi; \

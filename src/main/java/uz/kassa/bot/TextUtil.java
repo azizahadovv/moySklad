@@ -5,6 +5,11 @@ import uz.kassa.domain.MoneyType;
 public final class TextUtil {
     private TextUtil() {}
 
+    /** Telegram photo caption limiti (1024) ga moslab kesish. */
+    public static String capCaption(String s) {
+        return s.length() > 1000 ? s.substring(0, 1000) : s;
+    }
+
     /** 1234567 -> "1 234 567" */
     public static String fmt(long v) {
         boolean neg = v < 0;

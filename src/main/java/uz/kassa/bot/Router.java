@@ -381,8 +381,8 @@ public class Router {
 
         boolean handled;
         try {
-            // 📨 Akkaunt ulash (telefon/kod/parol) — barcha rollar uchun
-            if (s.state == Session.State.TG_PHONE || s.state == Session.State.TG_CODE || s.state == Session.State.TG_PWD) {
+            // 📨 Akkaunt ulash — 2FA parol (QR bosqichida matn kiritilmaydi) — barcha rollar uchun
+            if (s.state == Session.State.TG_PWD) {
                 if (tg.onLoginText(user, s, text, chatId)) return;
             }
             // 🏬 Омбор — barcha rollar uchun (do'kon kesimida)

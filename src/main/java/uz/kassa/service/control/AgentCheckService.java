@@ -4,6 +4,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import uz.kassa.bot.ReportDispatcher;
+import uz.kassa.bot.TableImage;
 import uz.kassa.bot.TextUtil;
 import uz.kassa.domain.AgentCheck;
 import uz.kassa.domain.AppUser;
@@ -21,6 +23,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import static uz.kassa.bot.Keyboards.*;
+import static uz.kassa.bot.TextUtil.capCaption;
 import static uz.kassa.bot.TextUtil.esc;
 
 /**
@@ -45,6 +48,7 @@ public class AgentCheckService {
     private final ControlNotifier notifier;
     private final AuditService audit;
     private final uz.kassa.service.NotifySwitches sw;
+    private final uz.kassa.webapp.ExcelReportService excel;
 
     /** Bitta xato: kod + ko'rinadigan matn (K5 uchun dublikat nomlari bilan). */
     public record Violation(String code, String text) {}
@@ -291,7 +295,8 @@ public class AgentCheckService {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (u == null || u.getTelegramId() == null) continue;
             for (AgentCheck ac : e.getValue()) { ac.setLastDaily(today); repo.save(ac); }
-            notifier.sendOne(uz.kassa.service.NotifySwitches.KG_KUNLIK, u, openListText(e.getValue()), null);
+            var report = openListReport(e.getValue(), "kontragent-xatolari-" + u.getId() + "-" + today);
+            notifier.sendReportOne(uz.kassa.service.NotifySwitches.KG_KUNLIK, u, report, null);
         }
     }
 
@@ -336,6 +341,34 @@ public class AgentCheckService {
         }
         sb.append("\nMoySklad'da tuzating — bot o'zi tekshiradi. Ro'yxat: 🤝 КОНТРАГЕНТ → ⚠️ Хатолар");
         return sb.toString();
+    }
+
+    private static final int IMG_ROW_CAP = 60;
+
+    private static TableImage.Col[] agentCols() {
+        return new TableImage.Col[]{TableImage.Col.of("Kontragent"), TableImage.Col.of("Yaratilgan"), TableImage.Col.of("Xatolar")};
+    }
+
+    private static TableImage.Row agentRow(AgentCheck ac) {
+        return TableImage.Row.of(ac.getAgentName(), ac.getMsCreatedAt() == null ? "—" : ac.getMsCreatedAt().format(DTF),
+                String.join(", ", ac.violationList().stream().map(AgentCheckService::shortTitlePlain).toList()));
+    }
+
+    /** Tuzatilmagan kontragentlar — PNG jadval + Excel (mavjud {@code ExcelReportService.buildAgentErrors}). */
+    ReportDispatcher.Report openListReport(List<AgentCheck> list, String fileBase) {
+        List<TableImage.Row> rows = new ArrayList<>();
+        int n = 0;
+        for (AgentCheck ac : list) {
+            if (++n > IMG_ROW_CAP) { rows.add(TableImage.Row.group("… yana " + (list.size() - IMG_ROW_CAP) + " ta — to'liq ro'yxat Excel faylda")); break; }
+            rows.add(agentRow(ac));
+        }
+        TableImage.Spec spec = new TableImage.Spec("Tuzatilmagan kontragentlar", agentCols(), rows, null);
+        String caption = capCaption("⚠️ <b>Tuzatilmagan kontragentlar</b> — " + list.size() + " ta\n"
+                + "\nMoySklad'da tuzating — bot o'zi tekshiradi. Ro'yxat: 🤝 КОНТРАГЕНТ → ⚠️ Хатолар");
+        String fallback = openListText(list);
+        byte[] xlsx = excel.buildAgentErrors(list, notifier::userName, notifier::kassaName, AgentCheckService::shortTitle);
+        return new ReportDispatcher.Report(TableImage.render(spec), fileBase + ".png", caption, fallback,
+                List.of(new ReportDispatcher.Doc(xlsx, fileBase + ".xlsx")));
     }
 
 
@@ -490,6 +523,21 @@ public class AgentCheckService {
             case "K6" -> "🏢 Полное наим./адрес";
             case "K7" -> "📣 Reklama kanali";
             case "K8" -> "⚠️ Guruh↔Tip";
+            default -> code;
+        };
+    }
+
+    /** shortTitle() kabi, lekin emojisiz — rasm jadvali uchun (headless shrift emoji chizmaydi). */
+    private static String shortTitlePlain(String code) {
+        return switch (code) {
+            case "K1" -> "Наименование";
+            case "K2" -> "Guruh";
+            case "K3" -> "Telefon";
+            case "K4" -> "ИНН";
+            case "K5" -> "Dublikat";
+            case "K6" -> "Полное наим./адрес";
+            case "K7" -> "Reklama kanali";
+            case "K8" -> "Guruh↔Tip";
             default -> code;
         };
     }

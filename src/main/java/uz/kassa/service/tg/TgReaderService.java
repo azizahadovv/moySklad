@@ -43,6 +43,7 @@ public class TgReaderService {
     private final Sender sender;
     private final DayRepo dayRepo;
     private final uz.kassa.repo.TgCardRepo cardRepo;
+    private final uz.kassa.repo.ClickAccountRepo clickRepo;
     private final ZoneId zone = ZoneId.of("Asia/Tashkent");
 
     /* ==================== ingest (tg-reader → ilova) ==================== */
@@ -143,7 +144,9 @@ public class TgReaderService {
         x.setVerdict("OK");
     }
 
-    /** Karta qoldig'ini yangilash (mask kesimida oxirgi holat). */
+    /** Karta qoldig'ini yangilash (mask kesimida oxirgi holat). Bog'langan ClickAccount bo'lsa, uning
+     * "карта қолдиғи" (📲 Клик hisoboti — MoySklad bilan solishtiriladigan qator) ham avtomat to'ldiriladi —
+     * FAQAT oxirgi qoldiq (har kirim/chiqim emas), qo'lda /karta kiritishning o'rnini bosadi. */
     private void updateCard(TgAkkaunt acc, TgXabar x, TgCardParser.Card c) {
         String bot = x.getSourceBot();
         TgCard card = cardRepo.findBySourceBotAndMask(bot, c.mask())
@@ -158,6 +161,14 @@ public class TgReaderService {
         if (c.at() != null) card.setLastTxnAt(c.at());
         card.setUpdatedAt(Instant.now());
         cardRepo.save(card);
+        if (c.balance() != null && card.getClickAccountId() != null) {
+            clickRepo.findById(card.getClickAccountId()).ifPresent(ca -> {
+                ca.setCardBalance(c.balance());
+                ca.setCardBalanceAt(Instant.now());
+                ca.setCardBalanceBy("HUMOcardbot");
+                clickRepo.save(ca);
+            });
+        }
     }
 
     /** Karta emas xabarlar uchun: matndagi birinchi «… UZS/so'm» summa satri (tiyin uchun toTiyin bilan). */
@@ -213,9 +224,12 @@ public class TgReaderService {
     public TgAkkaunt account(String phone) { return accRepo.findById(phone).orElse(null); }
     public void saveAccount(TgAkkaunt a) { accRepo.save(a); }
 
-    /** Akkauntni botdagi xodimga bog'lash (TDLib login tugagach). */
+    /** Akkauntni botdagi xodimga bog'lash (QR-login tugagach). Qator hali yo'q bo'lsa ham yaratadi — tg-reader'ning
+     * o'z {@code upsertAccount} chaqiruvi (ism/tgUserId) BILAN BIR VAQTDA, tartibsiz kelishi mumkin (HTTP orqali). */
     public void linkUser(String phone, Long userId) {
-        accRepo.findById(phone).ifPresent(a -> { a.setUserId(userId); accRepo.save(a); });
+        TgAkkaunt a = accRepo.findById(phone).orElseGet(() -> TgAkkaunt.builder().phone(phone).createdAt(Instant.now()).build());
+        a.setUserId(userId);
+        accRepo.save(a);
     }
     /** Yoqish/o'chirish (o'chiq — TDLib ulanmaydi). */
     public void setActive(String phone, boolean active) {

@@ -112,6 +112,15 @@ public class Sender {
     /** Fayl (hujjat) yuborish — Excel hisobotlar uchun. */
     /** Rasm (PNG) + izoh + tugma. Yuborilgan xabar ID si (tasdiq tugmasini keyin yangilash uchun); xato — null. */
     public Integer sendPhoto(long chatId, byte[] png, String filename, String caption, InlineKeyboardMarkup kb) {
+        return sendPhotoGetFileId(chatId, png, filename, caption, kb).messageId();
+    }
+
+    /** Rasm PNG bayti + Telegram file_id (qayta yuklamasdan boshqa chatlarga yuborish uchun). Xato — ikkalasi ham null. */
+    public record PhotoResult(Integer messageId, String fileId) {
+        static final PhotoResult EMPTY = new PhotoResult(null, null);
+    }
+
+    public PhotoResult sendPhotoGetFileId(long chatId, byte[] png, String filename, String caption, InlineKeyboardMarkup kb) {
         var ph = org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder()
                 .chatId(String.valueOf(chatId))
                 .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(
@@ -121,10 +130,57 @@ public class Sender {
                 .build();
         if (kb != null) ph.setReplyMarkup(kb);
         try {
-            return bot().execute(ph).getMessageId();
+            var msg = bot().execute(ph);
+            String fileId = null;
+            var sizes = msg.getPhoto();
+            if (sizes != null && !sizes.isEmpty()) fileId = sizes.get(sizes.size() - 1).getFileId();
+            return new PhotoResult(msg.getMessageId(), fileId);
         } catch (TelegramApiException e) {
             log.warn("Rasm yuborilmadi ({}): {}", chatId, e.getMessage());
-            return null;
+            return PhotoResult.EMPTY;
+        }
+    }
+
+    /** Oldin yuborilgan rasmni file_id orqali qayta yuklamasdan boshqa chatga yuborish. */
+    public PhotoResult sendPhotoByFileId(long chatId, String fileId, String caption, InlineKeyboardMarkup kb) {
+        var ph = org.telegram.telegrambots.meta.api.methods.send.SendPhoto.builder()
+                .chatId(String.valueOf(chatId))
+                .photo(new org.telegram.telegrambots.meta.api.objects.InputFile(fileId))
+                .caption(caption)
+                .parseMode("HTML")
+                .build();
+        if (kb != null) ph.setReplyMarkup(kb);
+        try {
+            var msg = bot().execute(ph);
+            String fid = fileId;
+            var sizes = msg.getPhoto();
+            if (sizes != null && !sizes.isEmpty()) fid = sizes.get(sizes.size() - 1).getFileId();
+            return new PhotoResult(msg.getMessageId(), fid);
+        } catch (TelegramApiException e) {
+            log.warn("Rasm (file_id) yuborilmadi ({}): {}", chatId, e.getMessage());
+            return PhotoResult.EMPTY;
+        }
+    }
+
+    /** Rasmli xabarning o'zi RASMINI (yangi baytlar bilan) va izohini almashtirish — masalan QR kod yangilanganda. */
+    public boolean editPhoto(long chatId, int messageId, byte[] png, String filename, String caption, InlineKeyboardMarkup kb) {
+        var photo = org.telegram.telegrambots.meta.api.objects.media.InputMediaPhoto.builder()
+                .caption(caption)
+                .parseMode("HTML")
+                .build();
+        photo.setMedia(new java.io.ByteArrayInputStream(png), filename);
+        var em = org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageMedia.builder()
+                .chatId(String.valueOf(chatId))
+                .messageId(messageId)
+                .media(photo)
+                .replyMarkup(kb)
+                .build();
+        try {
+            bot().execute(em);
+            return true;
+        } catch (TelegramApiException e) {
+            log.warn("Rasm tahrirlanmadi ({}): {}", chatId, e.getMessage());
+            return false;
         }
     }
 

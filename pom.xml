@@ -22,16 +22,6 @@
         <tdlight.version>3.5.4+td.1.8.66</tdlight.version>
     </properties>
 
-    <!-- TDLib (userbot: akkaunt ichidagi bot xabarlarini o'qish) — faqat «tdlib» profilida.
-         Repozitoriy build tarmog'idan doim ochilavermaydi; shu sabab profil ortida. -->
-    <repositories>
-        <repository>
-            <id>mchv</id>
-            <name>MCHV Apache Maven Packages</name>
-            <url>https://mvn.mchv.eu/repository/mchv/</url>
-        </repository>
-    </repositories>
-
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -138,6 +128,15 @@
              src/tdlib/java shu profilda kompilyatsiya bo'ladi; profilsiz oddiy build o'zgarmaydi. -->
         <profile>
             <id>tdlib</id>
+            <!-- Repozitoriy FAQAT shu profilda — build tarmog'idan mvn.mchv.eu doim ochilavermaydi;
+                 profilsiz oddiy build (spring-boot va h.k.) unga umuman murojaat qilmasin. -->
+            <repositories>
+                <repository>
+                    <id>mchv</id>
+                    <name>MCHV Apache Maven Packages</name>
+                    <url>https://mvn.mchv.eu/repository/mchv/</url>
+                </repository>
+            </repositories>
             <dependencyManagement>
                 <dependencies>
                     <dependency>
