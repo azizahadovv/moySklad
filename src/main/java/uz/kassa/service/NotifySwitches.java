@@ -54,6 +54,7 @@ public class NotifySwitches {
     public static final String G_XODIM    = "👥 Ходимлар";
     public static final String G_TG       = "📨 Бот хабарлари";
     public static final String G_TEXNIK   = "⚙️ Техник";
+    public static final String G_JARIMA   = "⚖️ Жарималар";
 
     /* 💰 balans / kassa */
     public static final String BAL_MANFIY     = "BAL_MANFIY";
@@ -99,8 +100,15 @@ public class NotifySwitches {
     /* 📨 bot xabarlari (tg-reader) */
     public static final String TG_XABAR = "TG_XABAR";
     public static final String TG_JIM   = "TG_JIM";
+    public static final String TG_XAVFSIZLIK = "TG_XAVFSIZLIK";
     /* ⚙️ texnik */
     public static final String TEXNIK_OGOH = "TEXNIK_OGOH";
+    /* ⚖️ jarimalar */
+    public static final String JR_XODIM = "JR_XODIM";
+    public static final String JR_ADMIN = "JR_ADMIN";
+    public static final String JR_KUNLIK_XODIM = "JR_KUNLIK_XODIM";
+    public static final String JR_KUNLIK_ADMIN = "JR_KUNLIK_ADMIN";
+    public static final String JR_GURUH = "JR_GURUH";
 
     public static final List<Sw> ALL = List.of(
             new Sw(BAL_MANFIY, G_BALANS, "⚠️ Manfiy balans",
@@ -182,6 +190,19 @@ public class NotifySwitches {
                     "ulangan akkauntga botdan kelgan xabar kalit so'z / summa nomuvofiqligi topilganda → admin + rahbar", ABR),
             new Sw(TG_JIM, G_TG, "🔇 Bot xabarlari jimligi",
                     "akkaunt ulanishi uzilgan yoki N soat xabar kelmagan (tg-reader to'xtagan)", A),
+            new Sw(TG_XAVFSIZLIK, G_TG, "🔐 Akkaunt xavfsizligi",
+                    "ulangan akkauntga yangi (avval ko'rilmagan) qurilma kirganda → admin + akkaunt egasi", ABRX),
+
+            new Sw(JR_XODIM, G_JARIMA, "⚖️ Jarima — xodimga darhol",
+                    "ogohlantirish/jarima yozilganda va admin yopganda → xodimning o'ziga", RX),
+            new Sw(JR_ADMIN, G_JARIMA, "⚖️ Jarima — admin/rahbarga darhol",
+                    "har yozilgan ogohlantirish/jarima → SuperAdmin + otdel rahbari", ABR),
+            new Sw(JR_KUNLIK_XODIM, G_JARIMA, "📅 Kunlik jamlama — xodimga",
+                    "kun oxirida (jarima.kun_vaqt) bugungi jarimalari sabablari bilan → xodimning o'ziga", RX),
+            new Sw(JR_KUNLIK_ADMIN, G_JARIMA, "📅 Kunlik jamlama — admin/rahbarga",
+                    "kun oxirida xodimlar kesimida jami → SuperAdmin (hammasi) + rahbar (o'z otdeli)", ABR),
+            new Sw(JR_GURUH, G_JARIMA, "📣 Kunlik jamlama — Click guruhiga",
+                    "kun oxirida faqat 💳 karta qoldig'i jarimalari (xodim mention bilan) → Click guruh/kanallari", NONE),
 
             new Sw(TEXNIK_OGOH, G_TEXNIK, "🚨 Texnik ogohlantirishlar",
                     "job 10 marta yiqildi, MoySklad token huquqi, valyuta kursi yo'q, dublikat otdel, noma'lum Klik statusi", AB)

@@ -6,9 +6,14 @@ server:
 spring:
   task:
     scheduling:
-      # Rejali ishlar (MoySklad sinxron, reconcile, Sheets, eslatmalar) parallel —
-      # standart bitta oqimda biri ikkinchisini kutib qolardi
-      pool-size: 4
+      # DIQQAT (2026-09-16): to'g'ri kalit `pool.size` — oldingi `pool-size: 4` hech narsaga
+      # bog'lanmay, pul AZALDAN 1 oqimda ishlagan (logda faqat scheduling-1). Hozircha ATAYLAB 1:
+      # parallel rejim hech qachon sinalmagan — tryLock() bilan himoyalangan ishlar (OmborSyncService,
+      # OmborSalesService, OmborRuleEngine, AgentCheckService, ShipmentControlService) band bo'lsa
+      # navbatni JIMGINA o'tkazib yuboradi, umumiy holatli servislar (Sheets, ledger) auditsiz.
+      # 4 ga ko'tarish — alohida, tekshirilgan qadam. Vaqt-sezgir ishlar (QR poll) alohida oqimda.
+      pool:
+        size: 1
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/kassa}
     username: ${DB_USER:data}

@@ -49,6 +49,7 @@ public class AgentCheckService {
     private final AuditService audit;
     private final uz.kassa.service.NotifySwitches sw;
     private final uz.kassa.webapp.ExcelReportService excel;
+    private final uz.kassa.service.jarima.JarimaService jarima;
 
     /** Bitta xato: kod + ko'rinadigan matn (K5 uchun dublikat nomlari bilan). */
     public record Violation(String code, String text) {}
@@ -210,6 +211,7 @@ public class AgentCheckService {
         repo.save(ac);
         audit.log(ac.getCreatorUserId(), "KG_XATO_TOPILDI", "agent_check", ac.getId(),
                 a.name() + " " + ac.getViolations());
+        try { jarima.kontragent(ac, false); } catch (Exception e) { log.warn("Jarima (kontragent {}): {}", a.name(), e.getMessage()); }   // ⚖️ jarima.xato_payt=TOPILDI bo'lsa
 
         if (!sw.on(uz.kassa.service.NotifySwitches.KG_XATO)) return;   // 🔕 Хабарномалар: yozuv/eskalatsiya vaqti qoladi
         String text = errorMessage(ac, a, v, fresh);
@@ -260,6 +262,7 @@ public class AgentCheckService {
                 ac.setEscalated2At(Instant.now());
                 repo.save(ac);
                 audit.log(ac.getCreatorUserId(), "KG_XATO_TUZATILMADI", "agent_check", ac.getId(), ac.getAgentName() + " -> admin");
+                try { jarima.kontragent(ac, true); } catch (Exception e) { log.warn("Jarima (kontragent {}): {}", ac.getAgentName(), e.getMessage()); }   // ⚖️ jarima.xato_payt=TUZATILMADI
                 String text = "\u274C <b>TUZATILMADI — kontragent xatosi " + cfg.esc2Min() + " daqiqadan beri ochiq</b>\n"
                         + agentLines(ac)
                         + "\nXodim ham, otdel rahbari ham tuzatmadi.";

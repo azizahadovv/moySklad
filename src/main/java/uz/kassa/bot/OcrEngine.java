@@ -29,7 +29,7 @@ public class OcrEngine {
      *   5) asl rasm, psm 11 (siyrak matn).
      * Hech birida summa chiqmasa — eng uzun matn qaytariladi.
      */
-    String ocrMultiPass(java.io.File img) throws Exception {
+    public String ocrMultiPass(java.io.File img) throws Exception {
         java.util.List<java.io.File> tmp = new java.util.ArrayList<>();
         String best = "";
         try {

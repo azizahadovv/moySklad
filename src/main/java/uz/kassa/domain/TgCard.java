@@ -17,6 +17,8 @@ public class TgCard {
     @Column(name = "kassa_id") private Long kassaId;
     /** Qaysi ClickAccount'ga bog'langan — bog'langan bo'lsa, balans o'zgarganda ClickAccount.cardBalance ham avtomat yangilanadi (📲 Клик MoySklad solishtiruvi uchun). */
     @Column(name = "click_account_id") private Long clickAccountId;
+    /** 🙈 Shaxsiy karta — «💳 Карта қолдиқлари» hisobotiga va Σ ga kirmaydi (xabarlari baribir o'qiladi). V43. */
+    @Builder.Default @Column(nullable = false) private boolean hidden = false;
     @Builder.Default @Column(nullable = false, length = 8) private String currency = "UZS";
     @Builder.Default @Column(nullable = false) private long balance = 0;
     @Column(name = "last_dir", length = 8) private String lastDir;

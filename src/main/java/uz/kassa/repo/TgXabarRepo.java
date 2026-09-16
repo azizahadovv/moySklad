@@ -9,6 +9,7 @@ import java.util.Optional;
 
 public interface TgXabarRepo extends JpaRepository<TgXabar, Long> {
     Optional<TgXabar> findByPhoneAndMsgId(String phone, long msgId);
+    Optional<TgXabar> findByPhoneAndSourceBotAndMsgId(String phone, String sourceBot, long msgId);
     List<TgXabar> findByOrderByMsgAtDescIdDesc(Pageable p);
     List<TgXabar> findByPhoneOrderByMsgAtDescIdDesc(String phone, Pageable p);
     List<TgXabar> findByVerdictInOrderByMsgAtDescIdDesc(List<String> verdicts, Pageable p);

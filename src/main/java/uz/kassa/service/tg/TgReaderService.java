@@ -12,6 +12,12 @@ import uz.kassa.repo.TgAkkauntRepo;
 import uz.kassa.repo.TgXabarRepo;
 import uz.kassa.service.NotifySwitches;
 import uz.kassa.service.control.ControlNotifier;
+import uz.kassa.repo.TgManbaHolatRepo;
+import uz.kassa.repo.AppUserRepo;
+import uz.kassa.bot.OcrEngine;
+import org.springframework.beans.factory.ObjectProvider;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,6 +50,12 @@ public class TgReaderService {
     private final DayRepo dayRepo;
     private final uz.kassa.repo.TgCardRepo cardRepo;
     private final uz.kassa.repo.ClickAccountRepo clickRepo;
+    private final TgManbaHolatRepo holatRepo;
+    private final AppUserRepo userRepo;
+    private final OcrEngine ocr;
+    /** Darvoza (tg-reader HTTP) — ObjectProvider: TgReaderHttpGateway o'zi shu servisga bog'liq (siklik bog'liqlik). */
+    private final ObjectProvider<TgAccountGateway> gatewayProvider;
+    private final ObjectMapper om = new ObjectMapper();
     private final ZoneId zone = ZoneId.of("Asia/Tashkent");
 
     /* ==================== ingest (tg-reader → ilova) ==================== */
@@ -68,40 +80,68 @@ public class TgReaderService {
         });
     }
 
-    /** tg-reader qayerdan davom etsin: oxirgi ma'lum xabar id. */
-    public long lastMsgId(String phone) {
-        return accRepo.findById(phone).map(TgAkkaunt::getLastMsgId).orElse(0L);
+    /** tg-reader qayerdan davom etsin: manba kesimida oxirgi ma'lum xabar id (asosiy bot uchun eski maydon ham hisobga olinadi). */
+    public long lastMsgId(String phone, String source) {
+        TgAkkaunt a = accRepo.findById(phone).orElse(null);
+        String src = source == null || source.isBlank() ? (a == null ? "" : a.getSourceBot()) : source;
+        long fromTable = holatRepo.findById(new TgManbaHolat.Id(phone, src)).map(TgManbaHolat::getLastMsgId).orElse(0L);
+        long legacy = a != null && src.equals(a.getSourceBot()) ? a.getLastMsgId() : 0L;
+        return Math.max(fromTable, legacy);
     }
 
-    /** Kelgan xabarlar (bir yoki bir nechta). Yangi xabarlar tekshiriladi va kerak bo'lsa ogohlantiriladi. */
+    /** Kelgan xabarlar (bir yoki bir nechta, manba kesimida). Yangi xabarlar tekshiriladi va kerak bo'lsa ogohlantiriladi. */
     public void ingest(String phone, List<Msg> messages) {
         TgAkkaunt acc = accRepo.findById(phone).orElse(null);
         if (acc == null) { upsertAccount(phone, "", null, "", ""); acc = accRepo.findById(phone).orElse(null); }
         if (acc == null || messages == null || messages.isEmpty()) return;
-        long maxId = acc.getLastMsgId();
-        LocalDateTime maxAt = acc.getLastMsgAt();
+        Map<String, TgManbaHolat> holat = new LinkedHashMap<>();
         for (Msg m : messages) {
-            if (msgRepo.findByPhoneAndMsgId(phone, m.msgId()).isPresent()) continue;
+            String src = m.sourceBot() == null || m.sourceBot().isBlank() ? acc.getSourceBot() : m.sourceBot();
+            if (msgRepo.findByPhoneAndSourceBotAndMsgId(phone, src, m.msgId()).isPresent()) continue;
             LocalDateTime at = parseAt(m.date());
-            TgXabar x = TgXabar.builder().phone(phone).sourceBot(m.sourceBot() == null ? acc.getSourceBot() : m.sourceBot())
-                    .msgId(m.msgId()).msgAt(at).text(cut(m.text(), 8000)).media(m.media() == null ? "" : m.media())
+            String text = m.text() == null ? "" : m.text();
+            if (m.sender() != null && !m.sender().isBlank()) text = "👤 " + m.sender() + "\n" + text;   // guruh: kim yozgani
+            if (m.photoB64() != null && !m.photoB64().isBlank() && cfg.mediaOcr()) text = text + ocrText(phone, m.photoB64());
+            TgXabar x = TgXabar.builder().phone(phone).sourceBot(src)
+                    .msgId(m.msgId()).msgAt(at).text(cut(text, 8000)).media(m.media() == null ? "" : m.media())
                     .verdict("YANGI").createdAt(Instant.now()).build();
             check(acc, x);
             msgRepo.save(x);
-            if (m.msgId() > maxId) maxId = m.msgId();
-            if (at != null && (maxAt == null || at.isAfter(maxAt))) maxAt = at;
+            TgManbaHolat h = holat.computeIfAbsent(src, k -> holatRepo.findById(new TgManbaHolat.Id(phone, k)).orElseGet(() -> TgManbaHolat.of(phone, k)));
+            if (m.msgId() > h.getLastMsgId()) h.setLastMsgId(m.msgId());
+            if (at != null && (h.getLastMsgAt() == null || at.isAfter(h.getLastMsgAt()))) h.setLastMsgAt(at);
             // per-xabar ogohlantirish faqat kalit so'z / nomuvofiqlikda (karta qoldig'i jimgina yig'iladi, guruhga hisobot alohida)
             if ("OGOH".equals(x.getVerdict()) || "NOMOS".equals(x.getVerdict())) notify(acc, x);
         }
-        acc.setLastMsgId(maxId);
-        acc.setLastMsgAt(maxAt);
+        for (TgManbaHolat h : holat.values()) {
+            holatRepo.save(h);
+            if (h.getId().getSource().equals(acc.getSourceBot())) {   // asosiy bot — eski maydonlar ham (ro'yxat/holat ekranlari uchun)
+                if (h.getLastMsgId() > acc.getLastMsgId()) acc.setLastMsgId(h.getLastMsgId());
+                if (h.getLastMsgAt() != null && (acc.getLastMsgAt() == null || h.getLastMsgAt().isAfter(acc.getLastMsgAt()))) acc.setLastMsgAt(h.getLastMsgAt());
+            }
+        }
         acc.setLastSeenAt(Instant.now());
         acc.setLastError(null);
         accRepo.save(acc);
     }
 
-    /** tg-reader'dan keladigan xabar. */
-    public record Msg(long msgId, String date, String text, String media, String sourceBot) {}
+    /** tg-reader'dan keladigan xabar: sourceBot — manba kaliti (bot/odam username, «me», chat id), sender — guruhda kim yozgani, photoB64 — rasm (OCR uchun). */
+    public record Msg(long msgId, String date, String text, String media, String sourceBot, String sender, String photoB64) {}
+
+    /** Rasmni OCR qilib matnga qo'shish («[OCR]» bo'limi) — karta/summa parserlari va kalit so'zlar shu matnda ham ishlaydi. */
+    private String ocrText(String phone, String b64) {
+        java.io.File tmp = null;
+        try {
+            byte[] data = Base64.getDecoder().decode(b64);
+            tmp = java.io.File.createTempFile("tgsrc-", ".jpg");
+            java.nio.file.Files.write(tmp.toPath(), data);
+            String t = ocr.ocrMultiPass(tmp);
+            return t == null || t.isBlank() ? "" : "\n[OCR]\n" + t.trim();
+        } catch (Exception e) {
+            log.warn("tg-reader OCR ({}): {}", phone, e.toString());
+            return "";
+        } finally { if (tmp != null) tmp.delete(); }
+    }
 
     /* ==================== tekshiruv ==================== */
 
@@ -111,6 +151,18 @@ public class TgReaderService {
         TgCardParser.Card c = TgCardParser.parse(x.getText());
         boolean isCard = c != null && c.usable();
         if (isCard) {
+            // 🙈 Shaxsiy karta (tg_card.hidden, V43): xabar MAZMUNI va summasi SAQLANMAYDI, kalit so'z/ogohlantirish yo'q,
+            // qoldiq yangilanmaydi — xodimning shaxsiy harakatlari jurnalda qolmasin. 👁 qaytarilsa keyingi xabarlardan davom etadi.
+            TgCard hidden = cardRepo.findBySourceBotAndMask(x.getSourceBot(), c.mask()).filter(TgCard::isHidden).orElse(null);
+            if (hidden != null) {
+                x.setText("🙈 shaxsiy karta *" + c.mask() + " — mazmuni saqlanmadi");
+                x.setCardMask(c.mask());
+                x.setVerdict("SHAXSIY");
+                x.setNote("shaxsiy karta");
+                hidden.setUpdatedAt(Instant.now());   // faqat «xabar kelyapti» belgisi
+                cardRepo.save(hidden);
+                return;
+            }
             x.setDir(c.dir());
             x.setAmount(c.amount());
             x.setBalance(c.balance());
@@ -216,6 +268,79 @@ public class TgReaderService {
                 + "\n\n<i>tg-reader servisi to'xtagan yoki akkaunt uzilgan bo'lishi mumkin.</i>";
         notifier.send(NotifySwitches.TG_JIM, notifier.superadmins(), text, null);
         for (Long chatId : cfg.chatIds()) try { sender.send(chatId, text); } catch (Exception ignored) { }
+    }
+
+    /* ==================== 💰 qoldiq so'rovi / 🔐 xavfsizlik (tg-reader orqali) ==================== */
+
+    private TgAccountGateway gw() { return gatewayProvider.getIfAvailable(); }
+
+    public boolean balanceConfigured() { return cfg.enabled() && !cfg.balanceSteps().isEmpty(); }
+    public int balanceBeforeMin() { return cfg.balanceBeforeMin(); }
+
+    /** Barcha faol akkauntlardan (phone == null) yoki bittasidan asosiy botga buyruq yuborib qoldiqni so'rash. Javoblar
+     *  oddiy xabar sifatida ham keladi (ingest → karta yangilanadi); bu yerda odam o'qiydigan xulosa qaytariladi. */
+    public String requestBalances(String phone, String reason) {
+        var gw = gw();
+        List<String> steps = cfg.balanceSteps();
+        if (gw == null || steps.isEmpty()) return "⚠️ Qoldiq so'rovi sozlanmagan (💰 Qoldiq so'rovi)";
+        List<TgAkkaunt> list = phone == null ? accRepo.findByActiveTrueOrderByPhoneAsc() : accRepo.findById(phone).map(a -> List.of(a)).orElse(List.of());
+        StringBuilder sb = new StringBuilder();
+        for (TgAkkaunt a : list) {
+            TgAccountGateway.BalanceResult r;
+            try { r = gw.balance(a.getPhone(), steps); } catch (Exception e) { r = new TgAccountGateway.BalanceResult(false, e.toString(), List.of()); }
+            log.info("Qoldiq so'rovi ({}, {}): {} — {}", a.getPhone(), reason, r.ok() ? "ok" : "xato", r.message());
+            sb.append(r.ok() ? "✅ " : "⚠️ ").append(esc(a.getName().isBlank() ? a.getPhone() : a.getName())).append(": ").append(esc(r.message())).append("\n");
+            for (String rep : r.replies()) sb.append("   ↳ <i>").append(esc(cut(rep.replaceAll("\\s+", " "), 120))).append("</i>\n");
+        }
+        return sb.length() == 0 ? "⚠️ Faol akkaunt yo'q" : sb.toString().trim();
+    }
+
+    /** Akkaunt xavfsizligi: tg-reader'dan jonli seanslar + 2FA; saqlaydi va YANGI (avval ko'rilmagan) seans bo'lsa ogohlantiradi. */
+    public TgAccountGateway.SecurityInfo refreshSecurity(TgAkkaunt a, boolean notifyNew) {
+        var gw = gw();
+        if (gw == null) return null;
+        TgAccountGateway.SecurityInfo info;
+        try { info = gw.security(a.getPhone()); } catch (Exception e) { info = new TgAccountGateway.SecurityInfo(false, e.toString(), null, List.of()); }
+        if (info == null || !info.ok()) return info;
+        Set<Long> known = new HashSet<>();
+        boolean first = a.getSessionsJson() == null;
+        if (!first) try { for (JsonNode n : om.readTree(a.getSessionsJson())) known.add(n.path("hash").asLong()); } catch (Exception ignored) { }
+        List<TgAccountGateway.SessionInfo> fresh = info.sessions().stream().filter(s -> !s.current() && !known.contains(s.hash())).toList();
+        try { a.setSessionsJson(om.writeValueAsString(info.sessions())); } catch (Exception ignored) { }
+        a.setTwoFa(info.twoFa());
+        a.setSessionsAt(Instant.now());
+        accRepo.save(a);
+        if (notifyNew && !first && !fresh.isEmpty()) {
+            StringBuilder sb = new StringBuilder("🔐 <b>Akkauntga yangi qurilma kirdi</b>\n👤 ")
+                    .append(esc(a.getName().isBlank() ? a.getPhone() : a.getName() + " (" + a.getPhone() + ")")).append("\n");
+            for (var s : fresh) sb.append("📱 ").append(esc(sessionLine(s))).append("\n");
+            sb.append("\n<i>Agar bu siz emas — Telegram → Sozlamalar → Qurilmalar → seansni tugating va parolni almashtiring.</i>");
+            Set<AppUser> to = new LinkedHashSet<>(notifier.superadmins());
+            if (a.getUserId() != null) userRepo.findById(a.getUserId()).ifPresent(to::add);
+            notifier.send(NotifySwitches.TG_XAVFSIZLIK, to, sb.toString(), null);
+            log.info("Xavfsizlik ({}): {} ta yangi seans — ogohlantirildi", a.getPhone(), fresh.size());
+        }
+        return info;
+    }
+
+    /** Seans qatori: qurilma · ilova · davlat · oxirgi faollik (Toshkent). */
+    public static String sessionLine(TgAccountGateway.SessionInfo s) {
+        String when = "";
+        if (s.dateActive() != null) {
+            try { when = java.time.OffsetDateTime.parse(s.dateActive()).atZoneSameInstant(ZoneId.of("Asia/Tashkent")).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm")); }
+            catch (Exception e) { when = s.dateActive(); }
+        }
+        return (s.device().isBlank() ? "?" : s.device()) + " · " + s.app() + (s.country().isBlank() ? "" : " · " + s.country()) + (when.isBlank() ? "" : " · " + when);
+    }
+
+    /** Soatiga bir (Jobs, har 5 daqiqada chaqiriladi): barcha faol akkauntlar seanslarini tekshirish. */
+    public void securityTick() {
+        if (!cfg.enabled() || gw() == null) return;
+        String mark = LocalDate.now(zone) + "#" + LocalDateTime.now(zone).getHour();
+        if (mark.equals(cfg.get(TgReaderConfig.SECURITY_AT).orElse(""))) return;
+        cfg.set(TgReaderConfig.SECURITY_AT, mark);
+        for (TgAkkaunt a : accRepo.findByActiveTrueOrderByPhoneAsc())
+            try { refreshSecurity(a, true); } catch (Exception e) { log.warn("Xavfsizlik tekshiruvi ({}): {}", a.getPhone(), e.getMessage()); }
     }
 
     /* ==================== o'qish (bot/web) ==================== */

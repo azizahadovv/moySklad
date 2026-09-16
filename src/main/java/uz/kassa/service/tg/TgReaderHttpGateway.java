@@ -57,7 +57,10 @@ public class TgReaderHttpGateway implements TgAccountGateway {
 
     @Override
     public Result pollQr(long userId) {
-        return toResult(userId, post("/login/qr/poll", Map.of("userId", userId)));
+        JsonNode r = post("/login/qr/poll", Map.of("userId", userId));
+        // vaqtinchalik tarmoq/HTTP xatosi ERROR emas — chaqiruvchi (TgHandler.pollQr sikli) keyingi urinishda davom etadi
+        if (r == null) throw new IllegalStateException("tg-reader javob bermadi");
+        return toResult(userId, r);
     }
 
     @Override
@@ -107,6 +110,27 @@ public class TgReaderHttpGateway implements TgAccountGateway {
             out.add(new PendingLogin(n.path("userId").asLong(0), Instant.ofEpochSecond(n.path("startedAt").asLong(0))));
         }
         return out;
+    }
+
+    @Override
+    public BalanceResult balance(String phone, List<String> steps) {
+        JsonNode r = post("/account/balance", Map.of("phone", phone, "steps", steps));
+        if (r == null) return new BalanceResult(false, "tg-reader xizmati javob bermadi", List.of());
+        List<String> replies = new ArrayList<>();
+        for (JsonNode n : r.path("replies")) replies.add(n.asText(""));
+        return new BalanceResult(r.path("ok").asBoolean(false), r.path("message").asText(""), replies);
+    }
+
+    @Override
+    public SecurityInfo security(String phone) {
+        JsonNode r = post("/account/security", Map.of("phone", phone));
+        if (r == null) return new SecurityInfo(false, "tg-reader xizmati javob bermadi", null, List.of());
+        if (!r.path("ok").asBoolean(false)) return new SecurityInfo(false, r.path("message").asText("xato"), null, List.of());
+        List<SessionInfo> list = new ArrayList<>();
+        for (JsonNode n : r.path("sessions"))
+            list.add(new SessionInfo(n.path("hash").asLong(), n.path("device").asText(""), n.path("platform").asText(""), n.path("app").asText(""),
+                    n.path("country").asText(""), n.path("dateActive").isNull() ? null : n.path("dateActive").asText(null), n.path("current").asBoolean(false)));
+        return new SecurityInfo(true, null, r.path("twoFa").asBoolean(false), list);
     }
 
     /* ==================== yordamchi ==================== */

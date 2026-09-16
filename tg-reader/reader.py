@@ -31,13 +31,13 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import aiohttp
 import qrcode
 from aiohttp import web
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, functions, types, utils
 from telethon.errors import SessionPasswordNeededError
 
 API_ID = int(os.environ.get("TG_API_ID", "0") or 0)
@@ -50,16 +50,23 @@ BACKFILL = int(os.environ.get("TG_BACKFILL", "200") or 200)
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", "8081") or 8081)
 HEARTBEAT_SEC = 60
 SCAN_SEC = 60
+MEDIA_MAX = 3 * 1024 * 1024   # OCR uchun rasm chegarasi (bayt)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tg-reader")
 
 # telefon -> asyncio.Task (serve() ishlab turgan akkauntlar)
 running: dict[str, asyncio.Task] = {}
+# telefon -> serve() ichida ishlab turgan TelegramClient. Test kabi amallar SHU mijozni ishlatadi: bitta SQLite
+# sessiya fayliga ikkinchi mijoz ochilsa "database is locked" (2026-09-16 — ✅ Tekshirish HTTP 500 berardi).
+clients: dict[str, TelegramClient] = {}
 # str(userId) -> {"client","qr","task","step","gen","png","phone","name","error","started_at",...} — QR-login jarayoni
 qr_state: dict[str, dict] = {}
 # qo'lda to'xtatilgan (pauza) telefonlar — run() sikli qayta ishga tushirmaydi
 paused: set[str] = set()
+# Ilova sozlamalari (GET /api/tgreader/config, har SCAN_SEC): manbalar ro'yxati (FAQAT shular o'qiladi), asosiy bot, rasm OCR.
+# Ilova hali javob bermasa — .env dagi bitta bot bilan ishlaydi.
+CONFIG: dict = {"sources": [SOURCE_BOT] if SOURCE_BOT else [], "sourceBot": SOURCE_BOT, "media": False}
 
 _http: aiohttp.ClientSession | None = None
 
@@ -91,6 +98,36 @@ async def post(path: str, payload: dict, retries: int = 5) -> dict | None:
             log.warning("ilova %s → %s (urinish %d)", path, e, attempt + 1)
         await asyncio.sleep(min(30, 3 * (attempt + 1)))
     return None
+
+
+async def get(path: str) -> dict | None:
+    """GET JSON ← ilova (bir urinish; sozlama o'qish uchun)."""
+    try:
+        async with _session().get(APP_URL + path, headers={"X-Reader-Secret": SECRET},
+                                   timeout=aiohttp.ClientTimeout(total=15)) as r:
+            body = await r.text()
+            if r.status == 200:
+                return json.loads(body) if body else {}
+            log.warning("ilova %s → HTTP %s: %s", path, r.status, body[:200])
+    except Exception as e:  # noqa: BLE001
+        log.warning("ilova %s → %s", path, e)
+    return None
+
+
+async def fetch_config():
+    r = await get("/api/tgreader/config")
+    if r is None:
+        return
+    srcs = [str(x).strip().lstrip("@") for x in (r.get("sources") or []) if str(x).strip()]
+    if srcs:
+        CONFIG["sources"] = srcs
+    if r.get("sourceBot"):
+        CONFIG["sourceBot"] = str(r["sourceBot"]).strip().lstrip("@")
+    CONFIG["media"] = bool(r.get("media"))
+
+
+def main_bot() -> str:
+    return CONFIG.get("sourceBot") or SOURCE_BOT
 
 
 def session_path(phone: str) -> str:
@@ -139,6 +176,14 @@ def start_serving(phone: str):
 
 async def serve(phone: str):
     client = new_client(phone)
+    clients[phone] = client
+    try:
+        await _serve(client, phone)
+    finally:
+        clients.pop(phone, None)
+
+
+async def _serve(client: TelegramClient, phone: str):
     await client.connect()
     if not await client.is_user_authorized():
         log.warning("%s: sessiya avtorizatsiya qilinmagan — bot orqali qayta ulang", phone)
@@ -146,52 +191,115 @@ async def serve(phone: str):
         return
     me = await client.get_me()
     name = ((me.first_name or "") + " " + (me.last_name or "")).strip()
-    await post("/api/tgreader/account", {"phone": phone, "name": name, "tgUserId": me.id, "username": me.username or "", "sourceBot": SOURCE_BOT})
-    try:
-        bot = await client.get_entity(SOURCE_BOT)
-    except Exception as e:  # noqa: BLE001
-        log.error("%s: @%s topilmadi (%s) — akkaunt bu bot bilan hali yozishmagan bo'lishi mumkin", phone, SOURCE_BOT, e)
-        await post("/api/tgreader/heartbeat", {"phone": phone, "error": f"@{SOURCE_BOT} topilmadi"})
-        await client.disconnect()
-        return
+    await post("/api/tgreader/account", {"phone": phone, "name": name, "tgUserId": me.id, "username": me.username or "", "sourceBot": main_bot()})
 
-    def payload(m) -> dict:
-        media = ""
-        if m.photo:
-            media = "photo"
-        elif m.document:
-            media = "document"
-        return {"phone": phone, "msgId": m.id, "date": m.date.isoformat(), "text": m.message or "", "media": media, "sourceBot": SOURCE_BOT}
+    # Manbalar (ilova sozlamasi, har SCAN_SEC yangilanadi): kalit → {"id": chat_id, "group": guruhmi}.
+    # FAQAT shu ro'yxatdagi chatlar o'qiladi — xodimning boshqa yozishmalariga tegilmaydi.
+    resolved: dict[str, dict] = {}
+    failed: dict[str, float] = {}   # kalit → qachon urinilgan (10 daqiqada bir qayta uriniladi)
 
-    # oxirgi ma'lum xabardan keyingilarini to'ldirish (ilova qayta ishga tushganda tushib qolmasin)
-    st = await post("/api/tgreader/state", {"phone": phone}) or {}
-    last_id = int(st.get("lastMsgId") or 0)
-    batch = []
-    async for m in client.iter_messages(bot, min_id=last_id, limit=None if last_id else BACKFILL, reverse=bool(last_id)):
-        batch.append(payload(m))
-    if not last_id:
-        batch.reverse()  # eskidan yangiga
-    if batch:
-        await post("/api/tgreader/messages", {"phone": phone, "messages": batch})
-        log.info("%s: %d ta eski xabar yuborildi (min_id=%d)", phone, len(batch), last_id)
+    async def payload(m, key: str, with_media: bool = False) -> dict:
+        media = "photo" if m.photo else ("document" if m.document else "")
+        d = {"phone": phone, "msgId": m.id, "date": m.date.isoformat(), "text": m.message or "", "media": media, "sourceBot": key}
+        if (resolved.get(key) or {}).get("group"):   # guruh: kim yozgani (bot/odam/kanalda manbaning o'zi — yozilmaydi)
+            try:
+                snd = await m.get_sender()
+                if snd is not None:
+                    d["sender"] = (getattr(snd, "title", None) or ((getattr(snd, "first_name", "") or "") + " " + (getattr(snd, "last_name", "") or ""))).strip() or str(getattr(snd, "id", ""))
+            except Exception:  # noqa: BLE001
+                pass
+        if with_media and CONFIG.get("media") and (m.photo or (m.document and (m.document.mime_type or "").startswith("image/"))):
+            try:
+                data = await client.download_media(m, bytes)
+                if data and len(data) <= MEDIA_MAX:
+                    d["photoB64"] = base64.b64encode(data).decode("ascii")
+                elif data:
+                    log.info("%s: %s #%d rasm juda katta (%d bayt) — OCR qilinmaydi", phone, key, m.id, len(data))
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s: rasm yuklab olinmadi (%s #%d): %s", phone, key, m.id, e)
+        return d
 
-    @client.on(events.NewMessage(chats=bot))
+    async def backfill(key: str, ent):
+        st = await post("/api/tgreader/state", {"phone": phone, "source": key}) or {}
+        last_id = int(st.get("lastMsgId") or 0)
+        limit = None if last_id else (BACKFILL if key == main_bot() else min(BACKFILL, 50))   # qo'shimcha manbada eski xabar kamroq
+        batch = []
+        async for m in client.iter_messages(ent, min_id=last_id, limit=limit, reverse=bool(last_id)):
+            batch.append(await payload(m, key))   # eski xabarlar uchun rasm yuklanmaydi (og'ir)
+        if not last_id:
+            batch.reverse()  # eskidan yangiga
+        if batch:
+            await post("/api/tgreader/messages", {"phone": phone, "messages": batch})
+            log.info("%s: %s — %d ta eski xabar yuborildi (min_id=%d)", phone, key, len(batch), last_id)
+
+    async def resolve_sources():
+        want = list(CONFIG.get("sources") or [])
+        for key in want:
+            if key in resolved:
+                continue
+            if key in failed and _now() - failed[key] < 600:
+                continue
+            try:
+                ent = await client.get_entity(_source_ref(key))
+                is_group = isinstance(ent, types.Chat) or (isinstance(ent, types.Channel) and bool(ent.megagroup))
+                resolved[key] = {"id": utils.get_peer_id(ent), "group": is_group}
+                failed.pop(key, None)
+                log.info("%s: manba %s ulandi (id %s%s)", phone, key, resolved[key]["id"], ", guruh" if is_group else "")
+                await backfill(key, ent)
+            except Exception as e:  # noqa: BLE001
+                failed[key] = _now()
+                log.warning("%s: manba %s topilmadi: %s", phone, key, e)
+                if key == main_bot():
+                    await post("/api/tgreader/heartbeat", {"phone": phone, "error": f"@{key} topilmadi"})
+        for key in list(resolved):   # sozlamadan olib tashlanganlar
+            if key not in want:
+                resolved.pop(key)
+                log.info("%s: manba %s o'chirildi", phone, key)
+
+    await resolve_sources()
+
+    @client.on(events.NewMessage())
     async def on_new(event):
-        if await post("/api/tgreader/messages", {"phone": phone, "messages": [payload(event.message)]}) is None:
-            log.error("%s: xabar %d yuborilmadi — keyingi ulanishda to'ldiriladi", phone, event.message.id)
+        key = next((k for k, v in resolved.items() if v["id"] == event.chat_id), None)
+        if key is None:
+            return
+        if event.out and key != "me":   # o'zimiz yuborgan (masalan qoldiq so'rovi) — «me» dan tashqari
+            return
+        if await post("/api/tgreader/messages", {"phone": phone, "messages": [await payload(event.message, key, True)]}) is None:
+            log.error("%s: xabar %d (%s) yuborilmadi — keyingi ulanishda to'ldiriladi", phone, event.message.id, key)
 
     async def heartbeat():
         while client.is_connected():
             await post("/api/tgreader/heartbeat", {"phone": phone})
             await asyncio.sleep(HEARTBEAT_SEC)
 
-    log.info("%s (%s): @%s tinglanmoqda", phone, name, SOURCE_BOT)
+    async def refresh():
+        while client.is_connected():
+            await asyncio.sleep(SCAN_SEC)
+            try:
+                await resolve_sources()
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s: manbalarni yangilashda xato: %s", phone, e)
+
+    log.info("%s (%s): %d ta manba tinglanmoqda: %s", phone, name, len(resolved), ", ".join(resolved) or "—")
     hb_task = asyncio.create_task(heartbeat())
+    rf_task = asyncio.create_task(refresh())
     try:
         await client.run_until_disconnected()
     finally:
         hb_task.cancel()
+        rf_task.cancel()
     log.warning("%s: ulanish uzildi", phone)
+
+
+def _source_ref(key: str):
+    """Sozlamadagi manba kaliti → Telethon entity ko'rsatkichi: me | username | raqamli id (kanal/guruh -100…)."""
+    k = key.strip().lstrip("@")
+    if k.lower() == "me":
+        return "me"
+    if k.lstrip("-").isdigit():
+        return int(k)
+    return k
 
 
 async def run():
@@ -199,6 +307,7 @@ async def run():
         log.error("TG_API_ID / TG_API_HASH bo'sh — my.telegram.org dan oling")
         sys.exit(2)
     while True:
+        await fetch_config()   # manbalar / OCR — ilova sozlamasidan
         for phone in sessions():
             if phone in paused:
                 continue
@@ -243,43 +352,88 @@ async def api_qr_start(request):
              "started_at": _now()}
     qr_state[user_id] = state
     state["task"] = asyncio.create_task(qr_watch(user_id))
+    log.info("QR[%s]: boshlandi", user_id)
     return web.json_response({"step": "QR", "gen": 1, "png": state["png"]})
 
 
+async def _try_complete(state: dict):
+    """Tokenni qayta so'rab, telefon uni QABUL QILGAN-QILMAGANINI tekshiradi (xuddi QRLogin.wait() signal
+    kelganda qilgani kabi). Telegram tokenni qabul qilishi bilan reader'ning auth_key'i DARHOL avtorizatsiya
+    bo'ladi (telefonda «Faol seanslar»da ko'rinadi), lekin UpdateLoginToken signali QRLogin.wait() tashqarisida —
+    recreate()/rasm chizish oralig'ida — kelsa YO'QOLADI va login hech qachon tugamaydi (2026-09-16: ikkinchi
+    akkaunt shu tufayli «ulanmadi», telefonda esa egasiz seans qoldi). Bu yerda signalga bog'lanmaymiz.
+    Qaytadi: True — ulandi; "PASSWORD" — 2FA parol kerak; False — hali yo'q (qr'ga YANGI token o'rnatildi)."""
+    client, qr = state["client"], state["qr"]
+    try:
+        resp = await client(functions.auth.ExportLoginTokenRequest(client.api_id, client.api_hash, []))
+        if isinstance(resp, types.auth.LoginTokenMigrateTo):
+            await client._switch_dc(resp.dc_id)
+            resp = await client(functions.auth.ImportLoginTokenRequest(resp.token))
+        if isinstance(resp, types.auth.LoginTokenSuccess):
+            await client._on_login(resp.authorization.user)   # telethon 1.36 (pinned): QRLogin.wait() ham aynan shuni qiladi
+            return True
+        if isinstance(resp, types.auth.LoginToken):
+            qr._resp = resp   # = qr.recreate() natijasi (bitta so'rov bilan): url/expires yangi tokenga o'tadi
+    except SessionPasswordNeededError:
+        return "PASSWORD"
+    return False
+
+
 async def qr_watch(user_id: str):
-    """QR tokeni ~30s'da eskiradi — inson telefonini olib skanerlashga ulguradigan bo'lsin deb,
-    fon rejimida muntazam yangilaymiz (auth.exportLoginToken qayta so'raladi, rasm yangilanadi)."""
+    """QR tokeni ~30s'da eskiradi — inson telefonini olib skanerlashga ulguradigan bo'lsin deb, muddati tugaganda
+    yangilaymiz (rasm ham yangilanadi, bot uni ko'rsatadi).
+    MUHIM (2026-09-16): UpdateLoginToken tinglovchisi BUTUN jarayon davomida turadi (QRLogin.wait() uni faqat o'z
+    ichida ushlab, chiqishda o'chiradi — oraliqda kelgan signal yo'qolardi) va har siklda token qabul qilingan-
+    qilinmagani _try_complete bilan serverdan ALOHIDA so'raladi — telefon ekranda qolib ketgan ESKI QR'ni
+    skanerlasa ham ulanish tugallanadi. Signal kelganda darhol tugaydi (tezlik avvalgidek)."""
     state = qr_state.get(user_id)
     if not state:
         return
     qr = state["qr"]
     client = state["client"]
     deadline = _now() + 600  # 10 daqiqa umumiy chegara (odam telefonini topib, ilovani ochib ulguradi)
+    scanned = asyncio.Event()
+
+    async def on_login_token(_update):
+        scanned.set()
+
+    client.add_event_handler(on_login_token, events.Raw(types.UpdateLoginToken))
+    log.info("QR[%s]: yaratildi gen=1 (muddati %s UTC)", user_id, qr.expires.strftime("%H:%M:%S"))
     try:
         while _now() < deadline:
+            left = (qr.expires - datetime.now(timezone.utc)).total_seconds()
             try:
-                await qr.wait()
-                break  # skanerlandi va tasdiqlandi (2FA yo'q) — parolsiz muvaffaqiyatli
+                await asyncio.wait_for(scanned.wait(), timeout=max(1.0, min(left, 60.0)))
+                log.info("QR[%s]: skanerlandi (signal keldi)", user_id)
             except asyncio.TimeoutError:
-                await qr.recreate()
-                state["gen"] += 1
-                state["png"] = render_qr_png(qr.url)
-                continue
-            except SessionPasswordNeededError:
+                pass
+            scanned.clear()
+            done = await _try_complete(state)
+            if done is True:
+                break
+            if done == "PASSWORD":
                 state["step"] = "NEED_PASSWORD"
+                log.info("QR[%s]: skanerlandi, 2FA parol kutilmoqda", user_id)
                 return
-            except Exception as e:  # noqa: BLE001
-                state["step"] = "ERROR"
-                state["error"] = str(e)
-                await _close_qr_client(state)
-                return
+            state["gen"] += 1
+            state["png"] = render_qr_png(qr.url)
+            log.info("QR[%s]: token yangilandi gen=%d", user_id, state["gen"])
         else:
             state["step"] = "ERROR"
             state["error"] = "Vaqt tugadi (10 daqiqa) — qaytadan boshlang"
-            await _close_qr_client(state)
+            log.warning("QR[%s]: 10 daqiqada skanerlanmadi", user_id)
+            await _close_qr_client(state, logout=True)
             return
     except asyncio.CancelledError:
         return
+    except Exception as e:  # noqa: BLE001
+        state["step"] = "ERROR"
+        state["error"] = str(e)
+        log.warning("QR[%s]: xato: %s", user_id, e)
+        await _close_qr_client(state, logout=True)
+        return
+    finally:
+        client.remove_event_handler(on_login_token)
     await finish_qr(user_id)
 
 
@@ -295,7 +449,7 @@ async def finish_qr(user_id: str):
         state["error"] = str(e)
         await _close_qr_client(state)
         return
-    phone = "+" + (me.phone or "")
+    phone = "+" + me.phone if me.phone else f"id{me.id}"   # o'z raqami doim keladi; ehtiyot: ikki akkaunt "+.session"ga tushmasin
     name = ((me.first_name or "") + " " + (me.last_name or "")).strip()
     await client.disconnect()
     old_file = session_path(state["temp_name"]) + ".session"
@@ -308,13 +462,22 @@ async def finish_qr(user_id: str):
     state["step"] = "CONNECTED"
     state["phone"] = phone
     state["name"] = name
+    log.info("QR[%s]: ULANDI %s (%s)", user_id, phone, name)
     paused.discard(phone)
     start_serving(phone)
 
 
-async def _close_qr_client(state: dict):
+async def _close_qr_client(state: dict, logout: bool = False):
+    client = state["client"]
     try:
-        await state["client"].disconnect()
+        # telefon tokenni qabul qilib ulgurgan, lekin login yakunlanmagan bo'lsa — «Faol seanslar»da EGASIZ seans qolmasin
+        if logout and client.is_connected() and await client.is_user_authorized():
+            await client.log_out()
+            log.info("QR: yarim qolgan avtorizatsiya chiqarildi (log_out)")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        await client.disconnect()
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -332,7 +495,9 @@ async def _drop_qr(user_id: str):
     task = old.get("task")
     if task:
         task.cancel()
-    await _close_qr_client(old)
+    if old.get("step") == "CONNECTED":
+        return  # allaqachon ulangan va o'z nomi bilan ishlayapti — hech narsa yopilmaydi
+    await _close_qr_client(old, logout=True)
 
 
 async def api_qr_poll(request):
@@ -366,7 +531,8 @@ async def api_qr_password(request):
     except Exception as e:  # noqa: BLE001
         state["step"] = "ERROR"
         state["error"] = str(e)
-        await _close_qr_client(state)
+        log.warning("QR[%s]: 2FA parol xatosi: %s", user_id, e)
+        await _close_qr_client(state, logout=True)
         return web.json_response({"step": "ERROR", "error": str(e)})
     await finish_qr(user_id)
     resp = {"step": state["step"]}
@@ -381,6 +547,7 @@ async def api_qr_password(request):
 
 async def api_qr_cancel(request):
     body = await request.json()
+    log.info("QR[%s]: bekor qilindi (bot)", body["userId"])
     await _drop_qr(str(body["userId"]))
     return web.json_response({"ok": True})
 
@@ -420,9 +587,13 @@ async def api_delete(request):
 async def api_test(request):
     body = await request.json()
     phone = body["phone"]
-    client = new_client(phone)
+    # Ishlab turgan akkaunt uchun serve() mijozi ishlatiladi (ikkinchi mijoz bir xil .session faylga →
+    # "database is locked"). Faqat to'xtatilgan/ulanmagan akkaunt uchun vaqtinchalik mijoz ochiladi.
+    shared = clients.get(phone)
+    client = shared if shared is not None else new_client(phone)
     try:
-        await client.connect()
+        if shared is None:
+            await client.connect()
         if not await client.is_user_authorized():
             return web.json_response({"ok": False, "message": "Ulanmagan — avval ulang yoki qayta yoqing"})
         text = "✅ NSB bot — ulanish tekshiruvi\n🕒 " + datetime.now(ZoneInfo("Asia/Tashkent")).strftime("%d.%m.%Y %H:%M:%S")
@@ -439,9 +610,101 @@ async def api_test(request):
             return web.json_response({"ok": True, "message": f"Test xabar + @{SOURCE_BOT}dan oxirgi xabar Saqlangan xabarlarga yuborildi ✅"})
         return web.json_response({"ok": True, "message": f"Test xabar yuborildi ✅ (@{SOURCE_BOT}dan hali xabar kelmagan)"})
     except Exception as e:  # noqa: BLE001
+        log.warning("%s: test xatosi: %s", phone, e)
         return web.json_response({"ok": False, "message": str(e)})
     finally:
-        await client.disconnect()
+        if shared is None:
+            try:
+                await client.disconnect()
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s: test mijozini yopishda xato: %s", phone, e)   # javob (return) saqlanib qoladi
+
+
+async def api_balance(request):
+    """💰 Asosiy botga qadam-baqadam buyruq/tugma yuborib qoldiqni so'rash. Javoblar oddiy xabar sifatida ham ilovaga
+    ketadi (on_new → parser → karta yangilanadi); bu yerda faqat ko'rsatish uchun matnlari qaytariladi."""
+    body = await request.json()
+    phone = body["phone"]
+    steps = [str(x).strip() for x in (body.get("steps") or []) if str(x).strip()]
+    if not steps:
+        return web.json_response({"ok": False, "message": "Buyruq sozlanmagan"})
+    client = clients.get(phone)
+    if client is None or not client.is_connected():
+        return web.json_response({"ok": False, "message": "Akkaunt ulanmagan"})
+    try:
+        bot = await client.get_entity(main_bot())
+        replies = []
+        for step in steps:
+            last = await client.get_messages(bot, limit=1)
+            last = last[0] if last else None
+            last_id = last.id if last else 0
+            last_edit = last.edit_date if last else None
+            clicked = False
+            if last and last.buttons:   # inline tugma: matni mos kelsa bosiladi
+                try:
+                    clicked = (await last.click(text=step)) is not None
+                except Exception as e:  # noqa: BLE001
+                    log.info("%s: tugma «%s» bosilmadi (%s) — matn sifatida yuboriladi", phone, step, e)
+            if not clicked:
+                await client.send_message(bot, step)
+            reply = await _wait_reply(client, bot, last_id, last_edit, 7.0)
+            if reply is None:
+                replies.append(f"«{step}» → javob kelmadi")
+                return web.json_response({"ok": False, "message": "Bot javob bermadi", "replies": replies})
+            replies.append(reply.message or "(matnsiz)")
+        log.info("%s: qoldiq so'rovi bajarildi (%d qadam)", phone, len(steps))
+        return web.json_response({"ok": True, "message": f"{len(steps)} qadam, javob olindi", "replies": replies})
+    except Exception as e:  # noqa: BLE001
+        log.warning("%s: qoldiq so'rovi xatosi: %s", phone, e)
+        return web.json_response({"ok": False, "message": str(e)})
+
+
+async def _wait_reply(client, bot, after_id: int, prev_edit, timeout: float):
+    """Botdan YANGI xabar (id > after_id, bizniki emas) yoki oxirgi xabarning TAHRIRI (inline tugma bosilganda botlar
+    ko'pincha shu xabarni o'zgartiradi) kelguncha kutadi."""
+    deadline = _now() + timeout
+    while _now() < deadline:
+        await asyncio.sleep(0.6)
+        msgs = await client.get_messages(bot, limit=1)
+        m = msgs[0] if msgs else None
+        if m is None:
+            continue
+        if m.id > after_id and not m.out:
+            return m
+        if m.id == after_id and m.edit_date and m.edit_date != prev_edit:
+            return m
+    return None
+
+
+async def api_security(request):
+    """🔐 Faol seanslar (account.getAuthorizations) va 2FA holati — admin ko'radi, yangi qurilma bo'lsa ilova ogohlantiradi."""
+    body = await request.json()
+    phone = body["phone"]
+    shared = clients.get(phone)
+    client = shared if shared is not None else new_client(phone)
+    try:
+        if shared is None:
+            await client.connect()
+        if not await client.is_user_authorized():
+            return web.json_response({"ok": False, "message": "Ulanmagan"})
+        auths = await client(functions.account.GetAuthorizationsRequest())
+        pwd = await client(functions.account.GetPasswordRequest())
+        sessions_out = []
+        for au in auths.authorizations:
+            sessions_out.append({"hash": au.hash, "device": au.device_model or "", "platform": au.platform or "",
+                                 "app": ((au.app_name or "") + " " + (au.app_version or "")).strip(), "country": au.country or "",
+                                 "ip": au.ip or "", "dateActive": au.date_active.isoformat() if au.date_active else None,
+                                 "dateCreated": au.date_created.isoformat() if au.date_created else None,
+                                 "current": bool(au.current), "official": bool(au.official_app)})
+        return web.json_response({"ok": True, "twoFa": bool(pwd.has_password), "sessions": sessions_out})
+    except Exception as e:  # noqa: BLE001
+        return web.json_response({"ok": False, "message": str(e)})
+    finally:
+        if shared is None:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def api_pending(request):
@@ -468,6 +731,8 @@ async def start_http_server():
         web.post("/account/resume", api_resume),
         web.post("/account/delete", api_delete),
         web.post("/account/test", api_test),
+        web.post("/account/balance", api_balance),
+        web.post("/account/security", api_security),
         web.get("/pending", api_pending),
     ])
     runner = web.AppRunner(app)
@@ -477,7 +742,18 @@ async def start_http_server():
     log.info("Boshqaruv HTTP serveri: 0.0.0.0:%d", CONTROL_PORT)
 
 
+def _cleanup_temp_sessions():
+    """Chala qolgan QR-login vaqtinchalik sessiyalari (.qr-*.session*) — qayta ishga tushganda ular hech kimga kerak emas."""
+    for p in glob.glob(os.path.join(SESSIONS_DIR, ".qr-*.session*")):
+        try:
+            os.remove(p)
+            log.info("Eski vaqtinchalik QR sessiya o'chirildi: %s", os.path.basename(p))
+        except OSError:
+            pass
+
+
 async def main():
+    _cleanup_temp_sessions()
     await asyncio.gather(run(), start_http_server())
 
 

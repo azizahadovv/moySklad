@@ -63,6 +63,7 @@ public class Jobs {
     private final uz.kassa.service.tg.TgReaderService tgReader;
     private final uz.kassa.service.tg.TgCardReport tgCardReport;
     private final uz.kassa.webapp.WebUrlService webUrl;
+    private final uz.kassa.service.jarima.JarimaService jarimaSvc;
     private volatile long lastBalanceTick = 0;
 
     /**
@@ -124,6 +125,10 @@ public class Jobs {
         int v = intSetting(CLICK_OFFSET_KEY, 0, -20, 20);
         return v - Math.floorMod(v, 5) + (Math.floorMod(v, 5) >= 3 ? 5 : 0);   // 5 ga yaxlitlash
     }
+
+    /** ⏰ Karta qoldig'i shu soatdan eski bo'lsa hisobotda «маълумот янгиланмаган» + mas'ulga eslatma (0 — o'chiq). */
+    public static final String CLICK_STALE_KEY = "notify.clickStaleHours";
+    public int clickStaleHours() { return intSetting(CLICK_STALE_KEY, 2, 0, 48); }
 
     /** Sozlamalar/hisobot uchun: «13:15» ko'rinishidagi misol vaqt. */
     public String clickTimeExample(int hour) {
@@ -398,11 +403,14 @@ public class Jobs {
         if ((h - from) % clickEvery() != 0) return;
         if (!sw.on(NotifySwitches.CLICK_SOATLIK)) { log.info("Click hisobot: 🔕 o'chirilgan (Хабарномалар)"); return; }
         log.info("Click hisobot: nominal {}:00 (siljish {} min) — yuborilmoqda", h, clickOffsetMin());
-        clickReportNow();
+        clickReportNow(true);
     }
 
-    /** Jadvalga qaramasdan darhol yuborish — 🧪 test tugmasi/buyrug'i uchun. */
-    public void clickReportNow() {
+    /** Jadvalga qaramasdan darhol yuborish — 🧪 test tugmasi/buyrug'i uchun (⚖️ jarima yozilmaydi). */
+    public void clickReportNow() { clickReportNow(false); }
+
+    /** @param jarima true — jadval bo'yicha haqiqiy hisobot: eskirgan/kiritilmagan karta uchun ⚖️ jarima yoziladi. */
+    public void clickReportNow(boolean jarima) {
         try {
             java.util.List<Long> chatIds = clickChatIds();
             if (chatIds.isEmpty()) return;
@@ -424,7 +432,7 @@ public class Jobs {
               .append(RULE_TOP).append("\n\n");
 
             // Otdel (kassa) kesimida guruhlab chiqariladi; bog'lanmaganlar — «Бошқа»
-            int[] stat = new int[3];   // 0 — тенг, 1 — фарқ, 2 — киритилмаган
+            int[] stat = new int[4];   // 0 — тенг, 1 — фарқ, 2 — киритилмаган, 3 — ⏰ янгиланмаган (eskirgan)
             java.util.Set<Long> shown = new java.util.HashSet<>();
             boolean firstSection = true;
             for (uz.kassa.domain.Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
@@ -440,7 +448,7 @@ public class Jobs {
                 for (ClickAccount c : mine) {
                     long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
                     shown.add(c.getId());
-                    sb.append(cardBlock(ms, c, bal, stat)).append("\n");
+                    sb.append(cardBlock(ms, c, bal, stat, jarima)).append("\n");
                 }
             }
             List<ClickAccount> rest = accounts.stream()
@@ -450,13 +458,14 @@ public class Jobs {
                 sb.append("📌 <b>БОШҚА</b>\n\n");
                 for (ClickAccount c : rest) {
                     long bal = ledger.view(OwnerType.CLICK, c.getId(), MoneyType.KLIK).getAmount();
-                    sb.append(cardBlock(ms, c, bal, stat)).append("\n");
+                    sb.append(cardBlock(ms, c, bal, stat, jarima)).append("\n");
                 }
             }
             sb.append(RULE_TOP).append("\n")
               .append("📊 <b>ХУЛОСА:</b>  ✅ тенг — ").append(stat[0])
               .append("   ⚠️ фарқ — ").append(stat[1])
-              .append("   ❗️ киритилмаган — ").append(stat[2]).append("\n\n");
+              .append("   ❗️ киритилмаган — ").append(stat[2])
+              .append(stat[3] == 0 ? "" : "   ⏰ янгиланмаган — " + stat[3]).append("\n\n");
             // Foydalanuvchi qarori: ost qismda ЖАМИ ham KO'RSATILMAYDI — u bot
             // balanslari yig'indisi bo'lib, qatorlardagi MoySklad qiymatlari bilan
             // manba jihatdan farq qilib chalg'itardi (masalan 200 002 farq hodisasi).
@@ -497,7 +506,7 @@ public class Jobs {
      *   ❗️ Карта қолдиғи: киритилмаган — ... (/karta id СУММА)
      * stat[] — xulosa hisoblagichi: 0 тенг, 1 фарқ, 2 киритилмаган.
      */
-    private String cardBlock(java.util.Map<String, Long> ms, ClickAccount c, long botBal, int[] stat) {
+    private String cardBlock(java.util.Map<String, Long> ms, ClickAccount c, long botBal, int[] stat, boolean jarima) {
         var zone = props.zoneId();
         String now = java.time.LocalTime.now(zone)
                 .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
@@ -516,6 +525,7 @@ public class Jobs {
             b.append("❗️ Карта қолдиғи: <b>киритилмаган</b>\n")
              .append("➡️ Карта остаткасини юборинг ва текширинг! ")
              .append("(<code>/karta ").append(c.getId()).append(" СУММА</code>)\n");
+            if (jarima) b.append(jarimaLine(c, -1));
         } else {
             long kartaBal = c.getCardBalance();   // tiyin
             String at = c.getCardBalanceAt() == null ? "?"
@@ -535,8 +545,35 @@ public class Jobs {
                 b.append("⚠️ Фарқ: <b>").append(farq > 0 ? "+" : "").append(TextUtil.fmtTiyin(farq))
                  .append("</b> — Карта остаткасини юборинг ва текширинг!\n");
             }
+            // ⏰ Farq bo'lmasa ham qoldiq ESKI bo'lishi mumkin (mas'ul N soat yubormagan) — alohida belgilanadi va mas'ul chaqiriladi
+            int staleH = clickStaleHours();
+            long ageMin = c.getCardBalanceAt() == null ? -1 : java.time.Duration.between(c.getCardBalanceAt(), java.time.Instant.now()).toMinutes();
+            if (staleH > 0 && ageMin >= staleH * 60L) {
+                stat[3]++;
+                b.append("⏰ <b>Маълумот янгиланмаган</b> — ").append(ageMin / 60).append(" соат")
+                 .append(c.getCardResponsible() == null || c.getCardResponsible().isBlank() ? "" : " · " + mention(c.getCardResponsible()))
+                 .append(" — карта остаткасини юборинг!\n");
+                if (jarima) b.append(jarimaLine(c, ageMin));
+            }
         }
         return b.toString();
+    }
+
+    /** ⚖️ Eskirgan/kiritilmagan karta uchun jarima yozish (bir epizodda bir marta) va hisobotga qator. Xato hisobotni buzmaydi. */
+    private String jarimaLine(ClickAccount c, long ageMin) {
+        try {
+            var j = jarimaSvc.kartaStale(c, ageMin);
+            if (j.isEmpty()) return "";
+            var x = j.get();
+            if (x.getHolat() == uz.kassa.domain.Jarima.Holat.OGOH)
+                return "⚖️ <b>Огоҳлантириш</b> (" + x.getTartib() + "-ҳолат) — кейингисидан жарима "
+                        + uz.kassa.service.jarima.JarimaConfig.foizText(x.getFoiz()) + "%\n";
+            return "⚖️ <b>Жарима: " + TextUtil.fmt(x.getSumma()) + " сўм</b> (" + uz.kassa.service.jarima.JarimaConfig.foizText(x.getFoiz())
+                    + "% × " + TextUtil.fmt(x.getAsos()) + ", " + x.getTartib() + "-ҳолат)\n";
+        } catch (Exception e) {
+            log.warn("Jarima (karta {}): {}", c.getId(), e.getMessage());
+            return "";
+        }
     }
 
     /** Mas'ul matnini mention'ga aylantirish: @username o'zi ishlaydi, {id=..;Ism} — havola. */
@@ -613,10 +650,34 @@ public class Jobs {
     }
 
     /** 💳 Karta qoldiqlari guruh hisoboti — har soat :00 (interval/oyna ⚙️ 📨 Бот хабарлари). */
+    /** ⚖️ Jarimalar kunlik jamlamasi — jarima.kun_vaqt dan keyin bir marta (JarimaService.dailyTick guard). */
+    @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT3M")
+    public void jarimaDaily() {
+        try { jarimaSvc.dailyTick(); jobOk("jarimaDaily"); }
+        catch (Exception e) { jobFail("jarimaDaily", e); }
+    }
+
     @Scheduled(cron = "0 0 * * * *", zone = "${app.zone:Asia/Tashkent}")
     public void tgCardReportTick() {
         try { tgCardReport.tick(); }
         catch (Exception e) { log.warn("Karta qoldiqlari hisoboti xatosi: {}", e.getMessage()); }
+    }
+
+    /** 💰 Click hisobotidan N daqiqa oldin (tgreader.balance_before_min) ulangan akkauntlardan asosiy botga buyruq yuborib
+     *  qoldiqni so'rash — hisobotda karta qoldig'i tranzaksiya kutmasdan yangi bo'ladi. Click jadvali/oynasi/kaliti bilan bir xil gate. */
+    @Scheduled(cron = "0 */5 * * * *", zone = "${app.zone:Asia/Tashkent}")
+    public void tgBalanceTick() {
+        try {
+            int before = tgReader.balanceBeforeMin();
+            if (before <= 0 || !tgReader.balanceConfigured()) return;
+            java.time.LocalDateTime nominal = java.time.LocalDateTime.now(props.zoneId()).plusMinutes(before).minusMinutes(clickOffsetMin());
+            if (nominal.getMinute() != 0) return;
+            int h = nominal.getHour(), from = clickFrom(), to = clickTo();
+            if (h < from || h > to || (h - from) % clickEvery() != 0) return;
+            if (!sw.on(NotifySwitches.CLICK_SOATLIK)) return;
+            log.info("Bot qoldiq so'rovi: {}:00 hisobotidan {} min oldin", h, before);
+            tgReader.requestBalances(null, "jadval");
+        } catch (Exception e) { log.warn("Bot qoldiq so'rovi xatosi: {}", e.getMessage()); }
     }
 
     /** 🔔 Bildirishnomalar (shablonli, jadvalli) — har daqiqa tekshiriladi. */
@@ -761,6 +822,8 @@ public class Jobs {
         catch (Exception e) { log.warn("Ombor chempion xabari xatosi: {}", e.getMessage()); }
         try { tgReader.silenceTick(); }
         catch (Exception e) { log.warn("Bot xabarlari jimlik nazorati xatosi: {}", e.getMessage()); }
+        try { tgReader.securityTick(); }
+        catch (Exception e) { log.warn("Akkaunt xavfsizligi tekshiruvi xatosi: {}", e.getMessage()); }
     }
 
     /** Sotuv tarixini orqaga yuklash (kursor tugaguncha, har 15 daqiqada 20 kun). */

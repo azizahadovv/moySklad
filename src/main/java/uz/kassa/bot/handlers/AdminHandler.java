@@ -33,6 +33,7 @@ public class AdminHandler {
     private final ControlAdminHandler controlAdmin;
     private final OmborAdminHandler omborAdmin;
     private final TgHandler tg;
+    private final JarimaHandler jarimaH;
     private final MenuSchemaHandler menuSchemaH;
     private final NotifySwitchHandler switchH;
     private final MenuSupport menus;
@@ -85,6 +86,7 @@ public class AdminHandler {
             case ADM_OM_VAL -> { omborAdmin.onText(u, s, text, chatId); return true; }
             case ADM_OM_DAVR -> { omborAdmin.onDavrText(u, s, text, chatId); return true; }
             case ADM_TG_VAL -> { tg.onText(u, s, text, chatId); return true; }
+            case ADM_JR_VAL -> { jarimaH.onText(u, s, text, chatId); return true; }
             case ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN -> {
                 if (notifyAdmin.onText(u, s, text, chatId)) return true;
             }
@@ -161,6 +163,8 @@ public class AdminHandler {
         // 🏬 Омбор назорати (a:om*)
         if (cmd.startsWith("om")) return omborAdmin.onCallback(u, s, cmd, arg, chatId, msgId);
         if (cmd.startsWith("tg")) return tg.adminCallback(u, s, cmd, arg, chatId, msgId);
+        // ⚖️ Жарималар (a:jr*)
+        if (cmd.startsWith("jr")) return jarimaH.adminCallback(u, s, cmd, arg, chatId, msgId);
 
         switch (cmd) {
             case "p" -> panel(u, s, arg, chatId, msgId);
@@ -276,6 +280,12 @@ public class AdminHandler {
                 settings.set(uz.kassa.scheduler.Jobs.CLICK_OFFSET_KEY, arg);
                 audit.log(u.getId(), "CLICK_JADVAL", "settings", null,
                         u.getFullName() + " hisobot minut siljishini o'zgartirdi: " + arg + " min");
+                settingsH.clickScheduleMenu(s, chatId, msgId);
+            }
+            case "cgh" -> {   // ⏰ eskirish: karta qoldig'i necha soatdan keyin «янгиланмаган» (0 — o'chiq)
+                settings.set(uz.kassa.scheduler.Jobs.CLICK_STALE_KEY, arg);
+                audit.log(u.getId(), "CLICK_JADVAL", "settings", null,
+                        u.getFullName() + " eskirish chegarasini o'zgartirdi: " + arg + " soat");
                 settingsH.clickScheduleMenu(s, chatId, msgId);
             }
             case "cgw" -> {
@@ -436,6 +446,7 @@ public class AdminHandler {
                     case "🕵️ Назорат" -> controlAdmin.menu(s, chatId, 0);
                     case OmborAdminHandler.LABEL -> omborAdmin.menu(s, chatId, 0);
                     case TgHandler.LABEL -> tg.menu(s, chatId, 0);
+                    case JarimaHandler.LABEL -> jarimaH.menu(s, chatId, 0);
                     case "💳 Карта масъуллари" -> settingsH.kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> msH.ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> msH.diagMenu(s, chatId, 0);
@@ -669,6 +680,7 @@ public class AdminHandler {
         ACTIONS.put("🕵️ Назорат", (u, s, c) -> controlAdmin.menu(s, c, 0));
         ACTIONS.put(OmborAdminHandler.LABEL, (u, s, c) -> omborAdmin.menu(s, c, 0));
         ACTIONS.put(TgHandler.LABEL, (u, s, c) -> tg.menu(s, c, 0));
+        ACTIONS.put(JarimaHandler.LABEL, (u, s, c) -> jarimaH.menu(s, c, 0));
         ACTIONS.put("💳 Карта масъуллари", (u, s, c) -> settingsH.kartaMasList(c, 0));
         ACTIONS.put("📅 Ledger санаси", (u, s, c) -> msH.ledgerMenu(s, c, 0));
         ACTIONS.put("🩺 Диагностика", (u, s, c) -> msH.diagMenu(s, c, 0));

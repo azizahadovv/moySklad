@@ -49,6 +49,8 @@ public class Session {
         OM_SOROV_PROD, OM_SOROV_NEW, OM_SOROV_QTY, OM_SOROV_ANS, OM_QR_QTY, OM_ISSUE_Q,
         // 📨 Bot xabarlari nazorati (SuperAdmin sozlama qiymati)
         ADM_TG_VAL,
+        // ⚖️ Jarimalar: sozlama qiymati / yopish-bekor sababi (SuperAdmin)
+        ADM_JR_VAL,
         // 📨 Akkaunt ulash (xodim, bot ichida): QR ko'rsatiladi (matn kiritilmaydi), 2FA bo'lsa parol
         TG_PWD
     }

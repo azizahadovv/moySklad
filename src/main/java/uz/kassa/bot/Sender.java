@@ -105,7 +105,15 @@ public class Sender {
         try {
             bot().execute(e);
         } catch (TelegramApiException ex) {
-            log.warn("Xabar tahrirlanmadi ({}): {}", chatId, ex.getMessage());
+            String m = String.valueOf(ex.getMessage());
+            // RASM (photo) xabarini matn sifatida tahrirlab bo'lmaydi (masalan QR rasmi ostidagi tugma bosilganda) —
+            // rasmni o'chirib, matnni yangi xabar qilib yuboramiz; aks holda ekran umuman o'zgarmay qolardi
+            if (m.contains("no text in the message to edit")) {
+                deleteMessage(chatId, messageId);
+                send(chatId, text, kb);
+                return;
+            }
+            log.warn("Xabar tahrirlanmadi ({}): {}", chatId, m);
         }
     }
 

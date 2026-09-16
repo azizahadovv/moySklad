@@ -393,7 +393,8 @@ public class SettingsAdminHandler {
                 + jobs.clickTimeExample(Math.min(23, from + every)) + "</b>, …\n\n"
                 + "Hisobot nominal soat + siljish vaqtida yuboriladi: soat tanlangan "
                 + "oraliqda bo'lsa va intervalga to'g'ri kelsa.\n\n"
-                + "<b>Interval</b> (necha soatda bir) · <b>Oraliq</b> · <b>Minut siljishi</b>:";
+                + "<b>Interval</b> (necha soatda bir) · <b>Oraliq</b> · <b>Minut siljishi</b> · "
+                + "<b>⏰ Eskirish</b> (karta qoldig'i shu soatdan eski bo'lsa hisobotda «маълумот янгиланмаган» + mas'ulga eslatma):";
         java.util.function.BiFunction<Integer, String, InlineKeyboardButton> ib = (h, cb) ->
                 btn((h == every ? "✅ " : "") + h + " soat", cb);
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
@@ -414,6 +415,12 @@ public class SettingsAdminHandler {
         rows.add(irow(ob.apply(-20), ob.apply(-15), ob.apply(-10), ob.apply(-5)));
         rows.add(irow(ob.apply(0)));
         rows.add(irow(ob.apply(5), ob.apply(10), ob.apply(15), ob.apply(20)));
+        // ⏰ Eskirish chegarasi (soat): 0 — o'chiq. ✅ — joriy tanlov.
+        int stale = jobs.clickStaleHours();
+        java.util.function.Function<Integer, InlineKeyboardButton> hb = h ->
+                btn((h == stale ? "✅ " : "") + (h == 0 ? "⏰ o'chiq" : "⏰ " + h + " soat"), "a:cgh:" + h);
+        rows.add(irow(hb.apply(1), hb.apply(2), hb.apply(3)));
+        rows.add(irow(hb.apply(4), hb.apply(6), hb.apply(0)));
         rows.add(irow(btn("⬅️ Orqaga", "a:cg")));
         InlineKeyboardMarkup kb = inline(rows);
         if (msgId > 0) sender.edit(chatId, msgId, text, kb);

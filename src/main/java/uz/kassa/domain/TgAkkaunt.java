@@ -22,4 +22,8 @@ public class TgAkkaunt {
     @Column(name = "last_error") private String lastError;
     @Builder.Default @Column(nullable = false) private boolean active = true;
     @Column(name = "created_at") private Instant createdAt;
+    /** 🔐 Xavfsizlik (securityTick): 2FA bor-yo'qligi, faol seanslar (JSON, tg-reader'dan) va tekshirilgan vaqt (V42). */
+    @Column(name = "two_fa") private Boolean twoFa;
+    @Column(name = "sessions_json", columnDefinition = "text") private String sessionsJson;
+    @Column(name = "sessions_at") private Instant sessionsAt;
 }

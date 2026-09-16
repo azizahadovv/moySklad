@@ -211,6 +211,7 @@ public class CardCaptureHandler {
                 if (byWord.size() == 1) card = byWord.get(0);
             }
             boolean byName = card != null;   // rasm/matnning o'zida karta nomi bor
+            boolean byResp = false;          // yuboruvchi — shu YAGONA kartaning mas'uli (/kartamas)
             if (card == null) {
                 java.util.List<ClickAccount> mine = new java.util.ArrayList<>();
                 String uname = from.getUserName() == null ? "" : from.getUserName().toLowerCase();
@@ -220,7 +221,7 @@ public class CardCaptureHandler {
                     if ((!uname.isEmpty() && r.contains("@" + uname))
                             || r.contains("id=" + from.getId())) mine.add(c);
                 }
-                if (mine.size() == 1) card = mine.get(0);
+                if (mine.size() == 1) { card = mine.get(0); byResp = true; }
             }
             if (card == null) {
                 log.info("Karta capture: karta aniqlanmadi (sums={}, from={} @{})",
@@ -273,7 +274,9 @@ public class CardCaptureHandler {
             long sum = sums.get(0);
             String who = displayName(from);
 
-            if (fromOcr && byName) {
+            if (fromOcr && (byName || byResp)) {
+                // 2026-09-16: mas'ul o'z kartasi uchun yuborgan skrinshot ham DARHOL saqlanadi (✅ so'ralmaydi) —
+                // ✅ kutish «oxirgi yuborilgan ma'lumot olinmadi» shikoyatiga sabab bo'lardi (odamlar bosmaydi).
                 // ISHONCHLI o'qish: rasmda BITTA summa (shu yergacha kelgan bo'lsa
                 // sums.size()==1) va kartaning nomi rasmning o'zida bor — DARHOL
                 // saqlanadi (foydalanuvchi qarori: rasm necha marta yuborilsa, qoldiq

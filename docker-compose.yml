@@ -8,7 +8,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-data}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-data} -d kassa"]   # -d siz baza nomi = user nomi ("data") bo'lib, har 5 s FATAL yozardi
       interval: 5s
       timeout: 3s
       retries: 10

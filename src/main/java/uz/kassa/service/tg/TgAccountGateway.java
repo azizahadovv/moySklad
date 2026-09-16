@@ -59,4 +59,16 @@ public interface TgAccountGateway {
 
     /** Hozir jarayonda (hali CONNECTED/ERROR bo'lmagan) login urinishlari — admin uchun «chala qolgan» ro'yxati. */
     List<PendingLogin> pendingLogins();
+
+    /** 💰 Qoldiq so'rovi natijasi: replies — manba botning javob matnlari (ko'rsatish uchun; ular oddiy xabar sifatida ham ingest bo'ladi). */
+    record BalanceResult(boolean ok, String message, List<String> replies) {}
+    /** 🔐 Bitta faol seans (account.getAuthorizations). dateActive — ISO (UTC). current — shu bot (tg-reader) seansi. */
+    record SessionInfo(long hash, String device, String platform, String app, String country, String dateActive, boolean current) {}
+    record SecurityInfo(boolean ok, String error, Boolean twoFa, List<SessionInfo> sessions) {}
+
+    /** Asosiy botga qadam-baqadam buyruq/tugma yuborib qoldiqni so'rash (ishlab turgan mijoz orqali, bloklaydi ≤ ~25 s). */
+    BalanceResult balance(String phone, List<String> steps);
+
+    /** Akkauntning faol seanslari va 2FA holati (jonli). */
+    SecurityInfo security(String phone);
 }

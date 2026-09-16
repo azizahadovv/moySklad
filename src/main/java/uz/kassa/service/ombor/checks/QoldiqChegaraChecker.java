@@ -61,7 +61,7 @@ public class QoldiqChegaraChecker implements OmborChecker {
                     name.length() > 60 ? name.substring(0, 60) : name,
                     "<b>" + esc(name) + "</b>" + (tv == null || tv.getArticle().isBlank() ? "" : " · art. " + esc(tv.getArticle()))
                     + "\nQoldiq: <b>" + v.stripTrailingZeros().toPlainString() + "</b> " + (tv == null ? "" : esc(tv.getUom()))
-                    + " · chegara " + op + " " + t.stripTrailingZeros().toPlainString()));
+                    + " · chegara " + esc(op) + " " + t.stripTrailingZeros().toPlainString()));   // "<" HTML tegi deb o'qilardi (can't parse entities)
         }
         return out;
     }

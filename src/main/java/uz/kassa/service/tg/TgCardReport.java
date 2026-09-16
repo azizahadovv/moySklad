@@ -37,6 +37,7 @@ public class TgCardReport {
         if (cards.isEmpty()) { sb.append("Ҳали карта хабари келмаган."); return sb.toString(); }
         long total = 0;
         for (TgCard c : cards) {
+            if (c.isHidden()) continue;   // shaxsiy karta — hisobotga kirmaydi
             total += c.getBalance();
             sb.append("💳 <b>").append(esc(c.getName().isBlank() ? "Карта" : c.getName())).append(" *").append(esc(c.getMask())).append("</b>\n");
             sb.append("   қолдиқ <b>").append(fmt(c.getBalance() / 100)).append("</b> ").append(esc(c.getCurrency()));

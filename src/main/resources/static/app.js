@@ -64,7 +64,7 @@ function setTitle(title, sub, crumbs) {
 const CRUMB = { pending: 'Кутилаётган', kunlik: 'Кунлик солиштириш', tushum: 'Тушум', karta: 'Карталар', tarix: 'История', excel: 'Excel', pul: 'Пул ҳаракати',
   menyu: 'Меню тартиби', sxema: 'Бот сxемаси', nomlar: 'Тугма номлари', huquq: 'Ҳуқуқлар', shablon: 'Билдиришномалар', namuna: 'Намуналар', yordam: 'Ўринбосарлар',
   xodim: 'Ходимлар', guruh: 'Гуруҳлар', moliya: 'Молия', init: 'Бошланғич қолдиқ', adjust: 'Корректировка', ledger: 'Ledger санаси', zero: 'Нол бошлаш',
-  moysklad: 'MoySklad', token: 'API калити', names: 'Номлар', diag: 'Диагностика', reload: 'Қайта юклаш', audit: 'Аудит', user: 'Ходим' };
+  moysklad: 'MoySklad', token: 'API калити', names: 'Номлар', diag: 'Диагностика', reload: 'Қайта юклаш', audit: 'Аудит', user: 'Ходим', jarima: 'Жарималар' };
 function crumbsOf(seg) {
   const root = seg[0] || '';
   const tab = root === '' || root === 'pending' ? 'bugun' : root;
@@ -523,6 +523,7 @@ async function pageHisobot(seg, q) {
   if (view === 'qarz') return hisobotQarz(seg.slice(1), q);
   if (view === 'xato') return hisobotXato(seg.slice(1), q);
   if (view === 'nazorat') return hisobotNazorat(q);
+  if (view === 'jarima') return hisobotJarima(seg.slice(1), q);
   if (view === 'ombor') return hisobotOmbor(seg.slice(1), q);
   setTitle('Ҳисоботлар', 'бўлимни танланг');
   $main.innerHTML = `
@@ -539,6 +540,7 @@ async function pageHisobot(seg, q) {
       ${tile('🧾', 'Қарздорлар', 'отгрузка тўлови · муддат · ёпиш', '#/hisobot/qarz')}
       ${tile('⚠️', 'Контрагент хатолари', 'мажбурий майдонлар · дубликат', '#/hisobot/xato')}
       ${tile('📊', 'Назорат статистикаси', 'ходим кесимида: топилди · тузатилди · очиқ', '#/hisobot/nazorat')}
+      ${tile('⚖️', 'Жарималар', 'карта қолдиғи · контрагент · отгрузка · ёпиш', '#/hisobot/jarima')}
     </div>
     <div class="label">🏬 Омбор</div><div class="tiles">
       ${tile('🏬', 'Омбор', 'камчиликлар · қолдиқ · fill rate', '#/hisobot/ombor')}
@@ -836,6 +838,94 @@ async function hisobotNazorat(q) {
     catch (e) { toast(e.message); }
     setTimeout(() => { b.disabled = false; }, 3000);
   };
+}
+
+/* ============================================================
+   ⚖️ ЖАРИМАЛАР — фильтрли рўйхат · карта · ёпиш/бекор · Excel
+   (docs/JARIMA.md; бот билан бир манба — /api/admin/jarima/*)
+   ============================================================ */
+const JR_CLS = { OGOH: 'warn', OCHIQ: 'bad', YOPIQ: 'ok', BEKOR: '' };
+async function hisobotJarima(seg, q) {
+  if (seg[0]) return jarimaCard(seg[0]);
+  const holat = q.holat || '', tur = q.tur || '', user = q.user || '0', kassa = q.kassa || '0', page = +(q.page || 0);
+  const to = q.to || TODAY(), from = q.from || addDays(to, -29);
+  const qs = (o = {}) => { const x = { holat, tur, user, kassa, from, to, page: 0, ...o }; return `#/hisobot/jarima?holat=${x.holat}&tur=${x.tur}&user=${x.user}&kassa=${x.kassa}&from=${x.from}&to=${x.to}&page=${x.page}`; };
+  const d = await api(`/admin/jarima?holat=${holat}&tur=${tur}&user=${user}&kassa=${kassa}&from=${from}&to=${to}&page=${page}`);
+  setTitle('Жарималар', `${dShort(from)} — ${dShort(to)} · ${d.total} та${d.enabled ? '' : ' · ⚪ ўчирилган'}`);
+  const sz = d.sozlama;
+  let h = `<div class="kpis">
+    <div class="kpi"><div class="l">Очиқ (фильтр)</div><div class="v num ${d.xulosa.ochiq ? 'bad' : 'good'}">${fmt(d.xulosa.ochiq)}</div><div class="s">сўм</div></div>
+    <div class="kpi"><div class="l">Ёпилган</div><div class="v num">${fmt(d.xulosa.yopiq)}</div><div class="s">сўм</div></div>
+    <div class="kpi"><div class="l">Огоҳлантириш</div><div class="v num">${d.xulosa.ogoh}</div><div class="s">та</div></div>
+    <div class="kpi"><div class="l">Жами тўланмаган</div><div class="v num ${d.xulosa.jamiOchiq ? 'bad' : ''}">${fmt(d.xulosa.jamiOchiq)}</div><div class="s">${d.xulosa.jamiOchiqSoni} та · барча кунлар</div></div>
+  </div>
+  <div class="card">
+    <div class="seg"><input type="date" id="f" value="${from}" max="${TODAY()}"><input type="date" id="t" value="${to}" max="${TODAY()}"></div>
+    <div class="field"><label>Ҳолат</label><select id="h"><option value="">Ҳаммаси</option>${d.holatlar.map(x => `<option value="${x.code}" ${x.code === holat ? 'selected' : ''}>${x.title} (${x.count})</option>`).join('')}</select></div>
+    <div class="field"><label>Тур</label><select id="tr"><option value="">Ҳаммаси</option>${d.turlar.map(x => `<option value="${x.code}" ${x.code === tur ? 'selected' : ''}>${x.title} (${x.count})</option>`).join('')}</select></div>
+    <div class="field"><label>Ходим</label><select id="u"><option value="0">Ҳаммаси</option>${d.users.map(x => `<option value="${x.id}" ${String(x.id) === user ? 'selected' : ''}>${esc(x.name)} (${x.count})</option>`).join('')}</select></div>
+    <div class="field"><label>Отдел</label><select id="k"><option value="0">Ҳаммаси</option>${d.kassalar.map(x => `<option value="${x.id}" ${String(x.id) === kassa ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+    <div class="hint">Қоида: ҳар турда биринчи ${sz.ogohSoni} та ҳолат — огоҳлантириш; кейин карта ${sz.foizKarta}% (охирги қолдиқдан), контрагент ${sz.foizKg}% (базавий ${fmt(sz.bazaviy)} сўм), отгрузка ${sz.foizOt}% (отгрузка суммасидан). Хато жаримаси: ${sz.payt === 'TOPILDI' ? 'топилганда дарҳол' : 'админ эскалациясида («тузатилмади»)'}. Кунлик жамлама ${sz.kunVaqt}.</div>
+    <button class="btn ghost" id="xl">📥 Excel чатга</button>
+  </div><div class="rows">`;
+  if (!d.rows.length) h += '<div class="empty">Ёзувлар йўқ ✅</div>';
+  for (const r of d.rows)
+    h += rowHtml(JR_CLS[r.holat] || '', `${r.xodim} · ${r.turTitle}`, `${r.vaqt}${r.kassa ? ' · ' + r.kassa : ''} · ${r.manba}`,
+      (r.holat === 'OGOH' ? 'огоҳ' : fmt(r.summa)) + `<small>${r.holatTitle}</small>`, `#/hisobot/jarima/${r.id}`);
+  h += '</div>';
+  if (d.pages > 1) h += `<div class="seg">${Array.from({ length: d.pages }, (_, i) => `<button data-go="${qs({ page: i })}" class="${i === page ? 'on' : ''}">${i + 1}</button>`).join('')}</div>`;
+  $main.innerHTML = h;
+  bindGo();
+  document.getElementById('f').onchange = e => go(qs({ from: e.target.value }));
+  document.getElementById('t').onchange = e => go(qs({ to: e.target.value }));
+  document.getElementById('h').onchange = e => go(qs({ holat: e.target.value }));
+  document.getElementById('tr').onchange = e => go(qs({ tur: e.target.value }));
+  document.getElementById('u').onchange = e => go(qs({ user: e.target.value }));
+  document.getElementById('k').onchange = e => go(qs({ kassa: e.target.value }));
+  document.getElementById('xl').onclick = async () => {
+    const b = document.getElementById('xl'); b.disabled = true;
+    try { const r = await post('/admin/jarima/excel', { id: 0, holat, tur, user: +user, kassa: +kassa, from, to }); haptic('medium'); toast('📤 Excel чатга юборилди: ' + r.count + ' та'); }
+    catch (e) { toast(e.message); }
+    b.disabled = false;
+  };
+}
+
+async function jarimaCard(id) {
+  const r = await api('/admin/jarima/' + id);
+  setTitle(`⚖️ #${r.id} · ${r.xodim}`, r.holatTitle);
+  $main.innerHTML = `<div class="card"><div class="kv">
+    ${kvRow('Ходим', esc(r.xodim) + (r.kassa ? ' · ' + esc(r.kassa) : ''))}
+    ${kvRow('Тур', r.turTitle)}
+    ${kvRow('Манба', esc(r.manba))}
+    ${kvRow('Вақт', esc(r.vaqt))}
+    ${kvRow('Ҳолат', r.holatTitle)}
+    ${r.holat === 'OGOH' ? kvRow('Жарима', 'йўқ — ' + r.tartib + '-ҳолат, огоҳлантириш') : kvRow('Жарима', '<b>' + fmt(r.summa) + '</b> сўм (' + r.foiz + '% × ' + fmt(r.asos) + ')')}
+    ${kvRow('Тартиб', r.tartib + '-ҳолат (шу ходим, шу тур)')}
+    ${kvRow('Хабар', (r.xabar ? '✅ ходимга борган' : '— ходимга бормаган') + (r.kunlik ? ' · кунлик жамламада' : ''))}
+    ${r.yopilgan ? kvRow('Ёпилган', esc(r.yopilgan) + (r.yopgan ? ' · ' + esc(r.yopgan) : '') + (r.izoh ? ' — ' + esc(r.izoh) : '')) : ''}
+  </div></div>
+  <div class="card"><div class="label">Сабаб</div><div>${esc(r.sabab)}</div></div>
+  <div class="actions">
+    ${r.superadmin && r.holat === 'OCHIQ' ? '<button class="btn main" id="cl">✅ Ёпиш (тўланди)</button><button class="btn danger" id="bk">❌ Бекор қилиш</button>' : ''}
+    <button class="btn ghost" data-go="#/hisobot/jarima">⬅️ Рўйхат</button>
+  </div>`;
+  bindGo();
+  const cl = document.getElementById('cl'); if (cl) cl.onclick = () => jarimaClose(id, false);
+  const bk = document.getElementById('bk'); if (bk) bk.onclick = () => jarimaClose(id, true);
+}
+
+function jarimaClose(id, bekor) {
+  sheet(`<h2>${bekor ? '❌ Бекор қилиш' : '✅ Ёпиш'}</h2><p>${bekor ? 'Жарима ҳисобдан чиқади, ходимга хабар боради.' : 'Жарима тўланди/ундирилди деб белгиланади, ходимга хабар боради.'}</p>
+    <div class="field"><label>Сабаб (ихтиёрий)</label><input id="rs" placeholder="масалан: ойлик ҳисобидан ушланди"></div>
+    <button class="btn main" id="ok">${bekor ? '❌ Ҳа, бекор қилинсин' : '✅ Ҳа, ёпилсин'}</button><button class="btn ghost" id="no">Бекор</button>`,
+    (el, close) => {
+      el.querySelector('#ok').onclick = async () => {
+        const v = el.querySelector('#rs').value.trim(); close();
+        try { await post(bekor ? '/admin/jarima/cancel' : '/admin/jarima/close', { id: +id, reason: v }); haptic('medium'); toast(bekor ? '❌ Бекор қилинди' : '✅ Ёпилди'); render(); }
+        catch (e) { toast(e.message); }
+      };
+      el.querySelector('#no').onclick = close;
+    });
 }
 
 async function hisobotXato(seg) {

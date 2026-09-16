@@ -48,6 +48,7 @@ public class Router {
     private final uz.kassa.bot.handlers.KontragentHandler kontragent;
     private final uz.kassa.bot.handlers.OmborHandler ombor;
     private final uz.kassa.bot.handlers.TgHandler tg;
+    private final uz.kassa.bot.handlers.JarimaHandler jarima;
     private final uz.kassa.service.ombor.OmborSanoqService omborSanoq;
     private final uz.kassa.webapp.WebSessionService webSessions;
     private final uz.kassa.webapp.WebUrlService webUrl;
@@ -469,6 +470,7 @@ public class Router {
             if (data.startsWith("kg:")) { kontragent.onCallback(user, s, data, chatId, msgId); return; }
             if (data.startsWith("om:")) { ombor.onCallback(user, s, data, chatId, msgId); return; }
             if (data.startsWith("tg:")) { tg.onCallback(user, s, data, chatId, msgId); return; }
+            if (data.startsWith("jr:")) { jarima.onCallback(user, s, data, chatId, msgId); return; }
 
             boolean handled = switch (user.getRole()) {
                 case KASSIR -> kassir.onCallback(user, s, data, chatId, msgId);

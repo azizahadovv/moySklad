@@ -26,6 +26,9 @@ public final class TgCardParser {
     private static final Pattern BAL = Pattern.compile("💰\\s*([\\d.\\u00A0 ]*(?:,\\d{1,2})?)");
     private static final Pattern AMT = Pattern.compile("(➖|➕|-|−|\\+)\\s*(\\d[\\d.\\u00A0 ]*(?:,\\d{1,2})?)\\s*(?:UZS|сўм|су[мн]|so'?m)", Pattern.CASE_INSENSITIVE);
     private static final Pattern MERCH = Pattern.compile("📍\\s*(.+)");
+    // Boshqa bank/hamyon botlari (2026-09-16): emoji'siz shablonlar — «Карта *1234», «Karta: ****1234», «Баланс: 1 234 567,00»
+    private static final Pattern CARD2 = Pattern.compile("(?:карта|karta|card|hamyon|ҳамён|кошел[её]к|wallet)[^\\n\\d*•]{0,24}?(?:\\*+|•+|[xX]+)?\\s*(\\d{4})\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern BAL2 = Pattern.compile("(?:баланс|balans|остаток|qoldiq|қолдиқ|доступно|available)[^\\d\\n]{0,16}(\\d[\\d.\\u00A0 ]*(?:,\\d{1,2})?)", Pattern.CASE_INSENSITIVE);
 
     /** dir: KIRIM/RASXOD/null; amount/balance — tiyin (null — topilmadi); cardName/mask; at. */
     public record Card(String dir, Long amount, Long balance, String cardName, String mask, String merchant, LocalDateTime at) {
@@ -38,13 +41,18 @@ public final class TgCardParser {
     public static Card parse(String text) {
         if (text == null || text.isBlank()) return null;
         Matcher card = CARD.matcher(text);
-        if (!card.find()) return null;   // karta satri yo'q — bizning shablon emas
-        String cardName = card.group(1).trim();
-        String mask = card.group(2);
+        String cardName, mask;
+        if (card.find()) { cardName = card.group(1).trim(); mask = card.group(2); }
+        else {
+            Matcher c2 = CARD2.matcher(text);
+            if (!c2.find()) return null;   // karta satri yo'q — bizning shablon emas
+            cardName = ""; mask = c2.group(1);
+        }
 
         Long balance = null;
         Matcher b = BAL.matcher(text);
         if (b.find()) balance = toTiyin(b.group(1));
+        if (balance == null) { Matcher b2 = BAL2.matcher(text); if (b2.find()) balance = toTiyin(b2.group(1)); }
 
         Long amount = null; String dir = null;
         Matcher a = AMT.matcher(text);

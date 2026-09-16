@@ -31,6 +31,12 @@ public class TgReaderConfig {
     public static final String API_ID = "tgreader.api_id";
     public static final String API_HASH = "tgreader.api_hash";
     public static final String SOURCE_BOT = "tgreader.source_bot";
+    // 📡 Kengaytma (2026-09-16)
+    public static final String SOURCES = "tgreader.sources";              // qo'shimcha manbalar (CSV): @bot/@odam, guruh/kanal @username yoki -100… id, «me»
+    public static final String MEDIA_OCR = "tgreader.media_ocr";          // 1 — manba rasmlarini OCR qilib matnga qo'shish
+    public static final String BALANCE_CMD = "tgreader.balance_cmd";      // asosiy botga yuboriladigan qadamlar («|» bilan); bo'sh — o'chiq
+    public static final String BALANCE_BEFORE = "tgreader.balance_before_min"; // Click hisobotidan necha daqiqa oldin so'ralsin
+    public static final String SECURITY_AT = "tgreader.security_at";      // oxirgi xavfsizlik tekshiruvi (soat belgisi)
 
     private final SettingsService settings;
 
@@ -86,6 +92,40 @@ public class TgReaderConfig {
     public int reportEveryH() { return intOf(REPORT_EVERY_H, 0, 0, 24); }
     public int reportFrom() { return intOf(REPORT_FROM, 8, 0, 23); }
     public int reportTo() { return intOf(REPORT_TO, 22, 0, 23); }
+
+    /** 📡 Manbalar: asosiy bot + qo'shimchalar, normallashgan (@siz), dublikatsiz. FAQAT shu ro'yxat o'qiladi. */
+    public List<String> sources() {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        if (!sourceBot().isBlank()) out.add(sourceBot());
+        out.addAll(extraSources());
+        return new ArrayList<>(out);
+    }
+    public List<String> extraSources() {
+        List<String> out = new ArrayList<>();
+        for (String s : settings.get(SOURCES).orElse("").split("[,\\s]+")) { String n = normSource(s); if (!n.isEmpty() && !n.equals(sourceBot()) && !out.contains(n)) out.add(n); }
+        return out;
+    }
+    public void setSources(String csv) {
+        settings.set(SOURCES, csv == null ? "" : String.join(",", java.util.Arrays.stream(csv.split("[,\\s]+")).map(TgReaderConfig::normSource).filter(x -> !x.isEmpty()).distinct().toList()));
+    }
+    static String normSource(String s) {
+        String n = s == null ? "" : s.trim();
+        if (n.startsWith("https://t.me/")) n = n.substring(13);
+        if (n.startsWith("t.me/")) n = n.substring(5);
+        if (n.startsWith("@")) n = n.substring(1);
+        return n;
+    }
+    public boolean mediaOcr() { return "1".equals(settings.get(MEDIA_OCR).orElse("0").trim()); }
+    public void toggleMediaOcr() { settings.set(MEDIA_OCR, mediaOcr() ? "0" : "1"); }
+    /** 💰 Qoldiq so'rovi qadamlari («|» bilan); bo'sh — o'chiq. */
+    public List<String> balanceSteps() {
+        List<String> out = new ArrayList<>();
+        for (String s : settings.get(BALANCE_CMD).orElse("").split("\\|")) if (!s.isBlank()) out.add(s.trim());
+        return out;
+    }
+    public void setBalanceCmd(String v) { settings.set(BALANCE_CMD, v == null ? "" : v.trim()); }
+    /** Click hisobotidan necha daqiqa oldin so'ralsin (5 ga karrali, 5..55; 0 — jadval bo'yicha so'ralmaydi). */
+    public int balanceBeforeMin() { int v = intOf(BALANCE_BEFORE, 5, 0, 55); return v - v % 5; }
 
     public java.util.Optional<String> get(String k) { return settings.get(k).filter(v -> !v.isBlank()); }
     public void set(String k, String v) { settings.set(k, v == null ? "" : v); }

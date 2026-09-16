@@ -54,6 +54,9 @@ public class ShipmentControlService {
     private final AuditService audit;
     private final uz.kassa.service.NotifySwitches sw;
     private final uz.kassa.webapp.ExcelReportService excel;
+    private final uz.kassa.service.jarima.JarimaService jarima;
+    /** Qoidalar o'zgarganda ommaviy qayta baholash — ⚖️ jarima yozilmaydi. */
+    private volatile boolean bulkReeval = false;
 
     /** balanceTick'da QARZ otgruzkalarni navbat bilan qayta o'qish (o'chirilganini sezish). */
     private int refreshCursor = 0;
@@ -842,8 +845,12 @@ public class ShipmentControlService {
         else if (wasEmpty) { s.setIssuesSince(Instant.now()); s.setIssuesNotifiedAt(null); s.setIssuesEscalatedAt(null); s.setIssuesEscalated2At(null); }
         repo.save(s);
         // 📊 statistika uchun: kamchilik topildi / xodim tuzatdi (qarz yopilib ketgani tuzatish emas)
-        if (wasEmpty && !codes.isEmpty())
+        if (wasEmpty && !codes.isEmpty()) {
             audit.log(s.getOwnerUserId(), "OTG_KAMCHILIK_TOPILDI", "shipment", s.getId(), "№" + s.getDocNo() + " " + codes);
+            // ⚖️ jarima.xato_payt=TOPILDI bo'lsa darhol; jim statuslar, tarixiy (silent) va ommaviy qayta baholash — yo'q
+            if (!bulkReeval && !s.isSilent() && !cfg.isQuietState(s.getState()))
+                try { jarima.otgruzka(s, false); } catch (Exception e) { log.warn("Jarima (otgruzka №{}): {}", s.getDocNo(), e.getMessage()); }
+        }
         else if (!wasEmpty && codes.isEmpty() && s.getControlStatus() == Shipment.Status.QARZ)
             audit.log(s.getOwnerUserId(), "OTG_KAMCHILIK_TUZATILDI", "shipment", s.getId(), "№" + s.getDocNo() + " " + before);
     }
@@ -852,9 +859,12 @@ public class ShipmentControlService {
     /** Qoidalar o'zgarganda / V25 dan keyin: barcha qarzlar qayta baholanadi (MoySklad'siz). */
     public void reevaluateAllIssues() {
         int n = 0;
-        for (Shipment s : repo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ)) { updateIssues(s); n++; }
-        for (Shipment s : repo.findByIssuesNotOrderByMomentDesc(""))
-            if (s.getControlStatus() != Shipment.Status.QARZ) updateIssues(s);
+        bulkReeval = true;
+        try {
+            for (Shipment s : repo.findByControlStatusOrderByDueAtAscMomentAsc(Shipment.Status.QARZ)) { updateIssues(s); n++; }
+            for (Shipment s : repo.findByIssuesNotOrderByMomentDesc(""))
+                if (s.getControlStatus() != Shipment.Status.QARZ) updateIssues(s);
+        } finally { bulkReeval = false; }
         log.info("Otgruzka kamchiliklari qayta baholandi: {} ta qarz, kamchilikli {} ta", n, repo.countByIssuesNot(""));
     }
 
@@ -941,7 +951,10 @@ public class ShipmentControlService {
             audit.log(null, "OTG_KAMCHILIK_ESKALATSIYA", "kassa", kassa, e.getValue().size() + " ta -> rahbar");
         }
         for (var e : st2.entrySet()) {
-            for (Shipment s : e.getValue()) { s.setIssuesEscalated2At(now); repo.save(s); }
+            for (Shipment s : e.getValue()) {
+                s.setIssuesEscalated2At(now); repo.save(s);
+                if (!s.isSilent()) try { jarima.otgruzka(s, true); } catch (Exception ex) { log.warn("Jarima (otgruzka №{}): {}", s.getDocNo(), ex.getMessage()); }   // ⚖️ jarima.xato_payt=TUZATILMADI
+            }
             Long kassa = e.getKey() < 0 ? null : e.getKey();
             if (sw.on(uz.kassa.service.NotifySwitches.OT_ESKALATSIYA)) {
                 String head = "❌ <b>TUZATILMADI — otgruzka kamchiliklari " + cfg.esc2Min()
