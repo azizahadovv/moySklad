@@ -904,7 +904,7 @@ async function jarimaCard(id) {
     ${kvRow('Хабар', (r.xabar ? '✅ ходимга борган' : '— ходимга бормаган') + (r.kunlik ? ' · кунлик жамламада' : ''))}
     ${r.yopilgan ? kvRow('Ёпилган', esc(r.yopilgan) + (r.yopgan ? ' · ' + esc(r.yopgan) : '') + (r.izoh ? ' — ' + esc(r.izoh) : '')) : ''}
   </div></div>
-  <div class="card"><div class="label">Сабаб</div><div>${esc(r.sabab)}</div></div>
+  <div class="card"><div class="label">Сабаб</div><div style="white-space:pre-line">${esc(r.sabab)}</div></div>
   <div class="actions">
     ${r.superadmin && r.holat === 'OCHIQ' ? '<button class="btn main" id="cl">✅ Ёпиш (тўланди)</button><button class="btn danger" id="bk">❌ Бекор қилиш</button>' : ''}
     <button class="btn ghost" data-go="#/hisobot/jarima">⬅️ Рўйхат</button>

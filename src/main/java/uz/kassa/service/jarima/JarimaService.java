@@ -133,10 +133,9 @@ public class JarimaService {
         String name = u != null ? u.getFullName() : (ac.getCreatedUid() == null || ac.getCreatedUid().isBlank() ? "номаълум" : ac.getCreatedUid());
         StringBuilder sb = new StringBuilder("Контрагент «").append(ac.getAgentName()).append("» хато киритилган");
         if (tuzatilmadi) sb.append(" ва белгиланган муддатда тузатилмади (ходим ва раҳбар хабардор қилинган)");
-        sb.append(". Хатолар: ");
-        List<String> codes = ac.violationList();
-        sb.append(codes.isEmpty() ? "—" : String.join("; ", codes.stream().map(x -> x + " — " + ControlConfig.ruleTitle(x)).toList()));
-        sb.append(". Асос: базавий сумма ").append(fmt(cfg.bazaviy())).append(" сўм.");
+        sb.append(". Хатолар:\n");
+        sb.append(bullets(ac.violationList()));
+        sb.append("\nАсос: базавий сумма ").append(fmt(cfg.bazaviy())).append(" сўм.");
         register(Tur.KONTRAGENT, u, name, ac.getKassaId() != null ? ac.getKassaId() : (u == null ? null : u.getKassaId()),
                 manba, ac.getAgentName(), cfg.bazaviy(), sb.toString());
     }
@@ -151,14 +150,35 @@ public class JarimaService {
         String name = u != null ? u.getFullName() : (s.getOwnerName() == null || s.getOwnerName().isBlank() ? "номаълум" : s.getOwnerName());
         StringBuilder sb = new StringBuilder("Отгрузка №").append(s.getDocNo()).append(" (").append(s.getAgentName()).append(")");
         if (s.getMoment() != null) sb.append(", ").append(s.getMoment().format(DTF));
-        sb.append(" — камчиликлар: ");
-        List<String> codes = s.issueList();
-        sb.append(codes.isEmpty() ? "—" : String.join("; ", codes.stream().map(x -> x + " — " + ControlConfig.ruleTitle(x)).toList()));
-        if (tuzatilmadi) sb.append(". Белгиланган муддатда тузатилмади (ходим ва раҳбар хабардор қилинган)");
-        sb.append(". Асос: отгрузка суммаси ").append(fmt(s.getSum())).append(" сўм.");
+        sb.append(" — камчиликлар:\n");
+        sb.append(bullets(s.issueList()));
+        if (tuzatilmadi) sb.append("\nБелгиланган муддатда тузатилмади (ходим ва раҳбар хабардор қилинган).");
+        sb.append("\nАсос: отгрузка суммаси ").append(fmt(s.getSum())).append(" сўм.");
         register(Tur.OTGRUZKA, u, name, s.getKassaId() != null ? s.getKassaId() : (u == null ? null : u.getKassaId()),
                 manba, "№" + s.getDocNo() + " · " + s.getAgentName(), s.getSum(), sb.toString());
     }
+
+    /** Har bir kamchilik alohida qatorda: «• KOD — sarlavha». */
+    private static String bullets(List<String> codes) {
+        if (codes.isEmpty()) return "• —";
+        return String.join("\n", codes.stream().map(x -> "• " + x + " — " + ControlConfig.ruleTitle(x)).toList());
+    }
+
+    /**
+     * Sabab matni ko'rsatish uchun. Eski yozuvlarda kamchiliklar «; » bilan bir qatorga qo'shilgan —
+     * ularni ham alohida qatorlarga ajratadi (yangi yozuvlar allaqachon qatorma-qator saqlanadi).
+     */
+    public static String sababLines(String sabab) {
+        if (sabab == null) return "";
+        if (sabab.contains("\n• ")) return sabab;
+        java.util.regex.Matcher m = LEGACY_LIST.matcher(sabab);
+        if (!m.find()) return sabab;
+        String items = String.join("\n", java.util.Arrays.stream(m.group(2).split(";\\s*")).map(x -> "• " + x.trim()).toList());
+        String tail = m.group(3) == null ? "" : m.group(3).substring(2).replace(". ", "\n");
+        return sabab.substring(0, m.start()) + m.group(1) + ":\n" + items + (tail.isEmpty() ? "" : "\n" + tail);
+    }
+    private static final java.util.regex.Pattern LEGACY_LIST =
+            java.util.regex.Pattern.compile("(камчиликлар|Хатолар): (.+?)(\\. (?:Белгиланган|Асос).*)?$", java.util.regex.Pattern.DOTALL);
 
     /* ==================== YOZISH ==================== */
 
@@ -210,7 +230,7 @@ public class JarimaService {
         if (j.getKassaId() != null) sb.append(" · ").append(esc(notifier.kassaName(j.getKassaId())));
         sb.append("\n📌 Тур: ").append(turTitle(j.getTur())).append("\n");
         sb.append("🕒 ").append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(DTF)).append("\n");
-        sb.append("📝 Сабаб: ").append(esc(j.getSabab())).append("\n");
+        sb.append("📝 Сабаб: ").append(esc(sababLines(j.getSabab()))).append("\n");
         if (j.getHolat() == Holat.OGOH) {
             sb.append("💰 Жарима: <b>йўқ</b> — бу ").append(j.getTartib()).append("-ҳолат, огоҳлантириш. ")
               .append("Кейинги ҳолатдан асоснинг <b>").append(JarimaConfig.foizText(j.getFoiz())).append("%</b>и жарима ҳисобланади.\n");
@@ -314,7 +334,7 @@ public class JarimaService {
                 if (j.getHolat() != Holat.OCHIQ) sb.append(" · ").append(holatTitle(j.getHolat()));
                 if (j.getHolat() == Holat.OCHIQ) jami += j.getSumma();
             }
-            sb.append("\n   Сабаб: ").append(esc(j.getSabab())).append("\n");
+            sb.append("\n   Сабаб: ").append(esc(sababLines(j.getSabab())).replace("\n", "\n   ")).append("\n");
         }
         sb.append(RULE).append("\n");
         sb.append("Бугун: <b>").append(fmt(jami)).append("</b> сўм (").append(n - ogoh).append(" та жарима")
@@ -341,7 +361,7 @@ public class JarimaService {
                      .append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(TF)).append(" · ");
                 if (j.getHolat() == Holat.OGOH) { ogoh++; lines.append("огоҳлантириш"); }
                 else { soni++; lines.append("<b>").append(fmt(j.getSumma())).append("</b> сўм"); if (j.getHolat() == Holat.OCHIQ) { xj += j.getSumma(); } else lines.append(" · ").append(holatTitle(j.getHolat())); }
-                lines.append("\n      ").append(esc(cut(j.getSabab(), 220))).append("\n");
+                lines.append("\n      ").append(esc(cut(sababLines(j.getSabab()), 260)).replace("\n", "\n      ")).append("\n");
             }
             jami += xj;
             sb.append("👤 <b>").append(xodimMention(e.getValue().get(0))).append("</b> — ").append(fmt(xj)).append(" сўм\n").append(lines);
@@ -369,7 +389,7 @@ public class JarimaService {
                   .append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(TF)).append(" · ");
                 if (j.getHolat() == Holat.OGOH) sb.append("огоҳлантириш (").append(j.getTartib()).append("-ҳолат)");
                 else { sb.append("<b>").append(fmt(j.getSumma())).append("</b> сўм"); if (j.getHolat() == Holat.OCHIQ) jami += j.getSumma(); }
-                sb.append("\n      ").append(esc(cut(j.getSabab(), 200))).append("\n");
+                sb.append("\n      ").append(esc(cut(sababLines(j.getSabab()), 260)).replace("\n", "\n      ")).append("\n");
             }
         }
         sb.append(RULE).append("\n");

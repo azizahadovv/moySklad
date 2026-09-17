@@ -325,7 +325,7 @@ public class JarimaHandler {
               .append(JarimaService.turTitle(j.getTur())).append(" · ")
               .append(j.getHolat() == Holat.OGOH ? "огоҳлантириш" : "<b>" + fmt(j.getSumma()) + "</b> сўм")
               .append(" · ").append(JarimaService.holatTitle(j.getHolat())).append("\n   ")
-              .append(esc(cut(j.getSabab(), 160))).append("\n");
+              .append(esc(cut(JarimaService.sababLines(j.getSabab()), 220)).replace("\n", "\n   ")).append("\n");
         }
         sb.append(JarimaService.RULE).append("\n");
         sb.append("Очиқ (тўланмаган): <b>").append(fmt(repo.sumByHolatAndUser(Holat.OCHIQ, u.getId()))).append("</b> сўм\n");
