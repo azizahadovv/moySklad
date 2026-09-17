@@ -415,7 +415,7 @@ public class SettingsAdminHandler {
         rows.add(irow(ob.apply(-20), ob.apply(-15), ob.apply(-10), ob.apply(-5)));
         rows.add(irow(ob.apply(0)));
         rows.add(irow(ob.apply(5), ob.apply(10), ob.apply(15), ob.apply(20)));
-        // ⏰ Eskirish chegarasi (soat): 0 — o'chiq. ✅ — joriy tanlov.
+        // ⏰ Eskirish chegarasi (soat): 0 — o'chiq. ✅ — joriy tanlov. Har kun alohida — bugungi oyna boshidan sanaladi.
         int stale = jobs.clickStaleHours();
         java.util.function.Function<Integer, InlineKeyboardButton> hb = h ->
                 btn((h == stale ? "✅ " : "") + (h == 0 ? "⏰ o'chiq" : "⏰ " + h + " soat"), "a:cgh:" + h);

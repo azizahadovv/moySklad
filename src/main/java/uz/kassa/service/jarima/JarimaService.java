@@ -13,6 +13,7 @@ import uz.kassa.domain.Jarima.Holat;
 import uz.kassa.domain.Jarima.Tur;
 import uz.kassa.domain.Shipment;
 import uz.kassa.repo.AppUserRepo;
+import uz.kassa.repo.ClickAccountRepo;
 import uz.kassa.repo.GroupMemberRepo;
 import uz.kassa.repo.JarimaRepo;
 import uz.kassa.service.AuditService;
@@ -61,6 +62,7 @@ public class JarimaService {
     private final ControlNotifier notifier;
     private final AppUserRepo userRepo;
     private final GroupMemberRepo memberRepo;
+    private final ClickAccountRepo clickRepo;
     private final Sender sender;
     private final AuditService audit;
     private final NotifySwitches sw;
@@ -86,18 +88,20 @@ public class JarimaService {
 
     /**
      * 📲 Click hisobotida karta qoldig'i eskirgan/kiritilmagan (Jobs.cardBlock, faqat jadval bo'yicha yuborishda).
-     * Mas'ul bo'lmasa — yozilmaydi (kimga yozish noma'lum). Bir epizodda (oxirgi yuborilgandan keyin) bir marta.
+     * Mas'ul bo'lmasa — yozilmaydi (kimga yozish noma'lum). Bir epizodda bir marta: epizod {@code since} dan boshlanadi —
+     * bugungi hisobot oynasi boshi yoki undan keyingi oxirgi yuborish (Jobs.cardStaleSince); har kun alohida sanaladi.
+     * @param ageMin bugungi oyna ichida necha daqiqa yangilanmagan (Jobs.cardAgeMin)
      * @return yozilgan holat (hisobot qatoriga qo'shish uchun) yoki bo'sh.
      */
-    public Optional<Jarima> kartaStale(ClickAccount c, long ageMin) {
+    public Optional<Jarima> kartaStale(ClickAccount c, long ageMin, Instant since) {
         if (!cfg.enabled()) return Optional.empty();
         String resp = c.getCardResponsible();
         if (resp == null || resp.isBlank()) return Optional.empty();
         String manba = "click:" + c.getId();
         LocalDate today = LocalDate.now(cfg.zone());
-        boolean dup = c.getCardBalanceAt() == null
+        boolean dup = c.getCardBalanceAt() == null || since == null
                 ? repo.existsByTurAndManbaAndSana(Tur.KARTA, manba, today)
-                : repo.existsByTurAndManbaAndCreatedAtAfter(Tur.KARTA, manba, c.getCardBalanceAt());
+                : repo.existsByTurAndManbaAndCreatedAtAfter(Tur.KARTA, manba, since);
         if (dup) return Optional.empty();
         AppUser u = resolveResponsible(resp);
         String name = u != null ? u.getFullName() : plainResponsible(resp);
@@ -107,7 +111,7 @@ public class JarimaService {
             sabab = "Карта «" + c.getName() + "» қолдиғи умуман юборилмаган — Click ҳисоботида «❗️ киритилмаган». "
                     + "Асос: базавий сумма " + fmt(asos) + " сўм.";
         } else {
-            sabab = "Карта «" + c.getName() + "» қолдиғи " + (ageMin / 60) + " соатдан бери юборилмаган (охирги: "
+            sabab = "Карта «" + c.getName() + "» қолдиғи бугунги ҳисобот вақти оралиғида " + (ageMin / 60) + " соатдан бери янгиланмаган (охирги: "
                     + LocalDateTime.ofInstant(c.getCardBalanceAt(), cfg.zone()).format(SHORT)
                     + (c.getCardBalanceBy() == null ? "" : ", " + c.getCardBalanceBy().replace("(tasdiqlangan)", "").trim())
                     + ") — Click ҳисоботида «⏰ маълумот янгиланмаган». Асос: охирги қолдиқ " + fmt(asos) + " сўм.";
@@ -202,7 +206,7 @@ public class JarimaService {
     public String card(Jarima j, boolean intro) {
         StringBuilder sb = new StringBuilder();
         if (intro) sb.append(j.getHolat() == Holat.OGOH ? "⚠️ <b>ОГОҲЛАНТИРИШ</b>\n\n" : "⚖️ <b>ЖАРИМА ЁЗИЛДИ</b>\n\n");
-        sb.append("👤 ").append(esc(j.getXodim()));
+        sb.append("👤 ").append(xodimMention(j));
         if (j.getKassaId() != null) sb.append(" · ").append(esc(notifier.kassaName(j.getKassaId())));
         sb.append("\n📌 Тур: ").append(turTitle(j.getTur())).append("\n");
         sb.append("🕒 ").append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(DTF)).append("\n");
@@ -340,7 +344,7 @@ public class JarimaService {
                 lines.append("\n      ").append(esc(cut(j.getSabab(), 220))).append("\n");
             }
             jami += xj;
-            sb.append("👤 <b>").append(esc(e.getKey())).append("</b> — ").append(fmt(xj)).append(" сўм\n").append(lines);
+            sb.append("👤 <b>").append(xodimMention(e.getValue().get(0))).append("</b> — ").append(fmt(xj)).append(" сўм\n").append(lines);
         }
         sb.append(RULE).append("\n");
         sb.append("Жами бугун: <b>").append(fmt(jami)).append("</b> сўм · ").append(soni).append(" та жарима")
@@ -359,10 +363,7 @@ public class JarimaService {
         for (Jarima j : karta) by.computeIfAbsent(j.getXodim(), k -> new ArrayList<>()).add(j);
         long jami = 0;
         for (var e : by.entrySet()) {
-            Long tg = e.getValue().get(0).getUserId() == null ? null
-                    : userRepo.findById(e.getValue().get(0).getUserId()).map(AppUser::getTelegramId).orElse(null);
-            String who = tg == null ? esc(e.getKey()) : "<a href=\"tg://user?id=" + tg + "\">" + esc(e.getKey()) + "</a>";
-            sb.append("👤 ").append(who).append("\n");
+            sb.append("👤 ").append(xodimMention(e.getValue().get(0))).append("\n");
             for (Jarima j : e.getValue()) {
                 sb.append("   • 💳 ").append(esc(j.getManbaNomi())).append(" · ")
                   .append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(TF)).append(" · ");
@@ -463,6 +464,42 @@ public class JarimaService {
             } catch (Exception ignored) { }
         }
         return null;
+    }
+
+    /**
+     * 👤 Xodim ismi MENTION ko'rinishida (guruh va admin xabarlarida odamni belgilash, 17.09.2026):
+     * 1) bot xodimi (users.telegram_id) → tg://user havola; 2) KARTA — click_accounts.card_responsible:
+     * {@code {id=N;Ism}} → havola, {@code @username} → group_members registri orqali id (topilmasa @username matni —
+     * guruhda Telegram o'zi belgilaydi); 3) aks holda oddiy ism. Xato bo'lsa ism.
+     */
+    public String xodimMention(Jarima j) {
+        String name = esc(j.getXodim());
+        try {
+            if (j.getUserId() != null) {
+                Long tg = userRepo.findById(j.getUserId()).map(AppUser::getTelegramId).orElse(null);
+                if (tg != null) return link(tg, name);
+            }
+            if (j.getTur() == Tur.KARTA && j.getManba() != null && j.getManba().startsWith("click:")) {
+                long cid = Long.parseLong(j.getManba().substring(6));
+                String resp = clickRepo.findById(cid).map(ClickAccount::getCardResponsible).orElse(null);
+                if (resp != null && !resp.isBlank()) {
+                    Matcher m = RESP_ID.matcher(resp);
+                    if (m.find()) return link(Long.parseLong(m.group(1)), name);
+                    String t = resp.trim();
+                    if (t.startsWith("@") && t.length() > 1) {
+                        String un = t.substring(1).trim();
+                        var gm = memberRepo.findFirstByUsernameIgnoreCase(un);
+                        if (gm.isPresent() && gm.get().getUserId() != null) return link(gm.get().getUserId(), name);
+                        return name.contains("@" + un) ? name : name + " " + esc("@" + un);
+                    }
+                }
+            }
+        } catch (Exception e) { log.debug("xodimMention ({}): {}", j.getId(), e.getMessage()); }
+        return name;
+    }
+
+    private static String link(long tgId, String escName) {
+        return "<a href=\"tg://user?id=" + tgId + "\">" + escName + "</a>";
     }
 
     private static String plainResponsible(String resp) {

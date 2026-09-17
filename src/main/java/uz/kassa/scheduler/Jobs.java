@@ -126,9 +126,31 @@ public class Jobs {
         return v - Math.floorMod(v, 5) + (Math.floorMod(v, 5) >= 3 ? 5 : 0);   // 5 ga yaxlitlash
     }
 
-    /** ⏰ Karta qoldig'i shu soatdan eski bo'lsa hisobotda «маълумот янгиланмаган» + mas'ulga eslatma (0 — o'chiq). */
+    /** ⏰ Karta qoldig'i shu soatdan eski bo'lsa hisobotda «маълумот янгиланмаган» + mas'ulga eslatma (0 — o'chiq).
+     *  Eskirish HAR KUN ALOHIDA — faqat bugungi hisobot oynasi (clickFrom..clickTo, siljish bilan) ichida sanaladi:
+     *  kechagi qoldiq bugungi birinchi hisobotda «eski» emas (foydalanuvchi qarori, 17.09.2026). */
     public static final String CLICK_STALE_KEY = "notify.clickStaleHours";
     public int clickStaleHours() { return intSetting(CLICK_STALE_KEY, 2, 0, 48); }
+
+    /** Bugungi hisobot oynasining boshi — birinchi hisobot vaqti (clickFrom:00 + siljish), Instant. */
+    public java.time.Instant clickWindowStart() {
+        var zone = props.zoneId();
+        return java.time.LocalDate.now(zone).atTime(clickFrom(), 0).plusMinutes(clickOffsetMin()).atZone(zone).toInstant();
+    }
+
+    /** Karta qoldig'ining «yoshi» (daqiqa) — bugungi oyna boshidan yoki oxirgi yuborilgandan (qaysi keyin bo'lsa) hozirgacha;
+     *  qoldiq umuman yo'q bo'lsa -1. Oyna hali ochilmagan bo'lsa 0. */
+    public long cardAgeMin(ClickAccount c) {
+        if (c.getCardBalanceAt() == null) return -1;
+        java.time.Instant since = cardStaleSince(c);
+        return Math.max(0, java.time.Duration.between(since, java.time.Instant.now()).toMinutes());
+    }
+
+    /** Eskirish sanaladigan boshlang'ich nuqta: max(oxirgi yuborilgan, bugungi oyna boshi). Jarima epizodi ham shu nuqtadan. */
+    public java.time.Instant cardStaleSince(ClickAccount c) {
+        java.time.Instant ws = clickWindowStart();
+        return c.getCardBalanceAt() == null || c.getCardBalanceAt().isBefore(ws) ? ws : c.getCardBalanceAt();
+    }
 
     /** Sozlamalar/hisobot uchun: «13:15» ko'rinishidagi misol vaqt. */
     public String clickTimeExample(int hour) {
@@ -546,11 +568,12 @@ public class Jobs {
                  .append("</b> — Карта остаткасини юборинг ва текширинг!\n");
             }
             // ⏰ Farq bo'lmasa ham qoldiq ESKI bo'lishi mumkin (mas'ul N soat yubormagan) — alohida belgilanadi va mas'ul chaqiriladi
+            // Yosh HAR KUN ALOHIDA: bugungi hisobot oynasi boshidan (yoki undan keyingi oxirgi yuborishdan) sanaladi — tun qo'shilmaydi
             int staleH = clickStaleHours();
-            long ageMin = c.getCardBalanceAt() == null ? -1 : java.time.Duration.between(c.getCardBalanceAt(), java.time.Instant.now()).toMinutes();
+            long ageMin = cardAgeMin(c);
             if (staleH > 0 && ageMin >= staleH * 60L) {
                 stat[3]++;
-                b.append("⏰ <b>Маълумот янгиланмаган</b> — ").append(ageMin / 60).append(" соат")
+                b.append("⏰ <b>Маълумот янгиланмаган</b> — бугун ").append(ageMin / 60).append(" соат")
                  .append(c.getCardResponsible() == null || c.getCardResponsible().isBlank() ? "" : " · " + mention(c.getCardResponsible()))
                  .append(" — карта остаткасини юборинг!\n");
                 if (jarima) b.append(jarimaLine(c, ageMin));
@@ -562,7 +585,7 @@ public class Jobs {
     /** ⚖️ Eskirgan/kiritilmagan karta uchun jarima yozish (bir epizodda bir marta) va hisobotga qator. Xato hisobotni buzmaydi. */
     private String jarimaLine(ClickAccount c, long ageMin) {
         try {
-            var j = jarimaSvc.kartaStale(c, ageMin);
+            var j = jarimaSvc.kartaStale(c, ageMin, cardStaleSince(c));
             if (j.isEmpty()) return "";
             var x = j.get();
             if (x.getHolat() == uz.kassa.domain.Jarima.Holat.OGOH)
