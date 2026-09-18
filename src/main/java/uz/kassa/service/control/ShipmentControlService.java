@@ -887,7 +887,7 @@ public class ShipmentControlService {
             else unlinked.computeIfAbsent(s.getOwnerName().isBlank() ? "noma'lum" : s.getOwnerName(), k -> new ArrayList<>()).add(s);
         }
         Instant now = Instant.now();
-        String today = LocalDate.now(cfg.zone()).format(FDF);
+        String today = LocalDateTime.now(cfg.zone()).format(FDF);   // FDF soatli — LocalDate "HourOfDay" xatosi berardi (15–18.09)
         for (var e : byUser.entrySet()) {
             AppUser u = userRepo.findById(e.getKey()).orElse(null);
             if (!sw.on(uz.kassa.service.NotifySwitches.OT_KAMCHILIK)) { /* 🔕 Хабарномалар — faqat belgilanadi */ }
@@ -998,7 +998,7 @@ public class ShipmentControlService {
         for (Shipment s : repo.findByIssuesNotAndMasulUserIdOrderByMomentDesc("", u.getId()))
             if (list.stream().noneMatch(x -> x.getId().equals(s.getId()))) list.add(s);
         list.removeIf(s -> cfg.isQuietState(s.getState()));
-        return list.isEmpty() ? null : issuesReport(list, null, "kamchilikli-otgruzkalar-" + u.getId() + "-" + LocalDate.now(cfg.zone()).format(FDF));
+        return list.isEmpty() ? null : issuesReport(list, null, "kamchilikli-otgruzkalar-" + u.getId() + "-" + LocalDateTime.now(cfg.zone()).format(FDF));
     }
 
     private String issuesMessage(List<Shipment> list) {

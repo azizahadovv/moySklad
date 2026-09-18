@@ -184,7 +184,7 @@ public class JarimaService {
 
     private Jarima register(Tur tur, AppUser u, String xodim, Long kassaId, String manba, String manbaNomi, long asos, String sabab) {
         String kalit = u != null ? "u:" + u.getId() : "n:" + xodim;
-        int tartib = (int) repo.countByKalitAndTur(kalit, tur) + 1;
+        int tartib = (int) repo.countByKalitAndTurAndHolatNot(kalit, tur, Holat.BEKOR) + 1;   // bekor qilinganlar sanalmaydi
         boolean ogoh = tartib <= cfg.ogohSoni();
         double foiz = cfg.foiz(tur);
         long summa = ogoh ? 0 : Math.round(asos * foiz / 100.0);
@@ -263,7 +263,7 @@ public class JarimaService {
         if (LocalTime.now(cfg.zone()).isBefore(cfg.kunVaqt())) return;
         if (today.toString().equals(cfg.get(JarimaConfig.KUN_SENT).orElse(""))) return;
         cfg.set(JarimaConfig.KUN_SENT, today.toString());
-        List<Jarima> all = repo.findBySanaOrderByIdAsc(today);
+        List<Jarima> all = todayActive(today);
         if (all.isEmpty()) return;
         try { sendDaily(all, today); }
         catch (Exception e) { log.warn("Jarima kunlik jamlama: {}", e.getMessage()); }
@@ -275,9 +275,16 @@ public class JarimaService {
     /** Test/qo'lda: bugungi jamlamani hozir yuborish (guard'siz). @return yozuvlar soni. */
     public int sendDailyNow() {
         LocalDate today = LocalDate.now(cfg.zone());
-        List<Jarima> all = repo.findBySanaOrderByIdAsc(today);
+        List<Jarima> all = todayActive(today);
         if (!all.isEmpty()) sendDaily(all, today);
         return all.size();
+    }
+
+    /** Bugungi yozuvlar, BEKOR qilinganlarsiz (2026-09-18): bekor = xato yozilgan, jamlamada ko'rinmasin. */
+    private List<Jarima> todayActive(LocalDate today) {
+        List<Jarima> out = new ArrayList<>();
+        for (Jarima j : repo.findBySanaOrderByIdAsc(today)) if (j.getHolat() != Holat.BEKOR) out.add(j);
+        return out;
     }
 
     private void sendDaily(List<Jarima> all, LocalDate today) {
@@ -388,7 +395,11 @@ public class JarimaService {
                 sb.append("   • 💳 ").append(esc(j.getManbaNomi())).append(" · ")
                   .append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(TF)).append(" · ");
                 if (j.getHolat() == Holat.OGOH) sb.append("огоҳлантириш (").append(j.getTartib()).append("-ҳолат)");
-                else { sb.append("<b>").append(fmt(j.getSumma())).append("</b> сўм"); if (j.getHolat() == Holat.OCHIQ) jami += j.getSumma(); }
+                else {
+                    sb.append("<b>").append(fmt(j.getSumma())).append("</b> сўм");
+                    if (j.getHolat() == Holat.OCHIQ) jami += j.getSumma();
+                    else sb.append(" · ").append(holatTitle(j.getHolat()));
+                }
                 sb.append("\n      ").append(esc(cut(sababLines(j.getSabab()), 260)).replace("\n", "\n      ")).append("\n");
             }
         }
@@ -403,7 +414,9 @@ public class JarimaService {
 
     public Jarima close(long id, AppUser by, String izoh, boolean bekor) {
         Jarima j = repo.findById(id).orElseThrow(() -> new BusinessException("Jarima topilmadi"));
-        if (j.getHolat() != Holat.OCHIQ) throw new BusinessException("Bu yozuv ochiq emas: " + holatTitleLat(j.getHolat()));
+        // OCHIQ — yopish/bekor; OGOH (ogohlantirish) — faqat bekor (noto'g'ri yozilgan bo'lsa tartibdan chiqadi, 2026-09-18)
+        boolean ogohBekor = bekor && j.getHolat() == Holat.OGOH;
+        if (j.getHolat() != Holat.OCHIQ && !ogohBekor) throw new BusinessException("Bu yozuv ochiq emas: " + holatTitleLat(j.getHolat()));
         j.setHolat(bekor ? Holat.BEKOR : Holat.YOPIQ);
         j.setYopilganAt(Instant.now());
         j.setYopganUserId(by.getId());
@@ -413,6 +426,39 @@ public class JarimaService {
         if (j.getUserId() != null) userRepo.findById(j.getUserId()).ifPresent(u -> notifier.sendOne(NotifySwitches.JR_XODIM, u,
                 (bekor ? "❌ <b>Жарима бекор қилинди</b>" : "✅ <b>Жарима ёпилди</b>") + "\n\n" + card(j, false), myKb()));
         return j;
+    }
+
+    /**
+     * Xato yozilgan jarimalarni TO'PLAM bilan bekor qilish (2026-09-18): ro'yxatdagi OGOH/OCHIQ yozuvlar BEKOR bo'ladi
+     * (tartibdan chiqadi), har xodimga bitta jamlama xabar. YOPIQ (to'langan) tegilmaydi. @return bekor qilinganlar soni.
+     */
+    public int cancelBulk(List<Jarima> list, AppUser by, String izoh) {
+        Instant now = Instant.now();
+        String note = izoh == null || izoh.isBlank() ? "xato yozilgan" : cut(izoh.trim(), 400);
+        Map<Long, List<Jarima>> byUser = new LinkedHashMap<>();
+        int n = 0;
+        for (Jarima j : list) {
+            if (j.getHolat() != Holat.OCHIQ && j.getHolat() != Holat.OGOH) continue;
+            j.setHolat(Holat.BEKOR);
+            j.setYopilganAt(now);
+            j.setYopganUserId(by.getId());
+            j.setIzoh(note);
+            repo.save(j);
+            n++;
+            audit.log(by.getId(), "JARIMA_BEKOR", "jarima", j.getId(), "to'plam: " + j.getXodim() + " " + j.getSumma() + " " + note);
+            if (j.getUserId() != null) byUser.computeIfAbsent(j.getUserId(), k -> new ArrayList<>()).add(j);
+        }
+        for (var e : byUser.entrySet()) userRepo.findById(e.getKey()).ifPresent(u -> {
+            StringBuilder sb = new StringBuilder("❌ <b>Жарималар бекор қилинди</b> — " + e.getValue().size() + " та\n\n");
+            for (Jarima j : e.getValue())
+                sb.append("• ").append(LocalDateTime.ofInstant(j.getCreatedAt(), cfg.zone()).format(DTF)).append(" · ")
+                  .append(turTitle(j.getTur())).append(" · ")
+                  .append(j.getSumma() == 0 ? "огоҳлантириш" : fmt(j.getSumma()) + " сўм").append("\n");
+            sb.append("\nСабаб: ").append(esc(note));
+            notifier.sendOne(NotifySwitches.JR_XODIM, u, sb.toString(), myKb());
+        });
+        log.info("Jarima to'plam bekor: {} ta ({}), {}", n, note, by.getFullName());
+        return n;
     }
 
     /* ==================== RO'YXAT / FILTR ==================== */

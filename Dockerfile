@@ -9,7 +9,9 @@
 # yoqiladi: `--build-arg TDLIB=-Ptdlib`), lekin standart build unga UMUMAN MUROJAAT QILMAYDI.
 FROM maven:3.9-eclipse-temurin-17 AS build
 ARG TDLIB=
-ENV MAVEN_OPTS="-Dmaven.wagon.http.connectionTimeout=15000 -Dmaven.wagon.http.readTimeout=15000"
+# Maven 3.9 standart transporti resolver (wagon emas) — maven.wagon.* kalitlari unga ta'sir qilmaydi, standart
+# so'rov timeout'i 30 daqiqa edi: osilgan bitta yuklash butun build'ni «qotib» qo'yardi (2026-09-18).
+ENV MAVEN_OPTS="-Daether.connector.connectTimeout=15000 -Daether.connector.requestTimeout=90000"
 WORKDIR /app
 COPY .m2-tdlib-cache/ /opt/tdlib-seed/
 COPY pom.xml .
@@ -21,7 +23,7 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.m2 \
     cp -rn /opt/tdlib-seed/. /root/.m2/ 2>/dev/null; \
     for i in 1 2 3; do \
-      mvn -q -B $TDLIB -DskipTests package && break; \
+      mvn -B -ntp $TDLIB -DskipTests package && break; \
       echo "mvn urinish $i muvaffaqiyatsiz, qayta..." >&2; sleep 5; \
       if [ "$i" = 3 ]; then exit 1; fi; \
     done

@@ -64,6 +64,8 @@ public class JarimaHandler {
             case "jry" -> askReason(s, arg, false, chatId, msgId);
             case "jrb" -> askReason(s, arg, true, chatId, msgId);
             case "jrx" -> excel(s, chatId);
+            case "jrm" -> confirmBulk(s, Filt.parse(arg), chatId, msgId);
+            case "jrmy" -> askBulkReason(s, arg, chatId, msgId);
             case "jrt" -> { int n = svc.sendDailyNow(); sender.send(chatId, n == 0 ? "ℹ️ Bugun jarima yozuvlari yo'q — jamlama yuborilmadi." : "✅ Kunlik jamlama yuborildi: " + n + " ta yozuv."); }
             case "jrn" -> { }
             default -> { return false; }
@@ -124,7 +126,7 @@ public class JarimaHandler {
         long id;
         try { id = Long.parseLong(arg); } catch (NumberFormatException e) { menu(s, chatId, msgId); return; }
         Jarima j = repo.findById(id).orElse(null);
-        if (j == null || j.getHolat() != Holat.OCHIQ) { card(s, arg, chatId, msgId); return; }
+        if (j == null || !(j.getHolat() == Holat.OCHIQ || (bekor && j.getHolat() == Holat.OGOH))) { card(s, arg, chatId, msgId); return; }
         s.state = Session.State.ADM_JR_VAL;
         s.data.put("jrKey", (bekor ? "b" : "y") + id);
         String prompt = (bekor ? "❌ <b>Bekor qilish</b> — jarima hisobdan chiqadi (xodimga xabar boradi)." : "✅ <b>Yopish</b> — jarima to'landi/undirildi deb belgilanadi (xodimga xabar boradi).")
@@ -139,6 +141,15 @@ public class JarimaHandler {
         s.reset();
         String t = text.trim();
         if (key == null) { menu(s, chatId, 0); return; }
+        if (key.startsWith("m")) {   // to'plam bekor: key = "m" + filtr
+            Filt f = Filt.parse(key.substring(1));
+            try {
+                int n = svc.cancelBulk(filtered(f), u, t.equals("-") ? null : t);
+                sender.send(chatId, n == 0 ? "ℹ️ Bekor qilinadigan yozuv qolmagan." : "❌ Bekor qilindi: <b>" + n + "</b> ta yozuv (xodimlarga xabar ketdi).");
+            } catch (Exception e) { log.warn("Jarima to'plam bekor: {}", e.getMessage()); sender.send(chatId, "⚠️ Bajarilmadi — qaytadan urinib ko'ring."); }
+            list(s, f, chatId, 0);
+            return;
+        }
         if (key.startsWith("y") || key.startsWith("b")) {
             try {
                 long id = Long.parseLong(key.substring(1));
@@ -201,6 +212,51 @@ public class JarimaHandler {
 
     private static final int[] DAYS = {1, 7, 30, 90, 0};
     private static String daysTitle(int d) { return d == 0 ? "Hammasi" : d == 1 ? "Bugun" : d + " kun"; }
+
+    /** Filtrga mos yozuvlar (holat · tur · xodim · davr) — ro'yxat va to'plam bekor uchun bir xil manba. */
+    private List<Jarima> filtered(Filt f) {
+        LocalDate today = LocalDate.now(cfg.zone());
+        LocalDate from = f.days == 0 ? null : today.minusDays(f.days - 1);
+        return svc.list(new JarimaService.Filter(f.holat, f.tur, f.user, null, from, null));
+    }
+
+    private static long cancellable(List<Jarima> list) {
+        return list.stream().filter(j -> j.getHolat() == Holat.OCHIQ || j.getHolat() == Holat.OGOH).count();
+    }
+
+    /** ❌ To'plam bekor — 1-qadam: nima bekor bo'lishini ko'rsatib tasdiq so'rash. */
+    private void confirmBulk(Session s, Filt f, long chatId, int msgId) {
+        List<Jarima> list = filtered(f);
+        long n = cancellable(list);
+        if (n == 0) { list(s, f, chatId, msgId); return; }
+        Map<String, Integer> byXodim = new LinkedHashMap<>();
+        long sum = 0;
+        for (Jarima j : list) {
+            if (j.getHolat() != Holat.OCHIQ && j.getHolat() != Holat.OGOH) continue;
+            byXodim.merge(j.getXodim(), 1, Integer::sum);
+            sum += j.getSumma();
+        }
+        StringBuilder sb = new StringBuilder("❌ <b>Ro'yxatni bekor qilish</b>\n\n");
+        sb.append("🔎 ").append(f.holat == null ? "barcha holat" : JarimaService.holatTitleLat(f.holat)).append(" · ")
+          .append(f.tur == null ? "barcha tur" : JarimaService.turTitleLat(f.tur)).append(" · ")
+          .append(f.user == 0 ? "barcha xodim" : esc(notifier.userName(f.user))).append(" · ").append(daysTitle(f.days)).append("\n\n");
+        sb.append("Bekor bo'ladi: <b>").append(n).append("</b> ta yozuv (ogohlantirish + ochiq jarima) · <b>").append(fmt(sum)).append("</b> so'm\n");
+        for (var e : byXodim.entrySet()) sb.append("• ").append(esc(e.getKey())).append(" — ").append(e.getValue()).append(" ta\n");
+        sb.append("\nYopilgan (to'langan) yozuvlar tegilmaydi. Bekor qilinganlar tartibdan chiqadi — xodimning keyingi holati yana ogohlantirish bo'ladi. Har xodimga bitta xabar boradi.");
+        sender.edit(chatId, msgId, sb.toString(), inline(List.of(
+                irow(sbtn("✅ Ha, bekor qilish (" + n + ")", "a:jrmy:" + f.self(), StyledButton.DANGER)),
+                irow(btn("⬅️ Ro'yxat", "a:jrl:" + f.self())))));
+    }
+
+    /** ❌ To'plam bekor — 2-qadam: sabab. */
+    private void askBulkReason(Session s, String arg, long chatId, int msgId) {
+        Filt f = Filt.parse(arg);
+        if (cancellable(filtered(f)) == 0) { list(s, f, chatId, msgId); return; }
+        s.state = Session.State.ADM_JR_VAL;
+        s.data.put("jrKey", "m" + f.self());
+        sender.edit(chatId, msgId, "❌ <b>To'plam bekor</b> — sababni yozing (xodimlarga ham ko'rinadi; «-» bo'lsa «xato yozilgan»):",
+                inline(List.of(irow(btn("⬅️ Ro'yxat", "a:jrl:" + f.self())))));
+    }
 
     private void list(Session s, Filt f, long chatId, int msgId) {
         s.data.put("jrF", f.self());
@@ -279,6 +335,8 @@ public class JarimaHandler {
             if (ur.size() == 3) { rows.add(ur); ur = new ArrayList<>(); }
         }
         if (!ur.isEmpty()) rows.add(ur);
+        long canc = cancellable(list);
+        if (canc > 0) rows.add(irow(sbtn("❌ Ro'yxatni bekor qilish (" + canc + ")", "a:jrm:" + f.self(), StyledButton.DANGER)));
         rows.add(irow(btn("📥 Excel (" + list.size() + ")", "a:jrx"), btn("⬅️ " + LABEL, BACK)));
         show(chatId, msgId, sb.toString(), inline(rows));
     }
@@ -292,6 +350,8 @@ public class JarimaHandler {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         if (j.getHolat() == Holat.OCHIQ)
             rows.add(irow(sbtn("✅ Yopish (to'landi)", "a:jry:" + id, StyledButton.SUCCESS), sbtn("❌ Bekor qilish", "a:jrb:" + id, StyledButton.DANGER)));
+        else if (j.getHolat() == Holat.OGOH)   // noto'g'ri ogohlantirish — bekor qilinsa tartibdan chiqadi
+            rows.add(irow(sbtn("❌ Ogohlantirishni bekor qilish", "a:jrb:" + id, StyledButton.DANGER)));
         String back = s.getStr("jrF") == null ? new Filt(null, null, 0, 30, 0).self() : s.getStr("jrF");
         rows.add(irow(btn("⬅️ Ro'yxat", "a:jrl:" + back), btn(LABEL, BACK)));
         show(chatId, msgId, text, inline(rows));

@@ -744,6 +744,12 @@ public class MoySkladClient {
                     ok = true;
                 }
             } catch (Exception e) {
+                // 429 (limit) — har birini alohida so'rash limitni yanada buzadi (2026-09-17 «bo'ron»): bu siklda to'xtaymiz,
+                // olinmaganlari keyingi siklda qayta so'raladi (map'da bo'lmaydi, chaqiruvchi shunga tayyor).
+                if (String.valueOf(e.getMessage()).contains("HTTP 429")) {
+                    log.warn("Balanslar (POST): MoySklad limiti (429) — qolgan {} ta kontragent keyingi siklda", list.size() - i);
+                    return out;
+                }
                 log.warn("Balanslar (POST) o'qilmadi, alohida so'raladi: {}", e.getMessage());
             }
             if (!ok)

@@ -907,6 +907,7 @@ async function jarimaCard(id) {
   <div class="card"><div class="label">Сабаб</div><div style="white-space:pre-line">${esc(r.sabab)}</div></div>
   <div class="actions">
     ${r.superadmin && r.holat === 'OCHIQ' ? '<button class="btn main" id="cl">✅ Ёпиш (тўланди)</button><button class="btn danger" id="bk">❌ Бекор қилиш</button>' : ''}
+    ${r.superadmin && r.holat === 'OGOH' ? '<button class="btn danger" id="bk">❌ Огоҳлантиришни бекор қилиш</button>' : ''}
     <button class="btn ghost" data-go="#/hisobot/jarima">⬅️ Рўйхат</button>
   </div>`;
   bindGo();

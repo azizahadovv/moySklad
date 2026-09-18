@@ -21,6 +21,9 @@ public interface JarimaRepo extends JpaRepository<Jarima, Long> {
     /** Shu xodim (kalit) shu turda nechta holat (ogohlantirish + jarima) olgan. */
     long countByKalitAndTur(String kalit, Jarima.Tur tur);
 
+    /** Tartib uchun: BEKOR qilinganlar sanalmaydi (2026-09-18) — noto'g'ri yozilgan 1-holat bekor qilinsa keyingisi yana 1-holat. */
+    long countByKalitAndTurAndHolatNot(String kalit, Jarima.Tur tur, Jarima.Holat holat);
+
     /** Shu manba bo'yicha shu epizodda (after dan keyin) yozuv bormi — takror yozmaslik. */
     boolean existsByTurAndManbaAndCreatedAtAfter(Jarima.Tur tur, String manba, Instant after);
 

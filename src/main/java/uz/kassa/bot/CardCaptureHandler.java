@@ -195,8 +195,19 @@ public class CardCaptureHandler {
             //    uchrasa taniladi (faqat BITTA kartaga mos kelgandagina — adashmaslik uchun).
             ClickAccount card = null;
             String low = text.toLowerCase();
-            for (ClickAccount c : cards)
-                if (low.contains(c.getName().toLowerCase())) { card = c; break; }
+            // 0) Bank boti shabloni (HUMOCARD *5344 kabi, forward) — 💳 qatoridagi karta raqami ENG ISHONCHLI belgi:
+            //    «HUMOCARD», «PAYME», «HAMKORBANK» kabi so'zlar boshqa karta nomiga ham to'g'ri kelib chalg'itmasin (2026-09-18).
+            var tpl = uz.kassa.service.tg.TgCardParser.parse(text);
+            if (tpl != null && tpl.mask() != null) {
+                java.util.List<ClickAccount> byMask = new java.util.ArrayList<>();
+                for (ClickAccount c : cards)
+                    if (java.util.Arrays.asList(c.getName().split("[^\\p{L}\\p{N}]+")).contains(tpl.mask())) byMask.add(c);
+                if (byMask.size() == 1) card = byMask.get(0);
+                log.info("Karta capture: shablon *{} → {}", tpl.mask(), card == null ? "mos karta " + byMask.size() + " ta" : card.getName());
+            }
+            if (card == null)
+                for (ClickAccount c : cards)
+                    if (low.contains(c.getName().toLowerCase())) { card = c; break; }
             if (card == null) {
                 java.util.Set<String> generic = java.util.Set.of(
                         "nsb", "click", "klik", "клик", "karta", "карта", "card", "bank");
@@ -341,6 +352,7 @@ public class CardCaptureHandler {
             learned = true;
         }
         clickRepo.save(card);
+        log.info("Karta qoldig'i saqlandi: {} = {} so'm ({}, chat {})", card.getName(), fmtT(sum), who, chatId);
         Long uid = userRepo.findByTelegramId(fromTgId).map(AppUser::getId).orElse(null);
         audit.log(uid, "KARTA_QOLDIQ", "click", card.getId(),
                 card.getName() + " = " + sum + " (guruhdan: " + card.getCardBalanceBy() + ")"

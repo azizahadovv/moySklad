@@ -181,6 +181,41 @@ public class MoySkladHttp {
     }
 
 
+    /* ==================== TEZLIK CHEGARASI (2026-09-18) ====================
+     * MoySklad limiti: 45 so'rov / 3 soniya, 5 parallel. Bot bir necha jadval ishi (nazorat, sinxron, ombor,
+     * Click hisobot) bir vaqtda so'rov yuborib 429 «bo'roni»ga tushardi — bitta 429 dan keyin qolgan hamma
+     * ish ham 429 olar, ombor sinxroni to'xtab qolardi. Endi BARCHA so'rovlar shu darvozadan o'tadi:
+     * oynada 36 tadan ko'p emas, 4 paralleldan ko'p emas; 429 kelsa X-Lognex-Retry-After qadar hamma
+     * kutadi va so'rov 2 martagacha qaytariladi. */
+    private static final int WINDOW_MS = 3000, WINDOW_MAX = 36, PARALLEL = 4, RETRY_429 = 2;
+    private final java.util.ArrayDeque<Long> stamps = new java.util.ArrayDeque<>();
+    private final java.util.concurrent.Semaphore parallel = new java.util.concurrent.Semaphore(PARALLEL, true);
+    /** 429 dan keyin shu vaqtgacha (epoch ms) hech kim so'ramaydi. */
+    private volatile long pauseUntil = 0;
+
+    private void acquireSlot() throws InterruptedException {
+        while (true) {
+            long wait;
+            synchronized (stamps) {
+                long now = System.currentTimeMillis();
+                while (!stamps.isEmpty() && now - stamps.peekFirst() >= WINDOW_MS) stamps.pollFirst();
+                long pause = pauseUntil - now;
+                if (pause > 0) wait = pause;
+                else if (stamps.size() < WINDOW_MAX) { stamps.addLast(now); return; }
+                else wait = WINDOW_MS - (now - stamps.peekFirst()) + 5;
+            }
+            Thread.sleep(Math.max(5, Math.min(wait, 5000)));
+        }
+    }
+
+    /** 429 javobidan kutish vaqti (ms): X-Lognex-Retry-After, bo'lmasa 1500; 500…5000 oralig'ida. */
+    private static long retryAfterMs(HttpResponse<?> resp) {
+        long v = 1500;
+        try { v = Long.parseLong(resp.headers().firstValue("X-Lognex-Retry-After").orElse("1500").trim()); }
+        catch (NumberFormatException ignored) { }
+        return Math.max(500, Math.min(v, 5000));
+    }
+
     private JsonNode request(String url, String postBody, boolean nullOn404) {
         try {
             // MoySklad API Accept-Encoding: gzip bo'lmasa 415 qaytaradi
@@ -191,7 +226,19 @@ public class MoySkladHttp {
             if (postBody == null) b.GET();
             else b.header("Content-Type", "application/json")
                   .POST(HttpRequest.BodyPublishers.ofString(postBody, StandardCharsets.UTF_8));
-            HttpResponse<byte[]> resp = http.send(b.build(), HttpResponse.BodyHandlers.ofByteArray());
+            HttpRequest req = b.build();
+            HttpResponse<byte[]> resp;
+            for (int attempt = 0; ; attempt++) {
+                acquireSlot();
+                parallel.acquire();
+                try { resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray()); }
+                finally { parallel.release(); }
+                if (resp.statusCode() != 429) break;
+                long ms = retryAfterMs(resp);
+                synchronized (stamps) { pauseUntil = Math.max(pauseUntil, System.currentTimeMillis() + ms); }
+                if (attempt >= RETRY_429) break;
+                log.info("MoySklad 429 (limit) — {} ms kutib qayta ({}/{}): {}", ms, attempt + 1, RETRY_429, url);
+            }
             String body = decodeBody(resp);
             if (resp.statusCode() == 401 || resp.statusCode() == 403) {
                 log.warn("MoySklad ruxsat yo'q -> HTTP {} ({})", resp.statusCode(), url);
