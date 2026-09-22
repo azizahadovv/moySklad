@@ -86,6 +86,8 @@ public class JarimaHandler {
         sb.append("⚠️ Ogohlantirish: xodimning har turdagi birinchi <b>").append(cfg.ogohSoni()).append("</b> ta holati (summasiz), keyingilari jarima\n");
         sb.append("⏱ Xato (kontragent/otgruzka) jarimasi: <b>").append(cfg.paytTuzatilmadi() ? "admin eskalatsiyasida («tuzatilmadi»)" : "topilganda darhol").append("</b>\n");
         sb.append("💳 Karta: Click hisoboti vaqtida qoldiq «янгиланмаган»/«киритилмаган» bo'lsa — mas'ulga (bir epizodda bir marta)\n");
+        sb.append("💳 Karta farqi: MoySklad > karta (xarajat xabar qilinmagan) <b>")
+          .append(cfg.farqMin() == 0 ? "jarima o'chiq" : cfg.farqMin() + " daqiqada").append("</b> tuzatilmasa — mas'ulga; karta > MoySklad — otdelga, jarima yo'q\n");
         sb.append("🕘 Kunlik jamlama: <b>").append(cfg.kunVaqt()).append("</b> — xodimga, admin/rahbarga, karta turi guruhga\n");
         sb.append(JarimaService.RULE).append("\n");
         sb.append("Bugun: <b>").append(bugun.size()).append("</b> ta yozuv · <b>").append(fmt(bugunSum)).append("</b> so'm\n");
@@ -96,7 +98,7 @@ public class JarimaHandler {
         rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:jrg"), btn("💰 Bazaviy summa", "a:jrv:baz")));
         rows.add(irow(btn("📐 % Karta", "a:jrv:fk"), btn("📐 % Kontragent", "a:jrv:fkg"), btn("📐 % Otgruzka", "a:jrv:fot")));
         rows.add(irow(btn("⚠️ Ogoh soni", "a:jrv:ogoh"), btn(cfg.paytTuzatilmadi() ? "⏱ Payt: eskalatsiya" : "⏱ Payt: darhol", "a:jrp")));
-        rows.add(irow(btn("🕘 Jamlama vaqti", "a:jrv:kun"), btn("🧪 Jamlama hozir", "a:jrt")));
+        rows.add(irow(btn("🕘 Jamlama vaqti", "a:jrv:kun"), btn("⏳ Farq muddati", "a:jrv:farq"), btn("🧪 Jamlama hozir", "a:jrt")));
         rows.add(irow(btn("📋 Ochiq jarimalar", "a:jrl:" + new Filt(Holat.OCHIQ, null, 0, 0, 0).self()),
                 btn("📋 Hammasi (30 kun)", "a:jrl:" + new Filt(null, null, 0, 30, 0).self())));
         rows.add(irow(btn("⬅️ Orqaga", "a:p:set")));
@@ -114,6 +116,7 @@ public class JarimaHandler {
             case "fot" -> "📐 Otgruzka kamchiligi jarimasi — otgruzka summasining necha foizi? (0–100)\nHozir: " + JarimaConfig.foizText(cfg.foiz(Tur.OTGRUZKA)) + "\n\nFoizni kiriting:";
             case "ogoh" -> "⚠️ Xodimning har turdagi nechta birinchi holati ogohlantirish bilan o'tsin? (0–10; 0 — birinchisidan jarima)\nHozir: " + cfg.ogohSoni() + "\n\nSonni kiriting:";
             case "kun" -> "🕘 Kunlik jamlama vaqti (HH:mm)\nHozir: " + cfg.kunVaqt() + "\n\nVaqtni kiriting:";
+            case "farq" -> "⏳ Karta farqi (MoySklad > karta — kartadan xarajat qilinib xabar berilmagan) necha daqiqada tuzatilmasa jarima? (0–1440; 0 — farq uchun jarima yozilmaydi)\nHozir: " + cfg.farqMin() + "\n\nDaqiqani kiriting:";
             default -> null;
         };
         if (prompt == null) { menu(s, chatId, msgId); return; }
@@ -128,7 +131,7 @@ public class JarimaHandler {
         Jarima j = repo.findById(id).orElse(null);
         if (j == null || !(j.getHolat() == Holat.OCHIQ || (bekor && j.getHolat() == Holat.OGOH))) { card(s, arg, chatId, msgId); return; }
         s.state = Session.State.ADM_JR_VAL;
-        s.data.put("jrKey", (bekor ? "b" : "y") + id);
+        s.data.put("jrKey", (bekor ? "b:" : "y:") + id);
         String prompt = (bekor ? "❌ <b>Bekor qilish</b> — jarima hisobdan chiqadi (xodimga xabar boradi)." : "✅ <b>Yopish</b> — jarima to'landi/undirildi deb belgilanadi (xodimga xabar boradi).")
                 + "\n" + esc(j.getXodim()) + " · " + JarimaService.turTitleLat(j.getTur()) + " · <b>" + fmt(j.getSumma()) + "</b> so'm"
                 + "\n\nSababni yozing (yoki «-»):";
@@ -141,8 +144,8 @@ public class JarimaHandler {
         s.reset();
         String t = text.trim();
         if (key == null) { menu(s, chatId, 0); return; }
-        if (key.startsWith("m")) {   // to'plam bekor: key = "m" + filtr
-            Filt f = Filt.parse(key.substring(1));
+        if (key.startsWith("m:")) {   // to'plam bekor: key = "m:" + filtr
+            Filt f = Filt.parse(key.substring(2));
             try {
                 int n = svc.cancelBulk(filtered(f), u, t.equals("-") ? null : t);
                 sender.send(chatId, n == 0 ? "ℹ️ Bekor qilinadigan yozuv qolmagan." : "❌ Bekor qilindi: <b>" + n + "</b> ta yozuv (xodimlarga xabar ketdi).");
@@ -150,10 +153,10 @@ public class JarimaHandler {
             list(s, f, chatId, 0);
             return;
         }
-        if (key.startsWith("y") || key.startsWith("b")) {
+        if (key.startsWith("y:") || key.startsWith("b:")) {   // yopish/bekor: "y:<id>" / "b:<id>" — sozlama kalitlari ("baz") bilan aralashmasin
             try {
-                long id = Long.parseLong(key.substring(1));
-                Jarima j = svc.close(id, u, t.equals("-") ? null : t, key.startsWith("b"));
+                long id = Long.parseLong(key.substring(2));
+                Jarima j = svc.close(id, u, t.equals("-") ? null : t, key.startsWith("b:"));
                 sender.send(chatId, (j.getHolat() == Holat.BEKOR ? "❌ Bekor qilindi: " : "✅ Yopildi: ") + esc(j.getXodim()) + " · <b>" + fmt(j.getSumma()) + "</b> so'm");
             } catch (BusinessException e) { sender.send(chatId, "⚠️ " + esc(e.getMessage())); }
             catch (Exception e) { sender.send(chatId, "⚠️ Bajarilmadi — qaytadan urinib ko'ring."); }
@@ -169,6 +172,7 @@ public class JarimaHandler {
                 case "fot" -> cfg.set(JarimaConfig.FOIZ_OT, String.valueOf(pct(t)));
                 case "ogoh" -> { int v = Integer.parseInt(t.replaceAll("\\D", "")); if (v > 10) throw new IllegalArgumentException(); cfg.set(JarimaConfig.OGOH_SONI, String.valueOf(v)); }
                 case "kun" -> cfg.set(JarimaConfig.KUN_VAQT, LocalTime.parse(t.length() == 4 ? "0" + t : t).toString());
+                case "farq" -> { int v = Integer.parseInt(t.replaceAll("\\D", "")); if (v > 1440) throw new IllegalArgumentException(); cfg.set(JarimaConfig.FARQ_MIN, String.valueOf(v)); }
                 default -> { sender.send(chatId, "⚠️ Noma'lum sozlama"); menu(s, chatId, 0); return; }
             }
             audit.log(u.getId(), "JARIMA_SOZLAMA", "settings", null, key + "=" + t);
@@ -253,7 +257,7 @@ public class JarimaHandler {
         Filt f = Filt.parse(arg);
         if (cancellable(filtered(f)) == 0) { list(s, f, chatId, msgId); return; }
         s.state = Session.State.ADM_JR_VAL;
-        s.data.put("jrKey", "m" + f.self());
+        s.data.put("jrKey", "m:" + f.self());
         sender.edit(chatId, msgId, "❌ <b>To'plam bekor</b> — sababni yozing (xodimlarga ham ko'rinadi; «-» bo'lsa «xato yozilgan»):",
                 inline(List.of(irow(btn("⬅️ Ro'yxat", "a:jrl:" + f.self())))));
     }

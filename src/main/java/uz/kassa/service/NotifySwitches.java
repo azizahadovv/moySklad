@@ -109,6 +109,7 @@ public class NotifySwitches {
     public static final String JR_KUNLIK_XODIM = "JR_KUNLIK_XODIM";
     public static final String JR_KUNLIK_ADMIN = "JR_KUNLIK_ADMIN";
     public static final String JR_GURUH = "JR_GURUH";
+    public static final String JR_FARQ = "JR_FARQ";
 
     public static final List<Sw> ALL = List.of(
             new Sw(BAL_MANFIY, G_BALANS, "⚠️ Manfiy balans",
@@ -203,6 +204,8 @@ public class NotifySwitches {
                     "kun oxirida xodimlar kesimida jami → SuperAdmin (hammasi) + rahbar (o'z otdeli)", ABR),
             new Sw(JR_GURUH, G_JARIMA, "📣 Kunlik jamlama — Click guruhiga",
                     "kun oxirida faqat 💳 karta qoldig'i jarimalari (xodim mention bilan) → Click guruh/kanallari", NONE),
+            new Sw(JR_FARQ, G_JARIMA, "💳 Karta farqi ogohlantirishi",
+                    "karta qoldig'i MoySklad bilan farq qilganda → Click guruhi + karta mas'uli (MoySklad ko'p) yoki rahbar/admin (karta ko'p)", ABRX),
 
             new Sw(TEXNIK_OGOH, G_TEXNIK, "🚨 Texnik ogohlantirishlar",
                     "job 10 marta yiqildi, MoySklad token huquqi, valyuta kursi yo'q, dublikat otdel, noma'lum Klik statusi", AB)

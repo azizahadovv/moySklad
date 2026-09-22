@@ -43,6 +43,28 @@ public class ClickAccount {
     @Column(name = "card_responsible")
     private String cardResponsible;
 
+    /* ⚠️ Karta farqi epizodi (V45, docs/JARIMA.md): MoySklad − karta, tiyin. >0 — MoySklad ko'p (karta mas'uli, muddatda
+     * tuzatilmasa jarima), <0 — karta ko'p (otdel: otgruzka/to'lov kiritilmagan), 0 — farq yo'q. */
+    @Builder.Default
+    @Column(name = "farq_tiyin", nullable = false)
+    private long farqTiyin = 0;
+
+    /** Epizod boshi (bugungi oyna boshidan qayta sanaladi). */
+    @Column(name = "farq_since")
+    private Instant farqSince;
+
+    /** Epizod boshida xabar yuborilgan vaqt (bir epizodda bir marta). */
+    @Column(name = "farq_notified_at")
+    private Instant farqNotifiedAt;
+
+    /** Shu epizodda ⚖️ jarima yozilgan vaqt (bir epizodda bir marta). */
+    @Column(name = "farq_jarima_at")
+    private Instant farqJarimaAt;
+
+    /** Oxirgi baholangan karta qoldig'i vaqti (card_balance_at) — epizod faqat yangi qoldiqda ochiladi. */
+    @Column(name = "farq_eval_at")
+    private Instant farqEvalAt;
+
     @Builder.Default
     private boolean active = true;
 

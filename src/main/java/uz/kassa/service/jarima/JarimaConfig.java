@@ -31,6 +31,8 @@ public class JarimaConfig {
     public static final String XATO_PAYT  = "jarima.xato_payt";
     /** Kunlik jamlama vaqti (HH:mm). */
     public static final String KUN_VAQT   = "jarima.kun_vaqt";
+    /** ⚠️ Karta farqi (MoySklad > karta) necha daqiqada tuzatilmasa jarima (0 — o'chiq). */
+    public static final String FARQ_MIN   = "jarima.farq_min";
     /** Kunlik jamlama yuborilgan sana (guard). */
     public static final String KUN_SENT   = "jarima.kun_sent";
     /** Click hisobot guruhlari — KARTA jarimalari kunlik jamlamasi shu chatlarga (Jobs.CLICK_GROUP_KEY bilan bir kalit). */
@@ -57,6 +59,9 @@ public class JarimaConfig {
     }
 
     public int ogohSoni() { return (int) longOf(OGOH_SONI, 1, 0, 10); }
+
+    /** Karta farqi muddati, daqiqa (standart 60; 0 — farq uchun jarima yozilmaydi). */
+    public int farqMin() { return (int) longOf(FARQ_MIN, 60, 0, 1440); }
 
     public boolean paytTuzatilmadi() { return !PAYT_TOPILDI.equals(settings.get(XATO_PAYT).orElse(PAYT_TUZATILMADI).trim()); }
     public void setPaytTuzatilmadi(boolean v) { settings.set(XATO_PAYT, v ? PAYT_TUZATILMADI : PAYT_TOPILDI); }

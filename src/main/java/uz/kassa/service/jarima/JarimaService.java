@@ -121,6 +121,32 @@ public class JarimaService {
     }
 
     /**
+     * ⚠️ Karta farqi (ClickFarqService): MoySklad qoldig'i kartadan KO'P — kartadan xarajat qilinib xabar berilmagan —
+     * va {@code min} daqiqada tuzatilmagan. Asos — kartaning oxirgi qoldig'i (KARTA turi bilan bir xil), farq sababda.
+     * Bir epizodda bir marta (ClickFarqService farq_jarima_at bilan nazorat qiladi). Mas'ul bo'lmasa — yozilmaydi.
+     * @param farqTiyin MoySklad − karta, tiyin (musbat)
+     */
+    public Optional<Jarima> kartaFarq(ClickAccount c, long farqTiyin, int min) {
+        if (!cfg.enabled()) return Optional.empty();
+        String resp = c.getCardResponsible();
+        if (resp == null || resp.isBlank()) return Optional.empty();
+        AppUser u = resolveResponsible(resp);
+        String name = u != null ? u.getFullName() : plainResponsible(resp);
+        long asos = c.getCardBalance() == null || c.getCardBalance() <= 0 ? cfg.bazaviy() : c.getCardBalance() / 100;
+        String sabab = "Карта «" + c.getName() + "» қолдиғи MoySklad қолдиғидан " + uz.kassa.bot.TextUtil.fmtTiyin(farqTiyin)
+                + " сўм КАМ — картадан харажат қилиниб хабар берилмаган (расход киритилмаган ёки қолдиқ қайта юборилмаган); "
+                + min + " дақиқада тузатилмади. Асос: охирги қолдиқ " + fmt(asos) + " сўм.";
+        return Optional.of(register(Tur.KARTA, u, name, c.getKassaId() != null ? c.getKassaId() : (u == null ? null : u.getKassaId()),
+                "clickfarq:" + c.getId(), c.getName() + " · фарқ +" + uz.kassa.bot.TextUtil.fmtTiyin(farqTiyin), asos, sabab));
+    }
+
+    /** Karta mas'uli → bot xodimi (ClickFarqService xabari uchun). */
+    public AppUser responsibleUser(ClickAccount c) {
+        String resp = c.getCardResponsible();
+        return resp == null || resp.isBlank() ? null : resolveResponsible(resp);
+    }
+
+    /**
      * 🏢 Kontragent xatosi (AgentCheckService): {@code tuzatilmadi=false} — topilganda, {@code true} — admin eskalatsiyasida.
      * Qaysi payt hisoblanishi sozlamada (jarima.xato_payt).
      */
@@ -140,9 +166,14 @@ public class JarimaService {
                 manba, ac.getAgentName(), cfg.bazaviy(), sb.toString());
     }
 
-    /** 📦 Otgruzka kamchiligi (ShipmentControlService). Asos — otgruzka summasi. */
+    /**
+     * 📦 Otgruzka kamchiligi (ShipmentControlService). Asos — otgruzka summasi.
+     * Faqat otgruzka summasi ham, qarz qoldig'i (balans) ham 0 dan katta bo'lganda yoziladi —
+     * 0 so'mlik yoki to'liq to'langan otgruzkada mas'ul/to'lov muddati yo'qligi jarima emas (2026-09-22).
+     */
     public void otgruzka(Shipment s, boolean tuzatilmadi) {
         if (!cfg.enabled() || tuzatilmadi != cfg.paytTuzatilmadi()) return;
+        if (s.getSum() <= 0 || s.remain() <= 0) return;
         String manba = "demand:" + s.getMsId();
         Instant since = s.getIssuesSince() == null ? Instant.now().minusSeconds(86400) : s.getIssuesSince().minusSeconds(1);
         if (repo.existsByTurAndManbaAndCreatedAtAfter(Tur.OTGRUZKA, manba, since)) return;
@@ -545,8 +576,8 @@ public class JarimaService {
                 Long tg = userRepo.findById(j.getUserId()).map(AppUser::getTelegramId).orElse(null);
                 if (tg != null) return link(tg, name);
             }
-            if (j.getTur() == Tur.KARTA && j.getManba() != null && j.getManba().startsWith("click:")) {
-                long cid = Long.parseLong(j.getManba().substring(6));
+            if (j.getTur() == Tur.KARTA && j.getManba() != null && (j.getManba().startsWith("click:") || j.getManba().startsWith("clickfarq:"))) {
+                long cid = Long.parseLong(j.getManba().substring(j.getManba().indexOf(':') + 1));
                 String resp = clickRepo.findById(cid).map(ClickAccount::getCardResponsible).orElse(null);
                 if (resp != null && !resp.isBlank()) {
                     Matcher m = RESP_ID.matcher(resp);

@@ -64,6 +64,8 @@ public class Jobs {
     private final uz.kassa.service.tg.TgCardReport tgCardReport;
     private final uz.kassa.webapp.WebUrlService webUrl;
     private final uz.kassa.service.jarima.JarimaService jarimaSvc;
+    private final uz.kassa.service.jarima.JarimaConfig jarimaCfg;
+    private final uz.kassa.service.jarima.ClickFarqService clickFarq;
     private volatile long lastBalanceTick = 0;
 
     /**
@@ -428,6 +430,21 @@ public class Jobs {
         clickReportNow(true);
     }
 
+    /**
+     * ⚠️ Karta farqi nazorati — har 5 daqiqada, faqat Click hisobot oynasi (clickFrom..clickTo) ichida:
+     * MoySklad > karta bo'lsa karta mas'uliga, jarima.farq_min daqiqada tuzatilmasa ⚖️ jarima;
+     * karta > MoySklad — otdel/admin'ga (jarima yo'q). docs/JARIMA.md §KARTA-FARQ.
+     */
+    @Scheduled(fixedDelayString = "PT5M", initialDelayString = "PT4M")
+    public void clickFarqTick() {
+        try {
+            int h = java.time.LocalDateTime.now(props.zoneId()).minusMinutes(clickOffsetMin()).getHour();
+            if (h < clickFrom() || h > clickTo()) return;
+            clickFarq.tick(clickWindowStart());
+            jobOk("clickFarq");
+        } catch (Exception e) { jobFail("clickFarq", e); }
+    }
+
     /** Jadvalga qaramasdan darhol yuborish — 🧪 test tugmasi/buyrug'i uchun (⚖️ jarima yozilmaydi). */
     public void clickReportNow() { clickReportNow(false); }
 
@@ -564,8 +581,19 @@ public class Jobs {
                 b.append("✅ Фарқ: <b>0</b> — тенг\n");
             } else {
                 stat[1]++;
-                b.append("⚠️ Фарқ: <b>").append(farq > 0 ? "+" : "").append(TextUtil.fmtTiyin(farq))
-                 .append("</b> — Карта остаткасини юборинг ва текширинг!\n");
+                // Yo'nalish kimniki ekanini aytadi: MS ko'p — kartadan xarajat (karta mas'uli); karta ko'p — MoySklad'ga
+                // hujjat kiritilmagan (otdel, karta mas'ulining aybi emas). Epizod holati — ClickFarqService (V45).
+                b.append("⚠️ Фарқ: <b>").append(farq > 0 ? "+" : "").append(TextUtil.fmtTiyin(farq)).append("</b> — ");
+                if (farq > 0) b.append("MoySklad'да кўп: картадан харажат қилинган бўлса хабар беринг ва қолдиқни қайта юборинг!\n");
+                else b.append("картада кўп: MoySklad'га отгрузка/тўлов киритилмаган — отдел текширсин (карта масъулининг айби эмас)\n");
+                if (c.getFarqTiyin() != 0 && c.getFarqSince() != null) {
+                    long fm = java.time.Duration.between(c.getFarqSince(), java.time.Instant.now()).toMinutes();
+                    b.append("⏳ ").append(fm).append(" дақиқадан бери");
+                    int fmin = jarimaCfg.farqMin();
+                    if (c.getFarqTiyin() > 0 && fmin > 0)
+                        b.append(c.getFarqJarimaAt() != null ? " · ⚖️ жарима ёзилган" : " · " + fmin + " дақиқада тузатилмаса ⚖️ жарима");
+                    b.append("\n");
+                }
             }
             // ⏰ Farq bo'lmasa ham qoldiq ESKI bo'lishi mumkin (mas'ul N soat yubormagan) — alohida belgilanadi va mas'ul chaqiriladi
             // Yosh HAR KUN ALOHIDA: bugungi hisobot oynasi boshidan (yoki undan keyingi oxirgi yuborishdan) sanaladi — tun qo'shilmaydi
