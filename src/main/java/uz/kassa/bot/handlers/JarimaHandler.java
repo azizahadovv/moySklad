@@ -87,7 +87,8 @@ public class JarimaHandler {
         sb.append("⏱ Xato (kontragent/otgruzka) jarimasi: <b>").append(cfg.paytTuzatilmadi() ? "admin eskalatsiyasida («tuzatilmadi»)" : "topilganda darhol").append("</b>\n");
         sb.append("💳 Karta: Click hisoboti vaqtida qoldiq «янгиланмаган»/«киритилмаган» bo'lsa — mas'ulga (bir epizodda bir marta)\n");
         sb.append("💳 Karta farqi: MoySklad > karta (xarajat xabar qilinmagan) <b>")
-          .append(cfg.farqMin() == 0 ? "jarima o'chiq" : cfg.farqMin() + " daqiqada").append("</b> tuzatilmasa — mas'ulga; karta > MoySklad — otdelga, jarima yo'q\n");
+          .append(cfg.farqMin() == 0 ? "jarima o'chiq" : cfg.farqMin() + " daqiqada").append("</b> tuzatilmasa — mas'ulga, asos <b>farq summasi</b> (")
+          .append(JarimaConfig.foizText(cfg.foiz(Tur.KARTA))).append("%); karta > MoySklad — otdelga, jarima yo'q\n");
         sb.append("🕘 Kunlik jamlama: <b>").append(cfg.kunVaqt()).append("</b> — xodimga, admin/rahbarga, karta turi guruhga\n");
         sb.append(JarimaService.RULE).append("\n");
         sb.append("Bugun: <b>").append(bugun.size()).append("</b> ta yozuv · <b>").append(fmt(bugunSum)).append("</b> so'm\n");
@@ -116,7 +117,9 @@ public class JarimaHandler {
             case "fot" -> "📐 Otgruzka kamchiligi jarimasi — otgruzka summasining necha foizi? (0–100)\nHozir: " + JarimaConfig.foizText(cfg.foiz(Tur.OTGRUZKA)) + "\n\nFoizni kiriting:";
             case "ogoh" -> "⚠️ Xodimning har turdagi nechta birinchi holati ogohlantirish bilan o'tsin? (0–10; 0 — birinchisidan jarima)\nHozir: " + cfg.ogohSoni() + "\n\nSonni kiriting:";
             case "kun" -> "🕘 Kunlik jamlama vaqti (HH:mm)\nHozir: " + cfg.kunVaqt() + "\n\nVaqtni kiriting:";
-            case "farq" -> "⏳ Karta farqi (MoySklad > karta — kartadan xarajat qilinib xabar berilmagan) necha daqiqada tuzatilmasa jarima? (0–1440; 0 — farq uchun jarima yozilmaydi)\nHozir: " + cfg.farqMin() + "\n\nDaqiqani kiriting:";
+            case "farq" -> "⏳ Karta farqi (MoySklad > karta — kartadan xarajat qilinib xabar berilmagan) necha daqiqada tuzatilmasa jarima?\n"
+                    + "Jarima = FARQ summasining " + JarimaConfig.foizText(cfg.foiz(Tur.KARTA)) + "%i (karta qoldig'idan emas).\n"
+                    + "(0–1440; 0 — farq uchun jarima yozilmaydi)\nHozir: " + cfg.farqMin() + "\n\nDaqiqani kiriting:";
             default -> null;
         };
         if (prompt == null) { menu(s, chatId, msgId); return; }

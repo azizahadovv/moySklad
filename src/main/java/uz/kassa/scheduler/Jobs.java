@@ -586,11 +586,13 @@ public class Jobs {
                 b.append("⚠️ Фарқ: <b>").append(farq > 0 ? "+" : "").append(TextUtil.fmtTiyin(farq)).append("</b> — ");
                 if (farq > 0) b.append("MoySklad'да кўп: картадан харажат қилинган бўлса хабар беринг ва қолдиқни қайта юборинг!\n");
                 else b.append("картада кўп: MoySklad'га отгрузка/тўлов киритилмаган — отдел текширсин (карта масъулининг айби эмас)\n");
-                if (c.getFarqTiyin() != 0 && c.getFarqSince() != null) {
+                // Epizod holati FAQAT jonli farq bilan bir xil yo'nalishda ko'rsatiladi: aks holda yozuv eskirgan
+                // (MoySklad kun davomida o'zgaradi) va «жарима» ogohlantirishi noto'g'ri chiqadi.
+                if (c.getFarqSince() != null && Long.signum(c.getFarqTiyin()) == Long.signum(farq)) {
                     long fm = java.time.Duration.between(c.getFarqSince(), java.time.Instant.now()).toMinutes();
                     b.append("⏳ ").append(fm).append(" дақиқадан бери");
                     int fmin = jarimaCfg.farqMin();
-                    if (c.getFarqTiyin() > 0 && fmin > 0)
+                    if (farq > 0 && fmin > 0)
                         b.append(c.getFarqJarimaAt() != null ? " · ⚖️ жарима ёзилган" : " · " + fmin + " дақиқада тузатилмаса ⚖️ жарима");
                     b.append("\n");
                 }

@@ -40,8 +40,8 @@ import static uz.kassa.bot.TextUtil.fmt;
  *
  * Qoidalar:
  *  • Xodimning shu turdagi birinchi {@code jarima.ogoh_soni} holati — OGOH (summa 0), keyingilari — asos × foiz.
- *  • Asos: KARTA — kartaning oxirgi ma'lum qoldig'i (so'm; yo'q bo'lsa bazaviy), KONTRAGENT — bazaviy summa,
- *    OTGRUZKA — otgruzka summasi.
+ *  • Asos: KARTA (qoldiq yuborilmagan/eskirgan) — kartaning oxirgi ma'lum qoldig'i (so'm; yo'q bo'lsa bazaviy),
+ *    KARTA (farq tuzatilmadi) — farq summasi, KONTRAGENT — bazaviy summa, OTGRUZKA — otgruzka summasi.
  *  • Bir manba bir epizodda bir marta (karta: oxirgi qoldiq yuborilgan vaqtdan keyin; xato: shu topilish epizodida).
  *  • 🔕 Хабарномалар kaliti o'chiq bo'lsa faqat xabar ketmaydi — yozuv baribir yoziladi.
  */
@@ -122,20 +122,22 @@ public class JarimaService {
 
     /**
      * ⚠️ Karta farqi (ClickFarqService): MoySklad qoldig'i kartadan KO'P — kartadan xarajat qilinib xabar berilmagan —
-     * va {@code min} daqiqada tuzatilmagan. Asos — kartaning oxirgi qoldig'i (KARTA turi bilan bir xil), farq sababda.
-     * Bir epizodda bir marta (ClickFarqService farq_jarima_at bilan nazorat qiladi). Mas'ul bo'lmasa — yozilmaydi.
+     * va {@code min} daqiqada tuzatilmagan. Asos — FARQ summasining o'zi (karta qoldig'i emas: jarima yo'qolgan
+     * pul hajmiga bog'liq, 2026-09-23 user qarori). Bir epizodda bir marta (ClickFarqService farq_jarima_at).
+     * Mas'ul bo'lmasa yoki farq so'mga yaxlitlanganda 0 chiqsa — yozilmaydi.
      * @param farqTiyin MoySklad − karta, tiyin (musbat)
      */
     public Optional<Jarima> kartaFarq(ClickAccount c, long farqTiyin, int min) {
         if (!cfg.enabled()) return Optional.empty();
         String resp = c.getCardResponsible();
         if (resp == null || resp.isBlank()) return Optional.empty();
+        long asos = farqTiyin / 100;   // SO'MDA — jarima asosi aynan farq
+        if (asos <= 0) return Optional.empty();
         AppUser u = resolveResponsible(resp);
         String name = u != null ? u.getFullName() : plainResponsible(resp);
-        long asos = c.getCardBalance() == null || c.getCardBalance() <= 0 ? cfg.bazaviy() : c.getCardBalance() / 100;
         String sabab = "Карта «" + c.getName() + "» қолдиғи MoySklad қолдиғидан " + uz.kassa.bot.TextUtil.fmtTiyin(farqTiyin)
                 + " сўм КАМ — картадан харажат қилиниб хабар берилмаган (расход киритилмаган ёки қолдиқ қайта юборилмаган); "
-                + min + " дақиқада тузатилмади. Асос: охирги қолдиқ " + fmt(asos) + " сўм.";
+                + min + " дақиқада тузатилмади. Асос: фарқ суммаси " + fmt(asos) + " сўм.";
         return Optional.of(register(Tur.KARTA, u, name, c.getKassaId() != null ? c.getKassaId() : (u == null ? null : u.getKassaId()),
                 "clickfarq:" + c.getId(), c.getName() + " · фарқ +" + uz.kassa.bot.TextUtil.fmtTiyin(farqTiyin), asos, sabab));
     }

@@ -22,11 +22,14 @@ import static uz.kassa.bot.TextUtil.esc;
  * ⚠️ Karta farqi nazorati (docs/JARIMA.md §KARTA-FARQ, 2026-09-22).
  * Karta (haqiqiy) qoldig'i va MoySklad qoldig'i farqi — kim tomonda xato ekani yo'nalishdan aniqlanadi:
  *  • MoySklad > karta (farq > 0): pul kartadan chiqib ketgan, hujjat yo'q — kartadan xarajat qilinib xabar berilmagan.
- *    Karta mas'uliga xabar; {@code jarima.farq_min} daqiqada tuzatilmasa — ⚖️ KARTA jarimasi (bir epizodda bir marta).
+ *    Karta mas'uliga xabar; {@code jarima.farq_min} daqiqada tuzatilmasa — ⚖️ KARTA jarimasi, asosi FARQ summasi
+ *    (karta qoldig'i emas), bir epizodda bir marta.
  *  • Karta > MoySklad (farq < 0): pul kartada bor, hujjat yo'q — MoySklad'ga otgruzka/to'lov kiritilmagan.
  *    Otdel rahbari va admin'ga xabar; karta mas'ulining aybi emas, jarima yozilmaydi.
  * Epizod FAQAT yangi karta qoldig'i kelganda ochiladi (eski qoldiqni yangi MoySklad qiymati bilan solishtirib yolg'on
- * farq chiqmasin — u «⏰ янгиланмаган» qoidasi ishi), farq 0 bo'lgan zahoti (istalgan tekshiruvda) yopiladi.
+ * farq chiqmasin — u «⏰ янгиланмаган» qoidasi ishi); farq 0 bo'lgan yoki yo'nalish o'zgargan zahoti — istalgan
+ * tekshiruvda, yangi qoldiq kutmasdan — yopiladi (MoySklad kun davomida o'zgaradi, eski epizod to'g'ri emas).
+ * Birinchi baholashda (farq_eval_at bo'sh) epizod ochilmaydi, faqat tayanch nuqta yoziladi.
  * Tekshiruv Jobs.clickFarqTick dan har 5 daqiqada, faqat Click hisobot oynasi ichida; epizod boshi oynadan oldin
  * bo'lsa bugungi oyna boshidan qayta sanaladi (tun qo'shilmaydi).
  */
@@ -63,18 +66,28 @@ public class ClickFarqService {
         Long msv = aid == null || aid.isBlank() ? null : ms.get(aid);
         if (msv == null || c.getCardBalance() == null || c.getCardBalanceAt() == null) return;
         long farqNow = msv - c.getCardBalance();
-        boolean newReceipt = c.getFarqEvalAt() == null || c.getCardBalanceAt().isAfter(c.getFarqEvalAt());
         long cur = c.getFarqTiyin();
         boolean changed = false;
+        // Birinchi baholash (farq_eval_at yo'q — modul endi yoqilgan yoki karta yangi): epizod OCHILMAYDI,
+        // faqat tayanch nuqta yoziladi. Aks holda deploy paytidagi eski qoldiq bilan soxta epizod ochilardi.
+        if (c.getFarqEvalAt() == null) {
+            c.setFarqEvalAt(c.getCardBalanceAt());
+            if (cur != 0) { c.setFarqTiyin(0); c.setFarqSince(null); c.setFarqNotifiedAt(null); c.setFarqJarimaAt(null); }
+            clickRepo.save(c);
+            return;
+        }
+        boolean newReceipt = c.getCardBalanceAt().isAfter(c.getFarqEvalAt());
 
-        if (farqNow == 0) {
-            if (cur != 0) {
-                audit.log(null, "KARTA_FARQ_YOPILDI", "click", c.getId(), c.getName() + " farq " + cur + " → 0");
-                c.setFarqTiyin(0); c.setFarqSince(null); c.setFarqNotifiedAt(null); c.setFarqJarimaAt(null);
-                changed = true;
-            }
-        } else if (newReceipt) {
-            if (cur == 0 || Long.signum(cur) != Long.signum(farqNow)) {
+        // Epizod yopiladi: farq yo'qolgan YOKI yo'nalish o'zgargan (eski epizod endi to'g'ri emas — MoySklad kun
+        // davomida o'zgaradi, yangi qoldiq kutilmaydi). Ochilishi esa faqat YANGI karta qoldig'i bilan.
+        if (cur != 0 && (farqNow == 0 || Long.signum(cur) != Long.signum(farqNow))) {
+            audit.log(null, "KARTA_FARQ_YOPILDI", "click", c.getId(), c.getName() + " farq " + cur + " → " + farqNow);
+            c.setFarqTiyin(0); c.setFarqSince(null); c.setFarqNotifiedAt(null); c.setFarqJarimaAt(null);
+            cur = 0;
+            changed = true;
+        }
+        if (farqNow != 0 && newReceipt) {
+            if (cur == 0) {
                 c.setFarqTiyin(farqNow); c.setFarqSince(now); c.setFarqNotifiedAt(null); c.setFarqJarimaAt(null);
                 audit.log(null, "KARTA_FARQ_TOPILDI", "click", c.getId(), c.getName() + " farq " + farqNow + " (ms " + msv + ", karta " + c.getCardBalance() + ")");
                 changed = true;
@@ -115,7 +128,9 @@ public class ClickFarqService {
         if (f > 0) {
             sb.append("MoySklad қолдиғи картадан КЎП — картадан харажат қилиниб хабар берилмаган кўринади.\n")
               .append("➡️ ").append(mention(c.getCardResponsible())).append(" харажатни дарҳол хабар қилинг (расход киритилсин) ва карта қолдиғини қайта юборинг.\n");
-            if (min > 0) sb.append("⏳ <b>").append(min).append(" дақиқада</b> тузатилмаса — ⚖️ жарима.");
+            if (min > 0) sb.append("⏳ <b>").append(min).append(" дақиқада</b> тузатилмаса — ⚖️ жарима: фарқ суммасининг ")
+                    .append(JarimaConfig.foizText(cfg.foiz(uz.kassa.domain.Jarima.Tur.KARTA))).append("%и (")
+                    .append(TextUtil.fmt(Math.round(f / 100.0 * cfg.foiz(uz.kassa.domain.Jarima.Tur.KARTA) / 100.0))).append(" сўм).");
             else sb.append("⚖️ Фарқ жаримаси ўчирилган (jarima.farq_min = 0).");
             if (resp != null) to.add(resp);
         } else {
