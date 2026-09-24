@@ -593,7 +593,10 @@ public class Jobs {
                     b.append("⏳ ").append(fm).append(" дақиқадан бери");
                     int fmin = jarimaCfg.farqMin();
                     if (farq > 0 && fmin > 0)
-                        b.append(c.getFarqJarimaAt() != null ? " · ⚖️ жарима ёзилган" : " · " + fmin + " дақиқада тузатилмаса ⚖️ жарима");
+                        b.append(c.getFarqJarimaAt() != null
+                                ? " · ⚖️ фарқ жаримаси ёзилган: " + TextUtil.fmt(Math.round(farq / 100.0 * jarimaCfg.foiz(uz.kassa.domain.Jarima.Tur.KARTA) / 100.0))
+                                  + " сўм (" + uz.kassa.service.jarima.JarimaConfig.foizText(jarimaCfg.foiz(uz.kassa.domain.Jarima.Tur.KARTA)) + "% × " + TextUtil.fmtTiyin(farq) + ")"
+                                : " · " + fmin + " дақиқада тузатилмаса ⚖️ фарқ жаримаси");
                     b.append("\n");
                 }
             }
@@ -619,10 +622,11 @@ public class Jobs {
             if (j.isEmpty()) return "";
             var x = j.get();
             if (x.getHolat() == uz.kassa.domain.Jarima.Holat.OGOH)
-                return "⚖️ <b>Огоҳлантириш</b> (" + x.getTartib() + "-ҳолат) — кейингисидан жарима "
+                return "⚖️ <b>Огоҳлантириш</b> — қолдиқ юборилмагани учун (" + x.getTartib() + "-ҳолат), кейингисидан жарима "
                         + uz.kassa.service.jarima.JarimaConfig.foizText(x.getFoiz()) + "%\n";
-            return "⚖️ <b>Жарима: " + TextUtil.fmt(x.getSumma()) + " сўм</b> (" + uz.kassa.service.jarima.JarimaConfig.foizText(x.getFoiz())
-                    + "% × " + TextUtil.fmt(x.getAsos()) + ", " + x.getTartib() + "-ҳолат)\n";
+            return "⚖️ <b>Жарима: " + TextUtil.fmt(x.getSumma()) + " сўм</b> — қолдиқ юборилмагани учун ("
+                    + uz.kassa.service.jarima.JarimaConfig.foizText(x.getFoiz())
+                    + "% × " + TextUtil.fmt(x.getAsos()) + " қолдиқ, " + x.getTartib() + "-ҳолат)\n";
         } catch (Exception e) {
             log.warn("Jarima (karta {}): {}", c.getId(), e.getMessage());
             return "";

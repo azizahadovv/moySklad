@@ -99,6 +99,9 @@ public class JarimaService {
         if (resp == null || resp.isBlank()) return Optional.empty();
         String manba = "click:" + c.getId();
         LocalDate today = LocalDate.now(cfg.zone());
+        // Shu karta uchun bugun FARQ jarimasi yozilgan bo'lsa — qoldiq eskirgani uchun ikkinchi jarima yozilmaydi
+        // (bitta e'tiborsizlik, bitta jarima; farq jarimasi aniqroq — asosi aynan yo'qolgan summa).
+        if (repo.existsByTurAndManbaAndSana(Tur.KARTA, "clickfarq:" + c.getId(), today)) return Optional.empty();
         boolean dup = c.getCardBalanceAt() == null || since == null
                 ? repo.existsByTurAndManbaAndSana(Tur.KARTA, manba, today)
                 : repo.existsByTurAndManbaAndCreatedAtAfter(Tur.KARTA, manba, since);

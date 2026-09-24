@@ -30,8 +30,9 @@ import static uz.kassa.bot.TextUtil.esc;
  * farq chiqmasin — u «⏰ янгиланмаган» qoidasi ishi); farq 0 bo'lgan yoki yo'nalish o'zgargan zahoti — istalgan
  * tekshiruvda, yangi qoldiq kutmasdan — yopiladi (MoySklad kun davomida o'zgaradi, eski epizod to'g'ri emas).
  * Birinchi baholashda (farq_eval_at bo'sh) epizod ochilmaydi, faqat tayanch nuqta yoziladi.
- * Tekshiruv Jobs.clickFarqTick dan har 5 daqiqada, faqat Click hisobot oynasi ichida; epizod boshi oynadan oldin
- * bo'lsa bugungi oyna boshidan qayta sanaladi (tun qo'shilmaydi).
+ * Tekshiruv Jobs.clickFarqTick dan har 5 daqiqada, faqat Click hisobot oynasi ichida va faqat BUGUNGI oyna ichida
+ * yuborilgan karta qoldig'i ustida: kechagi qoldiq bilan solishtirish noto'g'ri farq beradi (kun davomida MoySklad'ga
+ * tushgan to'lovlar hisobiga), u holat «⏰ маълумот янгиланмаган» qoidasiga tegishli.
  */
 @Service
 @RequiredArgsConstructor
@@ -76,6 +77,17 @@ public class ClickFarqService {
             clickRepo.save(c);
             return;
         }
+        // Qoldiq BUGUNGI oynadan oldin yuborilган bo'lsa — farq ishonchsiz: kun davomida MoySklad'ga tushgan
+        // to'lovlar farqni o'z-o'zidan o'stiradi va bu xarajat yashirish emas. Bunday holat «⏰ маълумот
+        // янгиланмаган» qoidasining ishi — epizod yopiladi, farq jarimasi yozilmaydi (2026-09-24 user hodisasi).
+        if (c.getCardBalanceAt().isBefore(ws)) {
+            if (cur != 0) {
+                audit.log(null, "KARTA_FARQ_YOPILDI", "click", c.getId(), c.getName() + " qoldiq bugungi emas — epizod yopildi (farq " + cur + ")");
+                c.setFarqTiyin(0); c.setFarqSince(null); c.setFarqNotifiedAt(null); c.setFarqJarimaAt(null);
+                clickRepo.save(c);
+            }
+            return;
+        }
         boolean newReceipt = c.getCardBalanceAt().isAfter(c.getFarqEvalAt());
 
         // Epizod yopiladi: farq yo'qolgan YOKI yo'nalish o'zgargan (eski epizod endi to'g'ri emas — MoySklad kun
@@ -94,9 +106,6 @@ public class ClickFarqService {
             } else if (cur != farqNow) { c.setFarqTiyin(farqNow); changed = true; }
         }
         if (newReceipt) { c.setFarqEvalAt(c.getCardBalanceAt()); changed = true; }
-
-        // Epizod kechagi kundan qolgan bo'lsa — bugungi oyna boshidan qayta sanaladi (yangi kun — yangi muddat)
-        if (c.getFarqSince() != null && c.getFarqSince().isBefore(ws)) { c.setFarqSince(ws); c.setFarqJarimaAt(null); changed = true; }
 
         long f = c.getFarqTiyin();
         if (f != 0 && c.getFarqNotifiedAt() == null) {
