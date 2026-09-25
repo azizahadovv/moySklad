@@ -303,9 +303,12 @@ def _source_ref(key: str):
 
 
 async def run():
-    if not API_ID or not API_HASH:
-        log.error("TG_API_ID / TG_API_HASH bo'sh — my.telegram.org dan oling")
-        sys.exit(2)
+    # MUHIM: kalit bo'sh bo'lsa ham jarayon O'LMAYDI — HTTP boshqaruv serveri tirik qoladi, shunda bot
+    # umumiy «tg-reader javob bermadi» o'rniga aniq «TG_API_ID/HASH sozlanmagan» xabarini ko'rsatadi.
+    # (Avval sys.exit(2) edi → konteyner restart-siklda, app'da ConnectException.)
+    while not API_ID or not API_HASH:
+        log.error("TG_API_ID / TG_API_HASH bo'sh — my.telegram.org dan oling va .env ga yozib, `docker compose up -d tg-reader` qiling")
+        await asyncio.sleep(60)
     while True:
         await fetch_config()   # manbalar / OCR — ilova sozlamasidan
         for phone in sessions():

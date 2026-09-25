@@ -97,7 +97,7 @@ public class TgReaderHttpGateway implements TgAccountGateway {
     @Override
     public TestResult test(String phone) {
         JsonNode r = post("/account/test", Map.of("phone", phone));
-        if (r == null) return new TestResult(false, "tg-reader xizmati javob bermadi");
+        if (r == null) return new TestResult(false, NO_REPLY);
         return new TestResult(r.path("ok").asBoolean(false), r.path("message").asText(""));
     }
 
@@ -115,7 +115,7 @@ public class TgReaderHttpGateway implements TgAccountGateway {
     @Override
     public BalanceResult balance(String phone, List<String> steps) {
         JsonNode r = post("/account/balance", Map.of("phone", phone, "steps", steps));
-        if (r == null) return new BalanceResult(false, "tg-reader xizmati javob bermadi", List.of());
+        if (r == null) return new BalanceResult(false, NO_REPLY, List.of());
         List<String> replies = new ArrayList<>();
         for (JsonNode n : r.path("replies")) replies.add(n.asText(""));
         return new BalanceResult(r.path("ok").asBoolean(false), r.path("message").asText(""), replies);
@@ -124,7 +124,7 @@ public class TgReaderHttpGateway implements TgAccountGateway {
     @Override
     public SecurityInfo security(String phone) {
         JsonNode r = post("/account/security", Map.of("phone", phone));
-        if (r == null) return new SecurityInfo(false, "tg-reader xizmati javob bermadi", null, List.of());
+        if (r == null) return new SecurityInfo(false, NO_REPLY, null, List.of());
         if (!r.path("ok").asBoolean(false)) return new SecurityInfo(false, r.path("message").asText("xato"), null, List.of());
         List<SessionInfo> list = new ArrayList<>();
         for (JsonNode n : r.path("sessions"))
@@ -136,7 +136,7 @@ public class TgReaderHttpGateway implements TgAccountGateway {
     /* ==================== yordamchi ==================== */
 
     private Result toResult(long userId, JsonNode r) {
-        if (r == null) return Result.error("tg-reader xizmati javob bermadi");
+        if (r == null) return Result.error(NO_REPLY);
         String step = r.path("step").asText("ERROR");
         if ("ERROR".equals(step)) return Result.error(r.path("error").asText("Noma'lum xato"));
         int gen = r.path("gen").asInt(0);
@@ -149,6 +149,9 @@ public class TgReaderHttpGateway implements TgAccountGateway {
         }
         return Result.error("Noma'lum javob: " + step);
     }
+
+    /** Tarmoq darajasida javob yo'q — deyarli har doim tg-reader konteyneri ishlamayapti (yiqilgan/ko'tarilmagan). */
+    static final String NO_REPLY = "tg-reader xizmati javob bermadi — serverda tekshiring: docker compose ps tg-reader / docker compose logs --tail=50 tg-reader";
 
     private JsonNode post(String path, Map<String, Object> body) {
         try {
