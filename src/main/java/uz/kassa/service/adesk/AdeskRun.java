@@ -42,6 +42,8 @@ public class AdeskRun {
     public Long stockLe;
     /** Operatsiyalar yoziladigan Adesk proyekti (null — proyektsiz). */
     public Long projectId;
+    /** Adesk'dagi operatsiyalar izoh|hisob|summa|sana → id (dangasa; mavjud operatsiyani qayta bog'lash uchun). */
+    public Map<String, Long> existingTx;
 
     /* bog'lanishlar keshi: kind → (msKey → link) */
     private final Map<String, Map<String, AdeskLink>> links = new HashMap<>();

@@ -200,7 +200,7 @@ public class AdeskRunner {
         part(sb, r, "Statyalar", "cat.created", "yangi", "cat.linked", "bog'landi");
         part(sb, r, "Kontragentlar", "ct.created", "yangi", "ct.linked", "bog'landi", "ct.updated", "yangilandi", "ct.error", "xato");
         part(sb, r, "Tovar/xizmat", "pr.created", "yangi", "pr.batch", "boshlang'ich partiya", "pr.linked", "bog'landi", "pr.updated", "yangilandi", "pr.error", "xato");
-        part(sb, r, "Operatsiyalar", "tx.created", "yangi", "tx.updated", "yangilandi", "tx.removed", "o'chirildi",
+        part(sb, r, "Operatsiyalar", "tx.created", "yangi", "tx.updated", "yangilandi", "tx.relinked", "qayta bog'landi", "tx.removed", "o'chirildi",
                 "tx.restored", "tiklandi", "tx.fixed", "to'g'rilandi", "tx.error", "xato");
         part(sb, r, "Otgruzka/priyomka", "cm.created", "yangi", "cm.updated", "yangilandi", "cm.removed", "o'chirildi", "cm.restored", "tiklandi", "cm.error", "xato");
         part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma");

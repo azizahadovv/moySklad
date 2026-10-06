@@ -724,6 +724,7 @@ public class AdeskSyncService {
                 Map<String, Long> ids = ad.createTransactions(chunk.stream().map(TxWant::node).toList());
                 for (TxWant w : chunk) {
                     Long id = ids.get(w.importedId());
+                    if (id == null || id == 0) id = existingTx(r, w);   // Adesk importedId takror bo'lsa yangisini yaratmay javobdan tushirib qoldiradi
                     if (id == null || id == 0) moneyErr(r, w.d(), links(r, MONEY).get(w.d().id()), "Adesk javobida operatsiya yo'q");
                     else { moneyOk(r, w, id); r.inc(counter); }
                 }
@@ -733,6 +734,26 @@ public class AdeskSyncService {
                 for (TxWant w : chunk) createTx(r, List.of(w), counter);   // xatoli hujjatni ajratish
             }
         }
+    }
+
+    /**
+     * Adesk'da allaqachon bor operatsiya — bog'lanishi yo'qolgan bo'lsa qayta bog'lanadi, dublikat yaratilmaydi.
+     * Adesk v1 ro'yxati importedId'ni qaytarmaydi, shuning uchun izoh («MS Приходный ордер №07318 …») + hisob + summa + sana bo'yicha.
+     */
+    private Long existingTx(AdeskRun r, TxWant w) {
+        if (r.existingTx == null) {
+            r.existingTx = new HashMap<>();
+            LocalDate to = cfg.effectiveEnd().isBefore(cfg.today()) ? cfg.today() : cfg.effectiveEnd();
+            for (AdTx t : ad.transactions(cfg.start().minusDays(1), to))
+                r.existingTx.putIfAbsent(txKey(t.description(), t.accountId(), tiyin(t.amount()), t.date()), t.id());
+        }
+        Long id = r.existingTx.get(txKey(w.node().path("description").asText(""), w.acc(), w.d().sumTiyin(), w.d().date()));
+        if (id != null) r.inc("tx.relinked");
+        return id;
+    }
+
+    private static String txKey(String desc, Long acc, long tiyin, LocalDate date) {
+        return (desc == null ? "" : desc.trim()) + "|" + acc + "|" + tiyin + "|" + date;
     }
 
     private void updateTx(AdeskRun r, List<TxWant> list) { updateTx(r, list, "tx.updated"); }
@@ -860,13 +881,13 @@ public class AdeskSyncService {
             r.progress = (++i) + "/" + docs.size();
             seen.add(d.id());
             AdeskLink l = L.get(d.id());
-            boolean empty = d.sumTiyin() <= 0 && d.positions().isEmpty();   // nol summali, lekin pozitsiyali hujjat zaxirani o'zgartiradi — o'tadi
+            boolean empty = d.sumTiyin() <= 0;   // Adesk «amount ненулевым» talab qiladi — nol summali hujjat (tovarli bo'lsa ham) o'tmaydi
             if (!d.applicable() || empty) {
                 if (linked(l)) removeCommit(r, l);
                 if (d.applicable()) {   // bo'sh hujjat (0 so'm, pozitsiyasiz) — balansga ta'siri yo'q; solishtirishda alohida sanaladi
                     if (l == null) l = AdeskLink.builder().kind(COMMIT).msKey(d.id()).build();
                     if (!SKIP.equals(l.getStatus())) {
-                        l.setStatus(SKIP); l.setError("бўш ҳужжат (0 сўм, позициясиз)");
+                        l.setStatus(SKIP); l.setError("бўш ҳужжат (0 сўм)");
                         l.setName(d.number()); l.setMsType(d.entity()); l.setDocDate(d.date()); l.setSumTiyin(0L);
                         save(r, l);
                     }
@@ -927,14 +948,30 @@ public class AdeskSyncService {
         p.put("currency", cfg.currency());
         String desc = "MS " + ruName(d.entity()) + " №" + d.number() + (d.description().isBlank() ? "" : " · " + d.description().replaceAll("\\s+", " "));
         p.put("description", desc.length() > 510 ? desc.substring(0, 507) + "…" : desc);
-        int i = 0;
+        // Adesk bitta hujjatda bir xil tovarni ikki qatorda qabul qilmaydi («identichnym id») — bir tovar qatorlari birlashtiladi:
+        // soni yig'iladi, narx = jami summa / jami son (hujjat summasi o'zgarmaydi)
+        Map<String, double[]> merged = new LinkedHashMap<>();   // "type:id" → {son, summa(tiyin)}
+        Map<String, MsPos> first = new LinkedHashMap<>();
         for (MsPos ps : d.positions()) {
             if (!"product".equals(ps.assortmentType()) && !"service".equals(ps.assortmentType()))
                 throw new IllegalStateException("pozitsiya turi qo'llanmaydi: " + ps.assortmentType());
+            String k = ps.assortmentType() + ":" + ps.assortmentId();
+            double[] a = merged.computeIfAbsent(k, x -> new double[2]);
+            a[0] += ps.quantity();
+            a[1] += ps.quantity() * ps.priceTiyin();
+            first.putIfAbsent(k, ps);
+        }
+        int i = 0;
+        for (var e : merged.entrySet()) {
+            MsPos ps = first.get(e.getKey());
+            double q = e.getValue()[0];
+            long avg = q == 0 ? ps.priceTiyin() : Math.round(e.getValue()[1] / q);
+            if (q != 0 && Math.abs(e.getValue()[1] / q - avg) > 0.0001)   // butun tiyinga bo'linmasa — 4 xonagacha aniq narx
+                p.put("product-" + i + "-price", BigDecimal.valueOf(e.getValue()[1] / q / 100).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
+            else p.put("product-" + i + "-price", som(avg).toPlainString());
             Long pid = productFor(r, pc, ps.assortmentType(), ps.assortmentId());
             p.put("product-" + i + "-product_id", String.valueOf(pid));
-            p.put("product-" + i + "-price", som(ps.priceTiyin()).toPlainString());
-            p.put("product-" + i + "-quantity", qty(ps.quantity()));
+            p.put("product-" + i + "-quantity", qty(q));
             i++;
         }
         return p;
