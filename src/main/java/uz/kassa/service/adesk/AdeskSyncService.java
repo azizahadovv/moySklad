@@ -382,6 +382,11 @@ public class AdeskSyncService {
      * agent hujjat egasi bo'lgan tashkilotning o'zi (MoySklad'da «kontragentsiz» chiqim shunday yoziladi).
      */
     Long contractorFor(AdeskRun r, String agentType, String agentId, String docOrgId) {
+        return contractorFor(r, agentType, agentId, docOrgId, false);
+    }
+
+    /** allowSelf — agent hujjat egasining o'zi bo'lsa ham kontragent yaratiladi (majburiyat kontragentsiz bo'lmaydi). */
+    Long contractorFor(AdeskRun r, String agentType, String agentId, String docOrgId, boolean allowSelf) {
         if (agentId == null || agentId.isBlank()) return null;
         switch (agentType) {
             case "counterparty" -> {
@@ -404,7 +409,7 @@ public class AdeskSyncService {
                 return id;
             }
             case "organization" -> {
-                if (agentId.equals(docOrgId)) return null;
+                if (agentId.equals(docOrgId) && !allowSelf) return null;
                 AdeskLink l = links(r, ORGC).get(agentId);
                 if (linked(l)) return l.getAdeskId();
                 String name = r.orgs.stream().filter(o -> o.id().equals(agentId)).map(MsOrg::name).findFirst().orElse("Ташкилот");
@@ -870,7 +875,7 @@ public class AdeskSyncService {
     private Map<String, String> commitParams(AdeskRun r, ProdCtx pc, MsGoodsDoc d) {
         Long le = r.orgLe.get(d.orgId());
         if (le == null) throw new IllegalStateException("yuridik shaxs Adesk'da yo'q");
-        Long ctr = contractorFor(r, d.agentType(), d.agentId(), d.orgId());
+        Long ctr = contractorFor(r, d.agentType(), d.agentId(), d.orgId(), true);
         if (ctr == null) throw new IllegalStateException("kontragent sifatida tashkilotning o'zi turibdi — MoySklad'da xaridor/yetkazuvchini tanlang");
         Map<String, String> p = new LinkedHashMap<>();
         p.put("amount", som(d.sumTiyin()).toPlainString());
