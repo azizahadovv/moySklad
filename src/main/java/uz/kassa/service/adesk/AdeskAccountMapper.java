@@ -118,6 +118,7 @@ public class AdeskAccountMapper {
             n++;
         }
         cfg.set(AdeskConfig.ACC_CONFIRMED, "1");
+        cfg.set(AdeskConfig.ACC_MAP, "");   // qoralama tozalanadi — keyingi ochilishda joriy bog'lanishlardan boshlanadi
         log.info("Adesk hisoblari bog'lash tasdiqlandi: {} ta bog'landi, {} ta yangi yaratiladi", n, v.rows().size() - n);
         return n;
     }

@@ -103,7 +103,6 @@ public class AdeskHandler {
             }
             case "adm", "adme", "adms", "admr", "admc", "admy" -> {
                 if (!cfg.hasToken()) { sender.send(chatId, "❗️ Avval Adesk tokenini kiriting: 🔑 Token."); return true; }
-                if (cfg.accountsConfirmed() && !cmd.equals("adm")) { sender.send(chatId, "ℹ️ Hisoblar bog'lash allaqachon tasdiqlangan."); menu(s, chatId, msgId); return true; }
                 try { mapCallback(u, s, cmd, arg, chatId, msgId); }
                 catch (Exception e) { sender.send(chatId, "⚠️ Hisoblar o'qilmadi — " + esc(String.valueOf(e.getMessage()))); }
             }
@@ -113,7 +112,7 @@ public class AdeskHandler {
                 r2.add(irow(btn("📅 Davr boshi", "a:adv:start"), btn("📅 Davr oxiri", "a:adv:end")));
                 r2.add(irow(btn("🏷 Kirim statyasi", "a:adv:cin"), btn("⏱ Oraliq", "a:adv:int")));
                 r2.add(irow(btn("🕘 Hisobot vaqti", "a:adv:time"), btn("📣 Hisobot chati", "a:adv:chat")));
-                r2.add(irow(btn("↩️ Adesk → MoySklad", "a:adrv")));
+                r2.add(irow(btn("🔗 Hisoblarni bog'lash", "a:adm:0"), btn("↩️ Adesk → MoySklad", "a:adrv")));
                 r2.add(irow(btn("⬅️ Orqaga", BACK)));
                 sender.edit(chatId, msgId, "⚙️ <b>Adesk sozlamalari</b>\n\nSozlamani tanlang:", inline(r2));
             }
@@ -299,6 +298,13 @@ public class AdeskHandler {
         int pages = Math.max(1, (all.size() + PAGE - 1) / PAGE);
         int p = Math.min(idx(arg, pages), pages - 1);
         StringBuilder sb = new StringBuilder("⚠️ <b>Adesk xatolari</b>" + (all.isEmpty() ? "" : " (" + (p + 1) + "/" + pages + ")") + "\n\n");
+        if (p == 0 && all.size() > PAGE) {   // sabablar bo'yicha guruhlangan xulosa
+            Map<String, Integer> by = new LinkedHashMap<>();
+            for (AdeskLink l : all) by.merge(cut(String.valueOf(l.getError()).replaceAll("\\d{3,}", "N"), 70), 1, Integer::sum);
+            by.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(6)
+              .forEach(e -> sb.append("▪️ <b>").append(e.getValue()).append("</b> ta — ").append(esc(e.getKey())).append("\n"));
+            sb.append("\n");
+        }
         if (all.isEmpty()) sb.append("Xatolar yo'q.");
         for (AdeskLink l : all.subList(p * PAGE, Math.min(all.size(), (p + 1) * PAGE))) {
             sb.append("• <b>").append(esc(kindTitle(l))).append("</b>");

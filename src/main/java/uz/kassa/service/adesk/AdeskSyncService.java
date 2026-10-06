@@ -57,6 +57,7 @@ public class AdeskSyncService {
         String conflict = existingConflict(r);
         if (conflict != null) { r.fatal = conflict; r.stage = "to'xtadi"; return; }
         if (r.full) snapshot(r);
+        r.projectId = resolveProject(r);
         step(r, "yuridik shaxslar", () -> orgs(r));
         step(r, "hisoblar", () -> accounts(r));
         step(r, "statyalar", () -> categories(r));
@@ -108,11 +109,49 @@ public class AdeskSyncService {
     /** Yuridik shaxs Adesk'da yaratilmay asosiy yuridik shaxsga biriktirilgan bog'lanish belgisi (hash). */
     static final String LE_FALLBACK = "fallback";
 
+    /** «Asosiy» proyekt id'si (nom bo'yicha); topilmasa — eslatma va proyektsiz. */
+    private Long resolveProject(AdeskRun r) {
+        String name = cfg.project();
+        if (name.equals("-")) return null;
+        try {
+            for (AdeskClient.AdProject p : ad.projects()) if (norm(p.name()).equals(norm(name))) return p.id();
+        } catch (AdeskException e) { if (e.fatal) throw e; }
+        r.note("Adesk'da «" + name + "» proyekti topilmadi — operatsiyalar proyektsiz yoziladi");
+        return null;
+    }
+
+    /** Bitta yuridik shaxs rejimi: hamma firma asosiy (001) yuridik shaxs ostida; qolgan Adesk yuridik shaxslariga tegilmaydi. */
+    private void orgsSingle(AdeskRun r, List<AdLegal> les, Map<Long, AdLegal> byId, Map<String, AdeskLink> L) {
+        MsOrg main = r.orgs.stream().filter(o -> o.name().startsWith("001")).findFirst().orElse(r.orgs.isEmpty() ? null : r.orgs.get(0));
+        if (main == null) return;
+        AdeskLink ml = L.get(main.id());
+        Long mainLe = linked(ml) && byId.containsKey(ml.getAdeskId()) && !LE_FALLBACK.equals(ml.getHash()) ? ml.getAdeskId() : null;
+        if (mainLe == null) {
+            AdLegal m = les.stream().filter(x -> leMatches(x, main)).findFirst().orElse(null);
+            try {
+                if (m == null) { m = ad.createLegalEntity(main.name(), main.legalTitle(), main.inn()); r.inc("le.created"); }
+                mainLe = m.id();
+            } catch (AdeskException e) {
+                if (e.fatal) throw e;
+                err(r, ORG, main.id(), main.name(), e.getMessage());
+                return;
+            }
+        }
+        for (MsOrg o : r.orgs) {
+            r.orgLe.put(o.id(), mainLe);
+            AdeskLink l = L.get(o.id());
+            String h = o.id().equals(main.id()) ? null : LE_FALLBACK;
+            if (!linked(l) || !mainLe.equals(l.getAdeskId()) || !Objects.equals(h, l.getHash())) ok(r, ORG, o.id(), mainLe, o.name(), h);
+        }
+        r.stockLe = mainLe;
+    }
+
     void orgs(AdeskRun r) {
         List<AdLegal> les = ad.legalEntities();
         Map<Long, AdLegal> byId = new HashMap<>();
         les.forEach(x -> byId.put(x.id(), x));
         Map<String, AdeskLink> L = links(r, ORG);
+        if (cfg.singleLe()) { orgsSingle(r, les, byId, L); return; }
         Set<Long> used = usedIds(L);
         // asosiy (001) tashkilot birinchi — boshqa firmalar zarurat bo'lsa uning yuridik shaxsiga biriktiriladi
         List<MsOrg> ordered = new ArrayList<>(r.orgs);
@@ -644,8 +683,9 @@ public class AdeskSyncService {
         if (ctr != null) n.put("contractorId", ctr); else n.putNull("contractorId");
         n.put("isCommitment", ctr != null);
         n.put("importedId", "ms:" + d.id());
-        String hash = origAd ? sha("AD", String.valueOf(acc), amount, d.date().toString())
-                : sha(n.path("type").asText(), String.valueOf(acc), amount, d.date().toString(), desc, String.valueOf(cat), String.valueOf(ctr));
+        if (r.projectId != null) n.put("projectId", r.projectId); else n.putNull("projectId");
+        String hash = origAd ? sha("AD", String.valueOf(acc), amount, d.date().toString(), String.valueOf(r.projectId))
+                : sha(n.path("type").asText(), String.valueOf(acc), amount, d.date().toString(), desc, String.valueOf(cat), String.valueOf(ctr), String.valueOf(r.projectId));
         return new TxWant(d, n, hash, acc, cat, ctr, origAd);
     }
 
@@ -716,7 +756,7 @@ public class AdeskSyncService {
     private static ObjectNode updNode(TxWant w, long id) {
         ObjectNode n = w.node().deepCopy();
         n.remove("importedId");
-        if (w.origAd()) { n.remove("description"); n.remove("categoryId"); n.remove("contractorId"); n.remove("isCommitment"); }
+        if (w.origAd()) { n.remove("description"); n.remove("categoryId"); n.remove("contractorId"); n.remove("isCommitment"); n.remove("projectId"); }
         n.put("id", id);
         return n;
     }
@@ -779,7 +819,8 @@ public class AdeskSyncService {
         if (tiyin(t.amount()) != w.d().sumTiyin()) return true;
         if (!Objects.equals(t.date(), w.d().date())) return true;
         if (w.origAd()) return false;
-        return !Objects.equals(t.categoryId(), w.cat()) || !Objects.equals(t.contractorId(), w.ctr());
+        Long wp = w.node().hasNonNull("projectId") ? w.node().path("projectId").asLong() : null;
+        return !Objects.equals(t.categoryId(), w.cat()) || !Objects.equals(t.contractorId(), w.ctr()) || !Objects.equals(t.projectId(), wp);
     }
 
     private void moneyOk(AdeskRun r, TxWant w, long adeskId) {

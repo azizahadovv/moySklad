@@ -40,6 +40,8 @@ public class AdeskRun {
     public final Map<String, Long> catIn = new HashMap<>();          // statya nomi → id (kirim)
     public final Map<String, Long> catOut = new HashMap<>();         // statya nomi → id (chiqim)
     public Long stockLe;
+    /** Operatsiyalar yoziladigan Adesk proyekti (null — proyektsiz). */
+    public Long projectId;
 
     /* bog'lanishlar keshi: kind → (msKey → link) */
     private final Map<String, Map<String, AdeskLink>> links = new HashMap<>();

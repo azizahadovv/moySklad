@@ -34,6 +34,10 @@ public class AdeskConfig {
     /** Adesk'da qo'lda kiritilgan operatsiyalarni MoySklad'ga yozish (1 — yoqiq). Standart: o'chiq. */
     public static final String REVERSE   = "adesk.reverse";
     /** Hisoblar bog'lash jadvali (JSON {msKey: adeskId, 0 — yangi yaratiladi}) va uning tasdiqlangani (1). */
+    /** Adesk «проект» (operatsiyalar shu proyektga yoziladi; nom bo'yicha topiladi). «-» — proyektsiz. */
+    public static final String PROJECT = "adesk.project";
+    /** Hamma firma bitta (asosiy) yuridik shaxs ostida (standart: ha — Adesk tarifi 3 ta yuridik shaxsga ruxsat beradi). */
+    public static final String SINGLE_LE = "adesk.singleLe";
     public static final String ACC_MAP = "adesk.accMap";
     public static final String ACC_CONFIRMED = "adesk.accConfirmed";
     /** Kunlik solishtirish hisoboti vaqti (HH:mm) va chatlari (vergulli; bo'sh — SuperAdmin/buxgalterlarga). */
@@ -117,6 +121,13 @@ public class AdeskConfig {
     public boolean reverse() { return "1".equals(settings.get(REVERSE).orElse("0").trim()); }
 
     /** SuperAdmin «🔗 Hisoblarni bog'lash» ekranida bog'lanishni tasdiqlaganmi (birinchi sinxron shundan keyin). */
+    public String project() {
+        String v = settings.get(PROJECT).orElse("").trim();
+        return v.isEmpty() ? "Asosiy" : v;
+    }
+
+    public boolean singleLe() { return !"0".equals(settings.get(SINGLE_LE).orElse("1").trim()); }
+
     public boolean accountsConfirmed() { return "1".equals(settings.get(ACC_CONFIRMED).orElse("0").trim()); }
     public void setReverse(boolean on) { settings.set(REVERSE, on ? "1" : "0"); }
 

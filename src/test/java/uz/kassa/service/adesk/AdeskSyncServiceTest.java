@@ -167,8 +167,8 @@ class AdeskSyncServiceTest {
         when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(l1, l2));
         when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(changed));
         when(ad.transactions(any(), any())).thenReturn(List.of(
-                new AdTx(7001, 1, new BigDecimal("200000.00"), LocalDate.of(2026, 9, 5), 501L, 11L, null, "", false, false, "", "", ""),
-                new AdTx(8888, 2, new BigDecimal("50.00"), LocalDate.of(2026, 9, 6), 501L, 21L, null, "qo'lda", false, false, "", "Зарплата", "")));
+                new AdTx(7001, 1, new BigDecimal("200000.00"), LocalDate.of(2026, 9, 5), 501L, 11L, null, "", false, false, "", "", "", null),
+                new AdTx(8888, 2, new BigDecimal("50.00"), LocalDate.of(2026, 9, 6), 501L, 21L, null, "qo'lda", false, false, "", "Зарплата", "", null)));
 
         AdeskRun r = run(true);
         svc.money(r);
@@ -204,7 +204,7 @@ class AdeskSyncServiceTest {
         when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(l));
         // Adesk'da kimdir summani o'zgartirgan
         when(ad.transactions(any(), any())).thenReturn(List.of(
-                new AdTx(7001, 2, new BigDecimal("999.00"), LocalDate.of(2026, 9, 5), 501L, 21L, null, "", false, false, "", "", "")));
+                new AdTx(7001, 2, new BigDecimal("999.00"), LocalDate.of(2026, 9, 5), 501L, 21L, null, "", false, false, "", "", "", null)));
         AdeskRun r = run(true);
         svc.money(r);
         verify(ad, times(1)).updateTransactions(anyList());
@@ -347,6 +347,28 @@ class AdeskSyncServiceTest {
         svc.orgs(r3);
         verify(ad, never()).createLegalEntity(anyString(), any(), any());
         assertEquals(118024L, r3.orgLe.get(ORG2));
+    }
+
+    @Test
+    void singleLegalEntityModeMapsEveryFirmToMainAndTxGetProject() {
+        when(cfg.singleLe()).thenReturn(true);
+        when(ad.legalEntities()).thenReturn(List.of(new AdLegal(118024, "New Star Bukhara", ""), new AdLegal(119661, "003 ITT INTER TECHNO TRUST MCHJ", "")));
+        AdeskRun r = run(false);
+        svc.orgs(r);
+        assertEquals(118024L, r.orgLe.get(ORG));
+        assertEquals(118024L, r.orgLe.get(ORG2), "ITT ham asosiy yuridik shaxs ostida");
+        assertEquals(118024L, r.stockLe);
+        verify(ad, never()).createLegalEntity(anyString(), any(), any());
+
+        r.projectId = 967986L;
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(doc("1", "cashin", 100_00, "CASH", "organization", ORG, "", "", true)));
+        when(ad.createTransactions(anyList())).thenReturn(Map.of("ms:1", 7001L));
+        when(ad.transactions(any(), any())).thenReturn(List.of());
+        svc.money(r);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ObjectNode>> cap = ArgumentCaptor.forClass(List.class);
+        verify(ad).createTransactions(cap.capture());
+        assertEquals(967986L, cap.getValue().get(0).path("projectId").asLong());
     }
 
     @Test
