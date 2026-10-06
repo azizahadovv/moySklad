@@ -126,7 +126,7 @@ public class AdeskCheckService {
             if (d.date().isAfter(to)) continue;
             String c;
             if (d.income()) {
-                boolean tr = d.purpose().startsWith(AdeskConfig.TRANSFER_PURPOSE) || d.description().startsWith(AdeskConfig.TRANSFER_PURPOSE);
+                boolean tr = d.incomeTransfer();
                 c = "Кирим · " + (tr ? cfg.catTransfer() : cfg.catIncome());
                 msIn += d.sumTiyin();
             } else {

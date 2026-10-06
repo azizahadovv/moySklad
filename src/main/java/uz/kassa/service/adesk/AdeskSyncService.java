@@ -662,7 +662,7 @@ public class AdeskSyncService {
         String expense = d.income() ? null : r.expenseItems.getOrDefault(d.expenseItemId(), OTHER_EXPENSE);
         if (expense != null && expense.isBlank()) expense = OTHER_EXPENSE;
         boolean transfer = d.income()
-                ? d.purpose().startsWith(AdeskConfig.TRANSFER_PURPOSE) || d.description().startsWith(AdeskConfig.TRANSFER_PURPOSE)
+                ? d.incomeTransfer()
                 : norm(expense).equals(norm(cfg.catTransfer()));
         String catName = d.income() ? (transfer ? cfg.catTransfer() : cfg.catIncome()) : expense;
         Map<String, Long> cats = d.income() ? r.catIn : r.catOut;

@@ -26,6 +26,7 @@ public class AdeskMsReader {
     private final MoySkladClient ms;
 
     public static final String CASH = "CASH";
+    static final String TRANSFER = "Перемещение собственных средств";
     public static final List<String> MONEY_ENTITIES = List.of("cashin", "cashout", "paymentin", "paymentout");
     /** Tovar hujjatlari va Adesk majburiyat yo'nalishi: in — kontragentdan oldik (to'lashimiz kerak), out — berdik. */
     public static final Map<String, String> GOODS_ENTITIES = new LinkedHashMap<>();
@@ -47,6 +48,12 @@ public class AdeskMsReader {
                              long sumTiyin, long origTiyin, String currencyIso, double rate, String orgId, String accountKey,
                              String agentId, String agentType, String expenseItemId, String description, String purpose,
                              boolean applicable) {
+        /** Kirim: boshqa o'z firmamizdan kelgan (agent — boshqa tashkilot) yoki «Перемещение собственных средств» maqsadli = o'tkazma. */
+        public boolean incomeTransfer() {
+            if (!income()) return false;
+            return purpose.startsWith(TRANSFER) || description.startsWith(TRANSFER)
+                    || ("organization".equals(agentType) && !agentId.isEmpty() && !agentId.equals(orgId));
+        }
         public boolean income() { return entity.equals("cashin") || entity.equals("paymentin"); }
         public long signedTiyin() { return income() ? sumTiyin : -sumTiyin; }
     }
