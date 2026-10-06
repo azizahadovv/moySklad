@@ -51,6 +51,8 @@ public class Session {
         ADM_TG_VAL,
         // ⚖️ Jarimalar: sozlama qiymati / yopish-bekor sababi (SuperAdmin)
         ADM_JR_VAL,
+        // 📒 Adesk: sozlama qiymati / token (SuperAdmin)
+        ADM_AD_VAL,
         // 📨 Akkaunt ulash (xodim, bot ichida): QR ko'rsatiladi (matn kiritilmaydi), 2FA bo'lsa parol
         TG_PWD
     }

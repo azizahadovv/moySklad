@@ -831,5 +831,16 @@ public class MoySkladClient {
     /** Bot vaqti → MoySklad filtri matni (Moskva). */
     public String filterTime(LocalDateTime local) { return api.toMs(local).format(FILTER_FMT); }
 
+    /** Bot vaqti → MoySklad maydon vaqti (Moskva, «yyyy-MM-dd HH:mm:ss») — yangi hujjat moment'i uchun. */
+    public LocalDateTime toMoscow(LocalDateTime local) { return api.toMs(local); }
+
+    /**
+     * 📒 Adesk → MoySklad (docs/ADESK.md §5): yangi obyekt yaratish (POST, baseUrl'siz path, JSON tana).
+     * Tezlik darvozasidan o'tadi. 401/403 — null. Boshqa xato — exception (MoySklad xato matni bilan).
+     */
+    public JsonNode postEntity(String pathQuery, String jsonBody) {
+        return api.postJson(props.getMoysklad().getBaseUrl() + "/" + pathQuery, jsonBody);
+    }
+
 
 }

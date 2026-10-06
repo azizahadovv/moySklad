@@ -15,6 +15,7 @@ public class AppProps {
     private Bot bot = new Bot();
     private Superadmin superadmin = new Superadmin();
     private Moysklad moysklad = new Moysklad();
+    private Adesk adesk = new Adesk();
 
     /** Telegram Mini App ochiladigan tashqi HTTPS manzil (bo'sh — tugma ko'rsatilmaydi). */
     private String webappUrl = "";
@@ -34,6 +35,12 @@ public class AppProps {
     }
 
     public ZoneId zoneId() { return ZoneId.of(zone); }
+
+    /** 📒 Adesk integratsiyasi (docs/ADESK.md). Token bot ichidan ham kiritiladi (settings «adesk.token» ustuvor). */
+    @Getter @Setter public static class Adesk {
+        private String token = "";
+        private String baseUrl = "https://api.adesk.ru";
+    }
 
     @Getter @Setter public static class Bot {
         private String token;

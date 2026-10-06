@@ -72,6 +72,8 @@ public class NotifySwitches {
     public static final String CLICK_SOATLIK  = "CLICK_SOATLIK";
     public static final String KUNLIK_HISOBOT = "KUNLIK_HISOBOT";
     public static final String QARZ_ESLATMA   = "QARZ_ESLATMA";
+    /** 📒 Adesk ↔ MoySklad kunlik solishtirish (docs/ADESK.md). */
+    public static final String ADESK_HISOBOT  = "ADESK_HISOBOT";
     /* 🕵️ kontragent */
     public static final String KG_XATO        = "KG_XATO";
     public static final String KG_TUZATILDI   = "KG_TUZATILDI";
@@ -103,6 +105,8 @@ public class NotifySwitches {
     public static final String TG_XAVFSIZLIK = "TG_XAVFSIZLIK";
     /* ⚙️ texnik */
     public static final String TEXNIK_OGOH = "TEXNIK_OGOH";
+    /** 📒 Adesk: token yaroqsiz / obuna tugagan — sinxron to'xtadi. */
+    public static final String ADESK_XATO  = "ADESK_XATO";
     /* ⚖️ jarimalar */
     public static final String JR_XODIM = "JR_XODIM";
     public static final String JR_ADMIN = "JR_ADMIN";
@@ -140,6 +144,8 @@ public class NotifySwitches {
                     "rasm + Excel + tasdiq tugmasi → Click guruhlari (doim) + shaxsiy", AB),
             new Sw(QARZ_ESLATMA, G_HISOBOT, "🧾 Qarz daftari eslatmalari",
                     "qo'lda kiritilgan eslatmalar (muddat/takror), avto-yopilish → eslatma oluvchilari", ABRX),
+            new Sw(ADESK_HISOBOT, G_HISOBOT, "📒 Adesk solishtirish",
+                    "har kuni belgilangan vaqtda: hisoblar qoldig'i, ДДС, hujjatlar soni (Adesk ↔ MoySklad) + Excel → SuperAdmin/buxgalter (+ belgilangan chatlar)", AB),
 
             new Sw(KG_XATO, G_KG, "⚠️ Kontragent xatosi",
                     "yangi kontragentda K1–K8 xato → yaratgan xodim (ulanmagan bo'lsa admin)", ARX),
@@ -208,7 +214,9 @@ public class NotifySwitches {
                     "karta qoldig'i MoySklad bilan farq qilganda → Click guruhi + karta mas'uli (MoySklad ko'p) yoki rahbar/admin (karta ko'p)", ABRX),
 
             new Sw(TEXNIK_OGOH, G_TEXNIK, "🚨 Texnik ogohlantirishlar",
-                    "job 10 marta yiqildi, MoySklad token huquqi, valyuta kursi yo'q, dublikat otdel, noma'lum Klik statusi", AB)
+                    "job 10 marta yiqildi, MoySklad token huquqi, valyuta kursi yo'q, dublikat otdel, noma'lum Klik statusi", AB),
+            new Sw(ADESK_XATO, G_TEXNIK, "📒 Adesk xatosi",
+                    "Adesk token yaroqsiz yoki obuna tugagan — sinxron to'xtadi (kuniga bir marta)", A)
     );
 
     public static List<String> groups() {

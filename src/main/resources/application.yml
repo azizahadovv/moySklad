@@ -47,6 +47,11 @@ app:
     # kiritilgan — bundan eski hujjatlar sinxron/reconcile'ga olinmaydi, bazadagi
     # eski yozuvlarga tegilmaydi (ikki marta hisoblanishdan himoya).
     ledger-start-date: ${MOYSKLAD_LEDGER_START:2026-08-18}
+  # 📒 Adesk ↔ MoySklad (docs/ADESK.md): API token — Adesk → Профиль → «Токен API».
+  # Bot ichidan (Настройка → 🔗 MoySklad → 📒 Adesk) kiritilsa o'sha ustuvor.
+  adesk:
+    token: ${ADESK_TOKEN:}
+    base-url: ${ADESK_BASE_URL:https://api.adesk.ru}
   reminder-hour: 21
   webapp-url: ${WEBAPP_URL:}
   gsheet:

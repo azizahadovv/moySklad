@@ -343,12 +343,17 @@ public class Jobs {
             it.remove();
         }
         if (alerts == 0) return;
+        List<List<org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton>> fixRows = new java.util.ArrayList<>();
+        for (LedgerService.DayMismatch m : dayIssues)
+            if (m.daysRemain() > m.balance())
+                fixRows.add(uz.kassa.bot.Keyboards.irow(uz.kassa.bot.Keyboards.btn("🔧 Moslash: " + names.owner(OwnerType.KASSA, m.kassaId()), "a:dmf:" + m.kassaId())));
+        var fixKb = fixRows.isEmpty() ? null : uz.kassa.bot.Keyboards.inline(fixRows);
         notify.toRole(NotifySwitches.BAL_NOMUVOFIQ, Role.SUPERADMIN, "⚠️ <b>Kunlar kesimi balansga mos emas!</b>\n"
                 + "Kassa naqd balansi va kunlar qoldig'i yig'indisi 30 daqiqadan beri farq qiladi "
                 + "(pul qabulida kunlarga tushmagan qoldiq yoki yo'qolgan yozuv):\n" + sb
                 + "\nTuzatish: 🛠 Корректировка — farq summasini o'sha kun sanasi bilan kiriting "
                 + "(shunda ham balans, ham o'sha kun birga o'zgaradi), yoki ♻️ Нол бошлаш. "
-                + "Tekshiruv 30 daqiqada bir; tuzalsa «✅» keladi.", null);
+                + "Tekshiruv 30 daqiqada bir; tuzalsa «✅» keladi.", fixKb);
         log.warn("Kunlar kesimi nomuvofiqligi: {} ta kassa", alerts);
     }
 

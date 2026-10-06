@@ -228,10 +228,20 @@ public class MoySkladHttp {
                   .POST(HttpRequest.BodyPublishers.ofString(postBody, StandardCharsets.UTF_8));
             HttpRequest req = b.build();
             HttpResponse<byte[]> resp;
+            int netTry = 0;
             for (int attempt = 0; ; attempt++) {
                 acquireSlot();
                 parallel.acquire();
                 try { resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray()); }
+                catch (java.io.IOException io) {
+                    // 2026-10-06: «Connection reset» bir soatlik Adesk yuklashini butunlay to'xtatardi. GET o'qish — takrorlash xavfsiz:
+                    // 2 martagacha qayta. POST qaytarilmaydi (yaratish so'rovi serverga yetgan bo'lsa dublikat bo'ladi).
+                    if (postBody != null || netTry >= 2) throw io;
+                    netTry++;
+                    log.info("MoySklad tarmoq xatosi ({}) — qayta {}/2: {}", io.getMessage(), netTry, url);
+                    Thread.sleep(1000L * netTry * netTry);
+                    continue;
+                }
                 finally { parallel.release(); }
                 if (resp.statusCode() != 429) break;
                 long ms = retryAfterMs(resp);

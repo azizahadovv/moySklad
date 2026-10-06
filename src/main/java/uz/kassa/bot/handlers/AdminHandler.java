@@ -34,6 +34,8 @@ public class AdminHandler {
     private final OmborAdminHandler omborAdmin;
     private final TgHandler tg;
     private final JarimaHandler jarimaH;
+    private final AdeskHandler adeskH;
+    private final uz.kassa.service.SubmissionService subSvc;
     private final MenuSchemaHandler menuSchemaH;
     private final NotifySwitchHandler switchH;
     private final MenuSupport menus;
@@ -87,6 +89,10 @@ public class AdminHandler {
             case ADM_OM_DAVR -> { omborAdmin.onDavrText(u, s, text, chatId); return true; }
             case ADM_TG_VAL -> { tg.onText(u, s, text, chatId); return true; }
             case ADM_JR_VAL -> { jarimaH.onText(u, s, text, chatId); return true; }
+            case ADM_AD_VAL -> {   // menyu tugmasi bosilsa — kiritish bekor, tugma pastda odatdagidek ishlaydi
+                if (AdeskHandler.isButton(text)) s.reset();
+                else { adeskH.onText(u, s, text, chatId); return true; }
+            }
             case ADM_NF_NAME, ADM_NF_TPL, ADM_NF_TIMES, ADM_NF_CHAT, ADM_NF_DEL, ADM_NF_ONCE, ADM_NF_BTN -> {
                 if (notifyAdmin.onText(u, s, text, chatId)) return true;
             }
@@ -165,6 +171,8 @@ public class AdminHandler {
         if (cmd.startsWith("tg")) return tg.adminCallback(u, s, cmd, arg, chatId, msgId);
         // ⚖️ Жарималар (a:jr*)
         if (cmd.startsWith("jr")) return jarimaH.adminCallback(u, s, cmd, arg, chatId, msgId);
+        // 📒 Adesk ↔ MoySklad (a:ad*)
+        if (cmd.startsWith("ad")) return adeskH.adminCallback(u, s, cmd, arg, chatId, msgId);
 
         switch (cmd) {
             case "p" -> panel(u, s, arg, chatId, msgId);
@@ -174,6 +182,14 @@ public class AdminHandler {
             case "rxm" -> statsH.rasxodMenu(s, chatId, msgId);
             case "tp" -> statsH.topshirilgan(u, s, chatId, msgId, arg);
             case "tpx" -> statsH.topshirilganExcel(u, arg, chatId);
+            case "dmf" -> {
+                if (u.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Faqat SuperAdmin uchun."); return true; }
+                try {
+                    long done = subSvc.alignDaysToBalance(Long.parseLong(arg), u);
+                    sender.send(chatId, done > 0 ? "✅ Kunlar balansga moslandi: <b>" + uz.kassa.bot.TextUtil.fmt(done) + "</b> so'm topshirilmagan qoldiq yopildi. Balans o'zgarmadi."
+                            : "ℹ️ Moslash kerak emas — kunlar balansdan ko'p emas.");
+                } catch (Exception e) { sender.send(chatId, "⚠️ Bajarilmadi — " + uz.kassa.bot.TextUtil.esc(String.valueOf(e.getMessage()))); }
+            }
             case "tpc", "tpcx", "tpcy" -> {
                 if (u.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Faqat SuperAdmin uchun."); return true; }
                 switch (cmd) {
@@ -447,6 +463,7 @@ public class AdminHandler {
                     case OmborAdminHandler.LABEL -> omborAdmin.menu(s, chatId, 0);
                     case TgHandler.LABEL -> tg.menu(s, chatId, 0);
                     case JarimaHandler.LABEL -> jarimaH.menu(s, chatId, 0);
+                    case AdeskHandler.LABEL -> adeskH.menu(s, chatId, 0);
                     case "💳 Карта масъуллари" -> settingsH.kartaMasList(chatId, 0);
                     case "📅 Ledger санаси" -> msH.ledgerMenu(s, chatId, 0);
                     case "🩺 Диагностика" -> msH.diagMenu(s, chatId, 0);
@@ -681,6 +698,7 @@ public class AdminHandler {
         ACTIONS.put(OmborAdminHandler.LABEL, (u, s, c) -> omborAdmin.menu(s, c, 0));
         ACTIONS.put(TgHandler.LABEL, (u, s, c) -> tg.menu(s, c, 0));
         ACTIONS.put(JarimaHandler.LABEL, (u, s, c) -> jarimaH.menu(s, c, 0));
+        ACTIONS.put(AdeskHandler.LABEL, (u, s, c) -> adeskH.menu(s, c, 0));
         ACTIONS.put("💳 Карта масъуллари", (u, s, c) -> settingsH.kartaMasList(c, 0));
         ACTIONS.put("📅 Ledger санаси", (u, s, c) -> msH.ledgerMenu(s, c, 0));
         ACTIONS.put("🩺 Диагностика", (u, s, c) -> msH.diagMenu(s, c, 0));

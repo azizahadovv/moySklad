@@ -237,6 +237,35 @@ public class SubmissionService {
     }
 
     /**
+     * 🔧 Kunlar kesimini balansga moslash (SuperAdmin): kunlar qoldig'i yig'indisi balansdan KO'P bo'lsa, ortiqchasi
+     * (balans bilan ta'minlanmagan «topshirilmagan» qoldiq) eng yangi kunlardan boshlab yopiladi. Balansga tegilmaydi.
+     * 2026-10-06: Отдел Камера 24.09 da 100 000 qolgan, balans 0 — qabul «mavjud pul yo'q» deb o'tmasdi, korrektirovka yordam bermasdi.
+     * Natija: yopilgan summa (0 — farq yo'q yoki kunlar balansdan KAM).
+     */
+    @Transactional
+    public long alignDaysToBalance(Long kassaId, AppUser by) {
+        long bal = ledger.lock(OwnerType.KASSA, kassaId, MoneyType.NAQD).getAmount();
+        List<DayRecord> days = dayRepo.lockByKassaIdAndStatusIn(kassaId, OPEN);
+        long sum = dayRepo.sumRemainNaqd(kassaId);
+        long extra = sum - bal;
+        if (extra <= 0) return 0;
+        long left = extra;
+        for (int i = days.size() - 1; i >= 0 && left > 0; i--) {
+            DayRecord d = days.get(i);
+            long need = d.remainNaqd();
+            if (need <= 0) continue;
+            long take = Math.min(need, left);
+            d.setCoveredNaqd(d.getCoveredNaqd() + take);
+            left -= take;
+        }
+        days.forEach(SubmissionService::closeIfCovered);
+        dayRepo.saveAll(days);
+        long done = extra - left;
+        audit.log(by.getId(), "KUNLAR_MOSLASH", "kassa", kassaId, "balans=" + bal + " kunlar=" + sum + " yopildi=" + done);
+        return done;
+    }
+
+    /**
      * ❌ Bevosita qabulni BEKOR qilish (faqat SuperAdmin) — xato/ikki marta qabul uchun:
      * pul buxgalteriyadan kassaga qaytadi, kunlar qoplanishi teskari yechiladi (avval
      * shu qabulga bog'langan kunlar, keyin boshqa qoplangan kunlar — eng yangisidan),
