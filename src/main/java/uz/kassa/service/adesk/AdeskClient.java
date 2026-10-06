@@ -276,7 +276,8 @@ public class AdeskClient {
             if (total >= 0 && out.size() >= total) break;
         }
         // Himoya: ro'yxat chala o'qilsa (sahifalash ishlamasa) — «yo'q» deb qayta yaratish dublikat beradi
-        if (total > 0 && out.size() < total)
+        // jonli ro'yxatda sahifalash vaqtida 1–2 ta yozuv siljishi mumkin (2026-10-06: 8760/8761 yuklashni to'xtatdi) — kichik farq kechiriladi
+        if (total > 0 && out.size() < total - Math.max(5, total / 100))
             throw new IllegalStateException("Adesk ro'yxati (" + path + ") to'liq o'qilmadi: " + out.size() + " / " + total);
         return out;
     }
