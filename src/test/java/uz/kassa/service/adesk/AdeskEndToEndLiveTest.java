@@ -277,6 +277,7 @@ class AdeskEndToEndLiveTest {
             when(cfg.catIncome()).thenReturn("Выручка");
             when(cfg.catTransfer()).thenReturn("Перемещение");
             when(cfg.stockOrg()).thenReturn("");
+            when(cfg.project()).thenReturn("-");
             when(cfg.get(anyString())).thenReturn(Optional.empty());
 
             AdeskHttp http = new AdeskHttp(cfg);

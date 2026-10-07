@@ -131,6 +131,7 @@ public class AdeskCheckService {
                 msIn += d.sumTiyin();
             } else {
                 String n = expense.getOrDefault(d.expenseItemId(), "Прочие расходы");
+                if (AdeskSyncService.norm(n).equals(AdeskSyncService.norm(cfg.catTransfer())) && !"organization".equals(d.agentType())) n = "Прочие расходы";
                 c = "Чиқим · " + (n.isBlank() ? "Прочие расходы" : n);
                 msOut += d.sumTiyin();
             }
@@ -228,18 +229,93 @@ public class AdeskCheckService {
 
         List<Object[]> errRows = new ArrayList<>();
         for (AdeskLink l : errs) errRows.add(new Object[]{l.getKind(), l.getMsType(), l.getName(), l.getDocDate() == null ? "" : l.getDocDate().format(DF),
-                l.getSumTiyin() == null ? "" : som(l.getSumTiyin()), l.getError()});
+                l.getSumTiyin() == null ? "" : som(l.getSumTiyin()), l.getError(), msLink(l)});
+
+        /* ---------- ўтказмалар жуфти: ҳар ой кирим ва чиқим ўтказмаси суммалари бўйича жуфтлаштирилади ---------- */
+        Map<String, List<MsMoneyDoc>> trIn = new TreeMap<>(), trOut = new TreeMap<>();
+        for (MsMoneyDoc d : docs) {
+            if (d.date().isAfter(to)) continue;
+            String ym = d.date().toString().substring(0, 7);
+            if (d.income()) { if (d.incomeTransfer()) trIn.computeIfAbsent(ym, k -> new ArrayList<>()).add(d); }
+            else {
+                String n = expense.getOrDefault(d.expenseItemId(), "");
+                if (AdeskSyncService.norm(n).equals(AdeskSyncService.norm(cfg.catTransfer())) && "organization".equals(d.agentType()))
+                    trOut.computeIfAbsent(ym, k -> new ArrayList<>()).add(d);
+            }
+        }
+        List<Object[]> trRows = new ArrayList<>();
+        Set<String> months = new TreeSet<>(trIn.keySet());
+        months.addAll(trOut.keySet());
+        for (String ym : months) {
+            Map<Long, Deque<MsMoneyDoc>> pool = new HashMap<>();
+            for (MsMoneyDoc d : trOut.getOrDefault(ym, List.of())) pool.computeIfAbsent(d.sumTiyin(), k -> new ArrayDeque<>()).add(d);
+            for (MsMoneyDoc d : trIn.getOrDefault(ym, List.of())) {
+                Deque<MsMoneyDoc> q = pool.get(d.sumTiyin());
+                if (q != null && !q.isEmpty()) q.poll();
+                else trRows.add(new Object[]{ym, "Кирим — чиқим жуфти йўқ", d.date().format(DF), ruDoc(d.entity()), d.number(), som(d.sumTiyin()),
+                        d.description().isBlank() ? d.purpose() : d.description(),
+                        "Чиқим томонини «Перемещение» қилинг (ёки кирим ўтказма эмас)", msLink(d.entity(), d.id())});
+            }
+            for (Deque<MsMoneyDoc> q : pool.values()) for (MsMoneyDoc d : q)
+                trRows.add(new Object[]{ym, "Чиқим — кирим жуфти йўқ", d.date().format(DF), ruDoc(d.entity()), d.number(), som(d.sumTiyin()),
+                        d.description(), "Қабул қилувчи фирма кирими киритилмаган ёки сумма фарқ қилади", msLink(d.entity(), d.id())});
+        }
+        if (!trRows.isEmpty()) equal = false;   // (xulosa matni quyida qayta yig'iladi)
+
+        /* ---------- MoySklad'да бор, Adesk'га ўтмаган пул ҳужжатлари ---------- */
+        Map<String, AdeskLink> moneyLinks = new HashMap<>();
+        for (AdeskLink l : repo.findByKind(MONEY)) moneyLinks.put(l.getMsKey(), l);
+        List<Object[]> missRows = new ArrayList<>();
+        for (MsMoneyDoc d : docs) {
+            if (d.date().isAfter(to)) continue;
+            AdeskLink l = moneyLinks.get(d.id());
+            if (AdeskSyncService.linked(l) && !ERROR.equals(l.getStatus())) continue;
+            missRows.add(new Object[]{d.date().format(DF), ruDoc(d.entity()), d.number(), som(d.sumTiyin()),
+                    l == null ? "ҳали юборилмаган" : "хато: " + l.getError(), msLink(d.entity(), d.id())});
+        }
+
+        /* ---------- ўтказилмайдиган (бўш) товар ҳужжатлари ---------- */
+        List<Object[]> skipRows = new ArrayList<>();
+        for (AdeskLink l : repo.findByKind(COMMIT))
+            if (SKIP.equals(l.getStatus()) && l.getDocDate() != null && !l.getDocDate().isBefore(from) && !l.getDocDate().isAfter(to))
+                skipRows.add(new Object[]{l.getDocDate().format(DF), ruDoc(l.getMsType()), l.getName(), l.getSumTiyin() == null ? "" : som(l.getSumTiyin()),
+                        l.getError(), msLink(l)});
+
         List<SheetDef> sheets = List.of(
                 new SheetDef("Ҳисоблар", new String[]{"Ҳисоб", "MoySklad", "Adesk", "Фарқ", "Ҳолат"}, accRows),
                 new SheetDef("ДДС статьялар", new String[]{"Статья", "MoySklad", "Adesk", "Фарқ", "Ҳолат"}, catRows),
-                new SheetDef("Adesk қўлда", new String[]{"Adesk ID", "Сана", "Тур", "Сумма", "Статья", "Контрагент", "Изоҳ"}, manualRows),
-                new SheetDef("Хатолар", new String[]{"Тур", "Ҳужжат", "Номи/№", "Сана", "Сумма", "Сабаб"}, errRows));
+                new SheetDef("Ўтказма фарқи", new String[]{"Ой", "Муаммо", "Сана", "Ҳужжат", "№", "Сумма", "Изоҳ", "Нима қилиш керак", "MoySklad ҳавола"}, trRows),
+                new SheetDef("Ўтмаган ҳужжатлар", new String[]{"Сана", "Ҳужжат", "№", "Сумма", "Сабаб", "MoySklad ҳавола"}, missRows),
+                new SheetDef("Хатолар", new String[]{"Тур", "Ҳужжат", "Номи/№", "Сана", "Сумма", "Сабаб", "MoySklad ҳавола"}, errRows),
+                new SheetDef("Бўш ҳужжатлар", new String[]{"Сана", "Ҳужжат", "№", "Сумма", "Сабаб", "MoySklad ҳавола"}, skipRows),
+                new SheetDef("Adesk қўлда", new String[]{"Adesk ID", "Сана", "Тур", "Сумма", "Статья", "Контрагент", "Изоҳ"}, manualRows));
         String shortLine = (equal ? "✅ тенг" : "⚠️ фарқ") + " · ҳисоблар " + accOk + "/" + (accOk + accBad.size())
                 + " · ҳужжатлар " + adLinked + "/" + msDocs + (errs.isEmpty() ? "" : " · хато " + errs.size());
-        String html = sb.toString();
+        String extra = "";
+        if (!trRows.isEmpty()) extra += "\n⚠️ Ўтказмада жуфти йўқ ҳужжатлар: " + trRows.size() + " та (Excel: «Ўтказма фарқи»)";
+        if (!missRows.isEmpty()) extra += "\n⚠️ Adesk'га ўтмаган пул ҳужжатлари: " + missRows.size() + " та (Excel: «Ўтмаган ҳужжатлар»)";
+        String html = sb.toString() + extra;
         if (html.length() > 4000) html = html.substring(0, 3990) + "…";
         return new Result(html, sheets, equal, shortLine);
     }
+
+    private static final String MS_APP = "https://online.moysklad.ru/app/#";
+
+    /** MoySklad ҳужжатини очиш ҳаволаси. */
+    static String msLink(String entity, String id) { return MS_APP + entity + "/edit?id=" + id; }
+
+    static String msLink(AdeskLink l) {
+        String e = l.getMsType() != null ? l.getMsType() : switch (l.getKind()) {
+            case CONTRACTOR -> "counterparty";
+            case PRODUCT -> "product";
+            case EMPLOYEE -> "employee";
+            case ORG, ORGC -> "organization";
+            default -> null;
+        };
+        return e == null || l.getMsKey() == null || l.getMsKey().contains(":") ? "" : msLink(e, l.getMsKey());
+    }
+
+    private static String ruDoc(String entity) { return AdeskSyncService.ruName(entity); }
 
     private static String line(String title, long ms, long adv) { return line(title, ms, adv, ms == adv); }
 

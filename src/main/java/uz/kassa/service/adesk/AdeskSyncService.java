@@ -112,7 +112,7 @@ public class AdeskSyncService {
     /** «Asosiy» proyekt id'si (nom bo'yicha); topilmasa — eslatma va proyektsiz. */
     private Long resolveProject(AdeskRun r) {
         String name = cfg.project();
-        if (name.equals("-")) return null;
+        if (name == null || name.equals("-")) return null;
         try {
             for (AdeskClient.AdProject p : ad.projects()) if (norm(p.name()).equals(norm(name))) return p.id();
         } catch (AdeskException e) { if (e.fatal) throw e; }
@@ -661,6 +661,8 @@ public class AdeskSyncService {
         if (acc == null) throw new IllegalStateException("hisob Adesk'da bog'lanmagan (" + d.accountKey() + ")");
         String expense = d.income() ? null : r.expenseItems.getOrDefault(d.expenseItemId(), OTHER_EXPENSE);
         if (expense != null && expense.isBlank()) expense = OTHER_EXPENSE;
+        // Chiqim «Перемещение» faqat qabul qiluvchi o'z firmamiz bo'lsa (garov, qarz, kontragentga berilgan pul — o'tkazma emas)
+        if (expense != null && norm(expense).equals(norm(cfg.catTransfer())) && !"organization".equals(d.agentType())) expense = OTHER_EXPENSE;
         boolean transfer = d.income()
                 ? d.incomeTransfer()
                 : norm(expense).equals(norm(cfg.catTransfer()));

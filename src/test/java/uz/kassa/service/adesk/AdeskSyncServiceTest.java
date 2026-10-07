@@ -132,8 +132,8 @@ class AdeskSyncServiceTest {
         assertTrue(c.path("contractorId").isNull());
 
         ObjectNode d = txs.get(3);
-        assertEquals(22, d.path("categoryId").asLong());
-        assertTrue(d.path("contractorId").isNull(), "o'tkazmada kontragent qo'yilmaydi");
+        assertEquals(23, d.path("categoryId").asLong(), "«Перемещение», lekin qabul qiluvchi kontragent — o'tkazma emas");
+        assertEquals(900, d.path("contractorId").asLong());
 
         assertEquals(4, r.get("tx.created"));
         assertEquals(4, saved.stream().filter(l -> l.getKind().equals(AdeskLink.MONEY) && l.ok()).map(AdeskLink::getMsKey).distinct().count());
