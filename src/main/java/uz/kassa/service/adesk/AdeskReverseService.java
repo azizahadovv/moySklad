@@ -113,6 +113,8 @@ public class AdeskReverseService {
         String desc = (t.description() == null ? "" : t.description().trim());
         desc = (desc.isEmpty() ? "" : desc + " ") + "[Adesk #" + t.id() + (t.income() && !cat.isEmpty() ? " · статья: " + cat : "") + "]";
         b.put("description", desc);
+        ObjectNode st = stateMeta(entity, t.income() && AdeskSyncService.norm(cat).equals(AdeskSyncService.norm(cfg.catTransfer())));
+        if (st != null) b.set("state", st);
         if (!t.income()) b.set("expenseItem", meta("expenseitem", "expenseitem/" + expenseId(r, t, cat, expenseByName)));
         else if (AdeskSyncService.norm(cat).equals(AdeskSyncService.norm(cfg.catTransfer()))) b.put("paymentPurpose", AdeskConfig.TRANSFER_PURPOSE + " (Adesk)");
 
@@ -152,6 +154,30 @@ public class AdeskReverseService {
         }
     }
 
+    /** MoySklad hujjat statusi (odatdagidek): kirim/chiqim turiga qarab; topilmasa null (status qo'yilmaydi). */
+    private final Map<String, Map<String, String>> stateIds = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private ObjectNode stateMeta(String entity, boolean transfer) {
+        String name = switch (entity) {
+            case "paymentin" -> transfer ? "Перечисления" : "Тулов килинди";
+            case "paymentout" -> "Пул кучирилди";
+            case "cashin" -> "Олинди";
+            case "cashout" -> "Туланди 100%";
+            default -> null;
+        };
+        if (name == null) return null;
+        try {
+            Map<String, String> ids = stateIds.computeIfAbsent(entity, e -> {
+                Map<String, String> m = new HashMap<>();
+                JsonNode md = ms.fetchJson("entity/" + e + "/metadata");
+                if (md != null) for (JsonNode s : md.path("states")) m.put(s.path("name").asText(), s.path("id").asText());
+                return m;
+            });
+            String id = ids.get(name);
+            return id == null ? null : meta("state", entity + "/metadata/states/" + id);
+        } catch (Exception e) { return null; }
+    }
+
     private String postMoney(AdeskRun r, AdTx t, String key, String orgId, String agentOrg, long sum, String moment,
                              String desc, String purpose, String expenseId, boolean income) {
         String accId = key.substring(key.indexOf(':') + 1);
@@ -166,6 +192,8 @@ public class AdeskReverseService {
         b.put("applicable", true);
         b.put("description", desc);
         if (purpose != null) b.put("paymentPurpose", purpose);
+        ObjectNode st = stateMeta(entity, true);
+        if (st != null) b.set("state", st);
         if (expenseId != null) b.set("expenseItem", meta("expenseitem", "expenseitem/" + expenseId));
         JsonNode res = ms.postEntity("entity/" + entity, b.toString());
         String id = res == null ? "" : res.path("id").asText("");

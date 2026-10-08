@@ -635,6 +635,12 @@ public class AdeskSyncService {
                 else if (l != null && ERROR.equals(l.getStatus())) { l.setStatus(SKIP); save(r, l); }   // xatoli edi, endi o'tkazilmagan — ro'yxatdan chiqadi
                 continue;
             }
+            // Adesk'da kiritilib MoySklad'ga yozilgan hujjat (origin AD): Adesk — manba, qayta yangilanmaydi
+            // (perevod legi Adesk'da «Нельзя редактировать операцию, являющуюся частичкой перевода» xatosini beradi)
+            if (l != null && FROM_AD.equals(l.getOrigin()) && linked(l)) {
+                if (ERROR.equals(l.getStatus())) { l.setStatus(OK); l.setError(null); save(r, l); }   // oldingi «tahrirlab bo'lmaydi» xatosi tozalanadi
+                continue;
+            }
             TxWant w;
             try { w = want(r, d, l); }
             catch (AdeskException e) { if (e.fatal) throw e; moneyErr(r, d, l, e.getMessage()); continue; }
