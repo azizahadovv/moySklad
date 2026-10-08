@@ -653,7 +653,22 @@ public class AdeskSyncService {
         r.progress = "yangilash " + update.size();
         updateTx(r, update);
         if (all && !r.stopped()) restore(r, from, to, wants);
+        if (!r.stopped() && cfg.reverse()) reverseRecent(r, L, all ? to : null);
         if (!r.stopped()) setCursor("money", r.startedAt);
+    }
+
+    /**
+     * Adesk → MoySklad avtomatik (10 daqiqada bir): oxirgi 7 kunda Adesk'da qo'lda kiritilgan, hali bog'lanmagan kirim/chiqim/perevodlar
+     * MoySklad'ga yoziladi. To'liq yurishda [davr] ni restore() o'zi ko'radi — bu yerda faqat davrdan keyingilar (after).
+     */
+    private void reverseRecent(AdeskRun r, Map<String, AdeskLink> L, LocalDate after) {
+        LocalDate today = cfg.today();
+        List<AdTx> txs = ad.transactions(today.minusDays(7), today);
+        Set<Long> linkedIds = new HashSet<>();
+        for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
+        List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())
+                && t.date() != null && (after == null || t.date().isAfter(after))).toList();
+        if (!manual.isEmpty()) reverse.handle(r, manual);
     }
 
     private TxWant want(AdeskRun r, MsMoneyDoc d, AdeskLink l) {

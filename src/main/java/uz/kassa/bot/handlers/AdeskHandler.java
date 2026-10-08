@@ -52,6 +52,7 @@ public class AdeskHandler {
     private final AdeskLinkRepo repo;
     private final AuditService audit;
     private final AdeskAccountMapper mapper;
+    private final uz.kassa.service.AppVersion appVersion;
 
     public boolean adminCallback(AppUser u, Session s, String cmd, String arg, long chatId, int msgId) {
         if (u.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Faqat SuperAdmin uchun."); return true; }
@@ -129,7 +130,7 @@ public class AdeskHandler {
     /* ==================== menyu ==================== */
 
     public void menu(Session s, long chatId, int msgId) {
-        StringBuilder sb = new StringBuilder("📒 <b>Adesk ↔ MoySklad</b>\n\n");
+        StringBuilder sb = new StringBuilder("📒 <b>Adesk ↔ MoySklad</b> · <i>" + esc(appVersion.text()) + "</i>\n\n");
         sb.append(cfg.enabled() ? "🟢 Yoqilgan — har " + cfg.intervalMin() + " daqiqada sinxron" : "⚪ O'chirilgan (avtomatik sinxron yurmaydi)").append("\n");
         String tok = cfg.token();
         sb.append("🔑 Token: ").append(tok.isBlank() ? "❗️ kiritilmagan" : "✅ <code>…" + esc(tok.substring(Math.max(0, tok.length() - 4))) + "</code>").append("\n");

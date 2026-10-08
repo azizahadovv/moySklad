@@ -42,19 +42,41 @@ public class AdeskReverseService {
     private static final JsonNodeFactory JN = JsonNodeFactory.instance;
     private static final DateTimeFormatter MS_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    /** Bot o'zi yozgan operatsiya izohi: «… · MS Приходный ордер №07318» — bog'lanishi yo'qolgan bo'lsa ham MoySklad'ga qaytarilmaydi (dublikat). */
+    private static final java.util.regex.Pattern BOT_MARK = java.util.regex.Pattern.compile("MS (Приходный ордер|Расходный ордер|Входящий платёж|Исходящий платёж|Приёмка|Отгрузка|Возврат[^№]*) №");
+
     public void handle(AdeskRun r, List<AdTx> manual) {
+        manual = manual.stream().filter(t -> t.description() == null || !BOT_MARK.matcher(t.description()).find()).toList();
+        List<AdTx> transfers = manual.stream().filter(AdTx::transfer).toList();
         List<AdTx> txs = manual.stream().filter(t -> !t.transfer()).toList();
         r.inc("ad.manual", txs.size());
-        r.inc("ad.manualTransfer", manual.size() - txs.size());
-        if (manual.size() > txs.size())
-            r.note("Adesk'da qo'lda kiritilgan o'tkazmalar: " + (manual.size() - txs.size()) + " ta — MoySklad'ga yozilmaydi, u yerda «Перемещение» bilan kiriting");
-        if (txs.isEmpty()) return;
+        r.inc("ad.manualTransfer", transfers.size());
+        if (txs.isEmpty() && transfers.isEmpty()) return;
         if (!cfg.reverse()) {
-            r.note("Adesk'da qo'lda kiritilgan operatsiyalar: " + txs.size() + " ta — MoySklad'da yo'q (Adesk → MoySklad o'chiq)");
+            r.note("Adesk'da qo'lda kiritilgan: " + txs.size() + " ta operatsiya, " + transfers.size() + " ta o'tkazma leg'i — MoySklad'da yo'q (Adesk → MoySklad o'chiq)");
             return;
         }
         Map<String, String> expenseByName = new HashMap<>();
         r.expenseItems.forEach((id, name) -> expenseByName.put(AdeskSyncService.norm(name), id));
+        // Adesk «перевод» — ikki leg (chiqim va kirim): sana va summa bo'yicha juftlanadi, MoySklad'ga ikki hujjat bo'lib yoziladi
+        List<AdTx> outs = new ArrayList<>(transfers.stream().filter(t -> !t.income()).toList());
+        List<AdTx> ins = new ArrayList<>(transfers.stream().filter(AdTx::income).toList());
+        for (AdTx o : outs) {
+            if (r.stopped()) return;
+            AdTx pair = ins.stream().filter(i -> i.date().equals(o.date()) && i.amount().compareTo(o.amount()) == 0).findFirst().orElse(null);
+            if (pair == null) { r.note("Adesk o'tkazmasi #" + o.id() + ": kirim legi topilmadi — yozilmadi"); r.inc("ad.toMsError"); continue; }
+            ins.remove(pair);
+            try {
+                createTransferPair(r, o, pair, expenseByName);
+                r.inc("ad.toMs", 2);
+                r.inc("ad.transferToMs");
+            } catch (Exception e) {
+                r.inc("ad.toMsError");
+                r.note("Adesk o'tkazmasi #" + o.id() + " MoySklad'ga yozilmadi — " + e.getMessage());
+                log.warn("Adesk o'tkazma #{} yozilmadi: {}", o.id(), e.getMessage());
+            }
+        }
+        for (AdTx i : ins) { r.note("Adesk o'tkazmasi #" + i.id() + ": chiqim legi topilmadi — yozilmadi"); r.inc("ad.toMsError"); }
         for (AdTx t : txs) {
             if (r.stopped()) return;
             r.progress = "Adesk → MoySklad #" + t.id();
@@ -92,6 +114,7 @@ public class AdeskReverseService {
         desc = (desc.isEmpty() ? "" : desc + " ") + "[Adesk #" + t.id() + (t.income() && !cat.isEmpty() ? " · статья: " + cat : "") + "]";
         b.put("description", desc);
         if (!t.income()) b.set("expenseItem", meta("expenseitem", "expenseitem/" + expenseId(r, t, cat, expenseByName)));
+        else if (AdeskSyncService.norm(cat).equals(AdeskSyncService.norm(cfg.catTransfer()))) b.put("paymentPurpose", AdeskConfig.TRANSFER_PURPOSE + " (Adesk)");
 
         JsonNode res = ms.postEntity("entity/" + entity, b.toString());
         if (res == null) throw new IllegalStateException("MoySklad ruxsat bermadi (token huquqi)");
@@ -102,6 +125,54 @@ public class AdeskReverseService {
                 .name("Adesk #" + t.id()).msType(entity).docDate(t.date()).sumTiyin(t.signedTiyin()).accountKey(key)
                 .updatedAt(Instant.now()).build();
         l = repo.save(l);
+        if (r.hasLinks(MONEY)) r.links(MONEY).put(id, l);
+        return id;
+    }
+
+    /**
+     * Adesk perevodi → MoySklad'da ikki hujjat: chiqim (kassa — Расходный ордер, bank/karta — Исходящий платёж; statya «Перемещение»,
+     * kontragent — qabul qiluvchi o'z firmamiz) va kirim (Приходный ордер / Входящий платёж; maqsad «Перемещение собственных средств …»,
+     * kontragent — chiqim firmasi). Ikki leg ham bog'lanadi — keyingi sinxronda qayta Adesk'ga o'tmaydi.
+     */
+    private void createTransferPair(AdeskRun r, AdTx out, AdTx in, Map<String, String> expenseByName) {
+        String ko = out.accountId() == null ? null : r.accountByAd.get(out.accountId());
+        String ki = in.accountId() == null ? null : r.accountByAd.get(in.accountId());
+        if (ko == null || ki == null) throw new IllegalStateException("hisoblardan biri MoySklad hisobi bilan bog'lanmagan");
+        String orgO = ko.substring(0, ko.indexOf(':')), orgI = ki.substring(0, ki.indexOf(':'));
+        String nameO = r.orgs.stream().filter(o -> o.id().equals(orgO)).map(AdeskMsReader.MsOrg::name).findFirst().orElse("");
+        long sum = Math.abs(out.signedTiyin());
+        String moment = ms.toMoscow(out.date().atTime(LocalTime.NOON)).format(MS_TIME);
+        String expId = expenseId(r, out, cfg.catTransfer(), expenseByName);
+        String idO = postMoney(r, out, ko, orgO, orgI, sum, moment, "[Adesk #" + out.id() + "] Перемещение", null, expId, false);
+        try {
+            postMoney(r, in, ki, orgI, orgO, sum, moment, "[Adesk #" + in.id() + "] Перемещение",
+                    AdeskConfig.TRANSFER_PURPOSE + " " + nameO, null, true);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("chiqim yozildi (" + idO + "), kirim yozilmadi: " + e.getMessage() + " — MoySklad'da kirimni qo'lda kiriting", e);
+        }
+    }
+
+    private String postMoney(AdeskRun r, AdTx t, String key, String orgId, String agentOrg, long sum, String moment,
+                             String desc, String purpose, String expenseId, boolean income) {
+        String accId = key.substring(key.indexOf(':') + 1);
+        boolean cash = AdeskMsReader.CASH.equals(accId);
+        String entity = income ? (cash ? "cashin" : "paymentin") : (cash ? "cashout" : "paymentout");
+        ObjectNode b = JN.objectNode();
+        b.set("organization", meta("organization", "organization/" + orgId));
+        if (!cash) b.set("organizationAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
+        b.set("agent", meta("organization", "organization/" + agentOrg));
+        b.put("sum", sum);
+        b.put("moment", moment);
+        b.put("applicable", true);
+        b.put("description", desc);
+        if (purpose != null) b.put("paymentPurpose", purpose);
+        if (expenseId != null) b.set("expenseItem", meta("expenseitem", "expenseitem/" + expenseId));
+        JsonNode res = ms.postEntity("entity/" + entity, b.toString());
+        String id = res == null ? "" : res.path("id").asText("");
+        if (id.isEmpty()) throw new IllegalStateException("MoySklad javobida id yo'q (token huquqi?)");
+        AdeskLink l = repo.save(AdeskLink.builder().kind(MONEY).msKey(id).adeskId(t.id()).origin(FROM_AD).status(OK)
+                .name("Adesk #" + t.id()).msType(entity).docDate(t.date()).sumTiyin(t.signedTiyin()).accountKey(key)
+                .updatedAt(Instant.now()).build());
         if (r.hasLinks(MONEY)) r.links(MONEY).put(id, l);
         return id;
     }
