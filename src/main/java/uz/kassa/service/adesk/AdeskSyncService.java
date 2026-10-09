@@ -619,6 +619,10 @@ public class AdeskSyncService {
             if (r.allMoney == null) r.allMoney = msr.moneyDocs(from, cfg.today(), null, r.currencies);
             docs = r.allMoney.stream().filter(d -> !d.date().isBefore(from) && !d.date().isAfter(to)).toList();
         } else docs = msr.moneyDocs(from, to, cur.minusMinutes(OVERLAP_MIN), r.currencies);
+        // Sozlamada yoqilgan bo'lsa (standart o'chiq), to'liq yurishda MoySklad'dagi perevod juftlari (chiqim «Перемещение» + kirim)
+        // Adesk'da bitta «Перевод между счетами» bo'ladi; ular quyidagi oddiy oqimda o'tkazib yuboriladi.
+        // O'chiq bo'lsa hech narsa o'zgarmaydi; avval aylantirilgan perevodlar ham joyida qoladi (isTr — tegilmaydi).
+        Set<String> trSkip = all && cfg.trConvert() ? transfers(r, L, docs) : Set.of();
 
         Map<String, TxWant> wants = new LinkedHashMap<>();
         List<TxWant> create = new ArrayList<>(), update = new ArrayList<>();
@@ -630,6 +634,7 @@ public class AdeskSyncService {
             r.progress = "tayyorlanmoqda " + (++i) + "/" + docs.size();
             seen.add(d.id());
             AdeskLink l = L.get(d.id());
+            if (trSkip.contains(d.id()) || isTr(l) && linked(l)) continue;   // Adesk perevodi legi — transfers() boshqaradi (inkrementalda tegilmaydi)
             if (!d.applicable() || d.sumTiyin() <= 0) {
                 if (linked(l)) remove.add(l);
                 else if (l != null && ERROR.equals(l.getStatus())) { l.setStatus(SKIP); save(r, l); }   // xatoli edi, endi o'tkazilmagan — ro'yxatdan chiqadi
@@ -663,7 +668,7 @@ public class AdeskSyncService {
             else if (!w.hash().equals(l.getHash()) || ERROR.equals(l.getStatus())) update.add(w);
         }
         if (all) for (AdeskLink l : L.values())
-            if (linked(l) && !seen.contains(l.getMsKey())) remove.add(l);
+            if (linked(l) && !isTr(l) && !seen.contains(l.getMsKey())) remove.add(l);
 
         r.progress = "o'chirish " + remove.size();
         removeTx(r, remove);
@@ -734,6 +739,231 @@ public class AdeskSyncService {
             }
         }
         return rest;
+    }
+
+    /* -------------------- perevodlar: MoySklad chiqim + kirim → Adesk «Перевод между счетами» -------------------- */
+
+    /** MoySklad'da kiritilgan o'z firmalar (yoki bitta firma hisoblari) orasidagi perevod: chiqim + kirim. */
+    record TrPair(MsMoneyDoc out, MsMoneyDoc in) {}
+
+    /** Bog'lanish Adesk perevodining legi (hash «TR:…»). */
+    static boolean isTr(AdeskLink l) { return l != null && l.getHash() != null && l.getHash().startsWith("TR:"); }
+
+    /**
+     * To'liq yurishda (2026-10-09, user qarori: perevodlar endi Adesk'da kiritiladi, eski MoySklad perevodlari Adesk'da
+     * ham bitta perevod bo'lsin): MoySklad'dagi chiqim «Перемещение» (agent — o'z firmamiz) va unga mos kirim juftlanadi,
+     * Adesk'da bitta perevod yaratiladi, leglari ro'yxatdan topilib bog'lanadi, shundan keyingina eski ikki operatsiya o'chiriladi.
+     * Jufti buzilgan (hujjat o'zgargan/o'chgan) perevod Adesk'dan o'chiriladi — hujjat oddiy operatsiya bo'lib qaytadi.
+     * Perevod yaratilib, legi topilmasa — dublikat xavfi: to'xtaydi. Natija: oddiy oqim o'tkazib yuboradigan hujjatlar.
+     */
+    Set<String> transfers(AdeskRun r, Map<String, AdeskLink> L, List<MsMoneyDoc> docs) {
+        List<TrPair> pairs = pairTransfers(r, L, docs);
+        boolean anyTr = L.values().stream().anyMatch(l -> linked(l) && isTr(l));
+        Set<String> skip = new HashSet<>();
+        if (pairs.isEmpty() && !anyTr) return skip;
+        r.progress = "perevodlar";
+        Map<String, String> wantHash = new HashMap<>();
+        for (TrPair p : pairs) {
+            String h = trHash(r, p);
+            wantHash.put(p.out().id(), h);
+            wantHash.put(p.in().id(), h);
+        }
+        List<AdTx> adList = ad.transactions(cfg.start(), cfg.effectiveEnd());
+        Map<Long, AdTx> byId = new HashMap<>();
+        adList.forEach(t -> byId.put(t.id(), t));
+
+        // A. jufti buzilgan perevodlar — Adesk'dan o'chiriladi (ikkala legi), tekshiriladi
+        List<AdeskLink> broken = new ArrayList<>();
+        Set<Long> legs = new LinkedHashSet<>();
+        for (AdeskLink l : L.values())
+            if (linked(l) && isTr(l) && !l.getHash().equals(wantHash.get(l.getMsKey()))) {
+                broken.add(l);
+                AdTx t = byId.get(l.getAdeskId());
+                if (t != null) { legs.add(t.id()); if (t.pairedId() != null) legs.add(t.pairedId()); }
+            }
+        if (!broken.isEmpty()) {
+            String err = legs.isEmpty() ? null : dropTransfer(new ArrayList<>(new TreeSet<>(legs)), broken);
+            for (AdeskLink l : broken) {
+                if (err == null) { l.setStatus(DELETED); l.setHash(null); l.setError(null); }
+                else { l.setStatus(ERROR); l.setError(err); skip.add(l.getMsKey()); }
+                save(r, l);
+            }
+            if (err == null) r.inc("tr.dropped", broken.size() / 2 + broken.size() % 2);
+            else { r.inc("tr.error"); r.note(err); }
+        }
+
+        // B. juftlar → perevod
+        Set<Long> taken = new HashSet<>();
+        for (AdeskLink l : L.values()) if (linked(l)) taken.add(l.getAdeskId());
+        long maxId = adList.stream().mapToLong(AdTx::id).max().orElse(0);
+        int fails = 0;
+        for (TrPair p : pairs) {
+            if (r.stopped()) break;
+            String o = p.out().id(), i = p.in().id();
+            if (skip.contains(o) || skip.contains(i)) continue;
+            String h = wantHash.get(o);
+            AdeskLink lo = L.get(o), li = L.get(i);
+            long from = r.account.get(p.out().accountKey()), to = r.account.get(p.in().accountKey());
+            long tiyin = p.out().sumTiyin();
+            LocalDate date = p.out().date();
+            if (linked(lo) && linked(li) && h.equals(lo.getHash()) && h.equals(li.getHash())) {
+                boolean present = byId.containsKey(lo.getAdeskId()) && byId.containsKey(li.getAdeskId());
+                if (!present) {   // umumiy ro'yxatda ko'rinmadi — shu kun alohida tekshiriladi (chala ro'yxat dublikat bermasin)
+                    Set<Long> day = new HashSet<>();
+                    ad.transactions(date, date).forEach(t -> day.add(t.id()));
+                    present = day.contains(lo.getAdeskId()) && day.contains(li.getAdeskId());
+                }
+                if (present) { skip.add(o); skip.add(i); continue; }   // perevod joyida
+                taken.remove(lo.getAdeskId());   // Adesk'da o'chirilgan — qayta yaratiladi
+                taken.remove(li.getAdeskId());
+            }
+            String desc = trDesc(p);
+            // oldingi yurish yaratib, bog'lay olmay qolgan perevod — izoh/hisob/summa/sana bo'yicha qayta bog'lanadi
+            AdTx[] found = findLegs(adList, from, to, tiyin, date, desc, taken, 0);
+            boolean created = false;
+            if (found == null) {
+                if (fails >= 3) continue;   // ketma-ket xato — qolganlari oddiy operatsiya bo'lib qoladi (keyingi to'liq yurishda yana)
+                try {
+                    ad.createTransfer(from, to, som(tiyin), date, desc);
+                    created = true;
+                } catch (AdeskException e) {
+                    if (e.fatal) throw e;
+                    fails++;
+                    r.inc("tr.error");
+                    r.note("Perevod yaratilmadi (" + p.out().number() + " → " + p.in().number() + "): " + e.getMessage());
+                    continue;
+                }
+                found = findLegs(ad.transactions(date, date), from, to, tiyin, date, desc, taken, maxId);
+                if (found == null) {
+                    // perevod yaratildi, lekin legi topilmadi: eski operatsiyalar bilan birga ikki marta sanalishi mumkin — to'xtaymiz
+                    String err = "Adesk'da perevod yaratildi, lekin ro'yxatda topilmadi (" + p.out().number() + " → " + p.in().number()
+                            + ", " + som(tiyin).toPlainString() + ") — Adesk'da tekshiring, ikki marta sanalmasin";
+                    for (AdeskLink l : new AdeskLink[]{lo, li}) if (l != null) { l.setStatus(ERROR); l.setError(err); save(r, l); }
+                    skip.add(o); skip.add(i);
+                    r.inc("tr.error");
+                    r.note(err);
+                    fails = 3;
+                    continue;
+                }
+            }
+            List<Long> old = new ArrayList<>();
+            for (AdeskLink l : new AdeskLink[]{lo, li}) if (linked(l) && !isTr(l)) old.add(l.getAdeskId());
+            trLink(r, p.out(), lo, found[0].id(), h);
+            trLink(r, p.in(), li, found[1].id(), h);
+            taken.add(found[0].id());
+            taken.add(found[1].id());
+            maxId = Math.max(maxId, Math.max(found[0].id(), found[1].id()));
+            skip.add(o); skip.add(i);
+            r.inc(created ? "tr.created" : "tr.relinked");
+            if (!old.isEmpty()) {
+                try { ad.removeTransactions(old); r.inc("tr.oldRemoved", old.size()); }
+                catch (AdeskException e) {
+                    if (e.fatal) throw e;
+                    r.note("Perevodga aylantirilgan eski operatsiyalar Adesk'dan o'chirilmadi " + old + " — qo'lda o'chiring: " + e.getMessage());
+                }
+            }
+        }
+        return skip;
+    }
+
+    /** Perevod juftlari: chiqim «Перемещение» (agent — o'z firmamiz) ↔ kirim; summa teng, firmalar mos, hisoblar har xil, sana bir xil. */
+    List<TrPair> pairTransfers(AdeskRun r, Map<String, AdeskLink> L, List<MsMoneyDoc> docs) {
+        List<MsMoneyDoc> outs = new ArrayList<>(), ins = new ArrayList<>();
+        for (MsMoneyDoc d : docs) {
+            if (!d.applicable() || d.sumTiyin() <= 0 || adeskOrigin(d) != null || !d.currencyIso().isBlank()) continue;
+            AdeskLink l = L.get(d.id());
+            if (l != null && FROM_AD.equals(l.getOrigin())) continue;
+            if (!r.account.containsKey(d.accountKey())) continue;
+            if (d.income()) { if (d.incomeTransfer()) ins.add(d); }
+            else if ("organization".equals(d.agentType())
+                    && norm(r.expenseItems.getOrDefault(d.expenseItemId(), "")).equals(norm(cfg.catTransfer()))) outs.add(d);
+        }
+        return pairTransfers(outs, ins);
+    }
+
+    static List<TrPair> pairTransfers(List<MsMoneyDoc> outs, List<MsMoneyDoc> ins) {
+        List<MsMoneyDoc> os = new ArrayList<>(outs);
+        os.sort(Comparator.comparing(MsMoneyDoc::date).thenComparing(MsMoneyDoc::number));
+        List<MsMoneyDoc> free = new ArrayList<>(ins);
+        free.sort(Comparator.comparing(MsMoneyDoc::date).thenComparing(MsMoneyDoc::number));
+        List<TrPair> res = new ArrayList<>();
+        for (MsMoneyDoc o : os) {
+            MsMoneyDoc best = null;
+            // chiqimda agent — qabul qiluvchi firma; yoki firmaning o'zi (2026-09: «KOJ р/с → KOJ», kirim «Касса · 001 NSB ← KOJ»)
+            boolean selfAgent = o.agentId().equals(o.orgId());
+            for (MsMoneyDoc i : free) {
+                if (i.sumTiyin() != o.sumTiyin() || i.accountKey().equals(o.accountKey())) continue;
+                boolean inFromOut = "organization".equals(i.agentType()) && o.orgId().equals(i.agentId());
+                if ("organization".equals(i.agentType()) && !inFromOut) continue;
+                if (!i.orgId().equals(o.agentId()) && !(selfAgent && inFromOut)) continue;
+                // faqat bir kunda: Adesk perevodi bitta sanali — boshqa kunga o'tgan kirim kunlik qoldiqni siljitardi
+                if (i.date().equals(o.date())) { best = i; break; }
+            }
+            if (best != null) { free.remove(best); res.add(new TrPair(o, best)); }
+        }
+        return res;
+    }
+
+    /** Perevod izohi: chiqim izohi (bo'lmasa kirimniki) + «MS Исходящий платёж №… → Входящий платёж №…» (belgi kesilmaydi). Max 510. */
+    static String trDesc(TrPair p) {
+        String base = !p.out().description().isBlank() ? p.out().description() : p.in().description();
+        String ref = "MS " + ruName(p.out().entity()) + " №" + p.out().number() + " → " + ruName(p.in().entity()) + " №" + p.in().number();
+        base = base.replaceAll("\\s+", " ").trim();
+        int room = 510 - ref.length() - 3;
+        if (base.length() > room) base = base.substring(0, Math.max(0, room - 1)) + "…";
+        return base.isEmpty() ? ref : base + " · " + ref;
+    }
+
+    private String trHash(AdeskRun r, TrPair p) {
+        return "TR:" + sha(String.valueOf(r.account.get(p.out().accountKey())), String.valueOf(r.account.get(p.in().accountKey())),
+                String.valueOf(p.out().sumTiyin()), p.out().date().toString(), trDesc(p), p.out().id(), p.in().id());
+    }
+
+    /**
+     * Perevod leglari: chiqim (hisob from) va kirim (hisob to), isTransfer, summa va sana teng, bir-biriga juft.
+     * minId == 0 — mavjud perevod (izoh ham teng bo'lishi shart); minId > 0 — hozir yaratilgan (id minId dan katta).
+     */
+    static AdTx[] findLegs(List<AdTx> txs, long from, long to, long tiyin, LocalDate date, String desc, Set<Long> taken, long minId) {
+        for (AdTx o : txs) {
+            if (!o.transfer() || o.income() || o.accountId() == null || o.accountId() != from || taken.contains(o.id())) continue;
+            if (o.id() <= minId || tiyin(o.amount()) != tiyin || !date.equals(o.date())) continue;
+            if (minId == 0 && !desc.trim().equals(o.description() == null ? "" : o.description().trim())) continue;
+            for (AdTx i : txs) {
+                if (!i.transfer() || !i.income() || i.accountId() == null || i.accountId() != to || taken.contains(i.id())) continue;
+                boolean pair = o.pairedId() != null ? o.pairedId() == i.id()
+                        : i.id() > minId && tiyin(i.amount()) == tiyin && date.equals(i.date());
+                if (pair) return new AdTx[]{o, i};
+            }
+        }
+        return null;
+    }
+
+    private void trLink(AdeskRun r, MsMoneyDoc d, AdeskLink l, long legId, String hash) {
+        if (l == null) l = AdeskLink.builder().kind(MONEY).msKey(d.id()).build();
+        l.setAdeskId(legId); l.setHash(hash); l.setStatus(OK); l.setError(null);
+        l.setName(d.number()); l.setMsType(d.entity()); l.setDocDate(d.date()); l.setSumTiyin(d.signedTiyin()); l.setAccountKey(d.accountKey());
+        save(r, l);
+    }
+
+    /** Adesk perevodini (leglarini) o'chiradi va ro'yxatdan tekshiradi. null — o'chdi; aks holda sabab (qo'lda o'chirish kerak). */
+    private String dropTransfer(List<Long> legIds, List<AdeskLink> links) {
+        String what = links.stream().map(l -> l.getName() == null ? l.getMsKey() : l.getName()).distinct().collect(java.util.stream.Collectors.joining(", "));
+        try { ad.removeTransactions(legIds); }
+        catch (AdeskException e) {
+            if (e.fatal) throw e;
+            return "Adesk perevodi o'chirilmadi (" + what + "; Adesk " + legIds + "): " + e.getMessage() + " — Adesk'da qo'lda o'chiring";
+        }
+        LocalDate lo = null, hi = null;
+        for (AdeskLink l : links) if (l.getDocDate() != null) {
+            if (lo == null || l.getDocDate().isBefore(lo)) lo = l.getDocDate();
+            if (hi == null || l.getDocDate().isAfter(hi)) hi = l.getDocDate();
+        }
+        if (lo != null) {
+            Set<Long> left = new HashSet<>();
+            for (AdTx t : ad.transactions(lo.minusDays(3), hi.plusDays(3))) if (legIds.contains(t.id())) left.add(t.id());
+            if (!left.isEmpty()) return "Adesk perevodi o'chmadi (" + what + "; Adesk " + left + ") — Adesk'da qo'lda o'chiring";
+        }
+        return null;
     }
 
     private TxWant want(AdeskRun r, MsMoneyDoc d, AdeskLink l) {

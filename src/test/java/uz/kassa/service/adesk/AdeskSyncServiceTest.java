@@ -412,6 +412,138 @@ class AdeskSyncServiceTest {
         assertEquals("[Adesk #6] ijara · статья: Выручка", AdeskReverseService.msDesc(6L, null, "ijara", "статья: Выручка"));
     }
 
+    static MsMoneyDoc trDoc(String id, String entity, String number, LocalDate date, long tiyin, String org, String acc, String agent,
+                            String expense, String purpose) {
+        return new MsMoneyDoc(id, entity, number, date, LocalDateTime.of(date, java.time.LocalTime.NOON), tiyin, tiyin, "", 1, org,
+                org + ":" + acc, agent, "organization", expense, "", purpose, true);
+    }
+
+    static final LocalDate D5 = LocalDate.of(2026, 9, 5);
+
+    @Test
+    void transferLegsArePairedByFirmsAmountAndDate() {
+        MsMoneyDoc outA = trDoc("oA", "paymentout", "02558", D5, 100_00, ORG, ACC, ORG2, "ei-tr", "");
+        MsMoneyDoc outB = trDoc("oB", "paymentout", "02559", D5, 100_00, ORG2, "acc-2", ORG, "ei-tr", "");
+        MsMoneyDoc inA = trDoc("iA", "paymentin", "04400", D5, 100_00, ORG2, "acc-2", ORG, "", "Перемещение собственных средств");
+        // kirim keyingi kunda — juft qilinmaydi (Adesk perevodi bitta sanali, kunlik qoldiq siljimasin)
+        MsMoneyDoc outE = trDoc("oE", "paymentout", "02562", D5, 11_00, ORG, ACC, ORG2, "ei-tr", "");
+        MsMoneyDoc inE = trDoc("iE", "paymentin", "04404", D5.plusDays(1), 11_00, ORG2, "acc-2", ORG, "", "");
+        MsMoneyDoc inB = trDoc("iB", "paymentin", "04401", D5, 100_00, ORG, ACC + "x", ORG2, "", "");
+        MsMoneyDoc far = trDoc("iF", "paymentin", "04402", D5.plusDays(9), 100_00, ORG2, "acc-2", ORG, "", "");
+        // bitta firma ichida (р/с → kassa): xuddi shu hisobga kirim juft bo'lmaydi
+        MsMoneyDoc outC = trDoc("oC", "paymentout", "02560", D5, 7_00, ORG, ACC, ORG, "ei-tr", "");
+        MsMoneyDoc inSame = trDoc("iS", "paymentin", "04403", D5, 7_00, ORG, ACC, ORG, "", "Перемещение собственных средств");
+        MsMoneyDoc inC = trDoc("iC", "cashin", "07400", D5, 7_00, ORG, "CASH", ORG, "", "");
+        // chiqimda agent firmaning o'zi (ORG2 р/с → ORG2), kirim boshqa firma kassasiga ORG2 dan
+        MsMoneyDoc outD = trDoc("oD", "paymentout", "02561", D5, 9_00, ORG2, "acc-2", ORG2, "ei-tr", "");
+        MsMoneyDoc inD = trDoc("iD", "cashin", "07401", D5, 9_00, ORG, "CASH", ORG2, "", "");
+        MsMoneyDoc inWrong = trDoc("iW", "cashin", "07402", D5, 9_00, ORG, "CASH", ORG, "", "");   // agent boshqa firma — juft emas
+        List<AdeskSyncService.TrPair> p = AdeskSyncService.pairTransfers(List.of(outB, outC, outD, outE, outA),
+                List.of(far, inWrong, inSame, inB, inC, inD, inE, inA));
+        assertEquals(4, p.size());
+        assertTrue(p.stream().noneMatch(x -> x.out() == outE));
+        assertEquals("iD", p.stream().filter(x -> x.out() == outD).findFirst().orElseThrow().in().id());
+        assertEquals("iA", p.stream().filter(x -> x.out() == outA).findFirst().orElseThrow().in().id(), "ORG → ORG2: kirim ORG2 da, agent ORG");
+        assertEquals("iB", p.stream().filter(x -> x.out() == outB).findFirst().orElseThrow().in().id());
+        assertEquals("iC", p.stream().filter(x -> x.out() == outC).findFirst().orElseThrow().in().id());
+        String desc = AdeskSyncService.trDesc(p.get(0));
+        assertTrue(desc.contains("MS Исходящий платёж №02558 → Входящий платёж №04400"), desc);
+        String longDesc = AdeskSyncService.trDesc(new AdeskSyncService.TrPair(
+                new MsMoneyDoc("x", "paymentout", "1", D5, null, 1, 1, "", 1, ORG, ORG + ":" + ACC, ORG2, "organization", "ei-tr", "z".repeat(900), "", true), inA));
+        assertTrue(longDesc.length() <= 510 && longDesc.endsWith("№04400"), "belgi kesilmaydi");
+    }
+
+    /** MoySklad perevodi (chiqim + kirim, avval ikki oddiy operatsiya) → Adesk'da bitta perevod; qayta yurishda tegilmaydi; jufti buzilsa bekor qilinadi. */
+    /** Sozlama o'chiq (standart): perevod juftlari avvalgidek ikki oddiy operatsiya — Adesk'da hech narsa yaratilmaydi/o'chirilmaydi. */
+    @Test
+    void transferConversionIsOffByDefault() {
+        MsMoneyDoc out = trDoc("o1", "paymentout", "02558", D5, 1_000_000_00, ORG, ACC, ORG2, "ei-tr", "");
+        MsMoneyDoc in = trDoc("i1", "paymentin", "04400", D5, 1_000_000_00, ORG2, "acc-2", ORG, "", "Перемещение собственных средств 001");
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(out, in));
+        when(ad.createTransactions(anyList())).thenReturn(Map.of("ms:o1", 7001L, "ms:i1", 7002L));
+        when(ad.transactions(any(), any())).thenReturn(List.of());
+        AdeskRun r = run(true);
+        r.account.put(ORG2 + ":acc-2", 503L);
+        svc.money(r);
+        verify(ad, never()).createTransfer(anyLong(), anyLong(), any(), any(), any());
+        verify(ad, never()).removeTransactions(anyList());
+        assertEquals(2, r.get("tx.created"));
+    }
+
+    @Test
+    void msTransferPairBecomesSingleAdeskTransfer() {
+        when(cfg.trConvert()).thenReturn(true);
+        MsMoneyDoc out = trDoc("o1", "paymentout", "02558", D5, 1_000_000_00, ORG, ACC, ORG2, "ei-tr", "");
+        MsMoneyDoc in = trDoc("i1", "paymentin", "04400", D5, 1_000_000_00, ORG2, "acc-2", ORG, "", "Перемещение собственных средств 001");
+        AdeskLink lo = link(AdeskLink.MONEY, "o1", 7001), li = link(AdeskLink.MONEY, "i1", 7002);
+        lo.setHash("old"); li.setHash("old");
+        when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(lo, li));
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(out, in));
+        String desc = "MS Исходящий платёж №02558 → Входящий платёж №04400";
+        List<AdTx> regular = List.of(
+                new AdTx(7001, 2, new BigDecimal("1000000.00"), D5, 502L, 22L, null, "MS Исходящий платёж №02558", false, false, "", "", "", null, "NSB р/с"),
+                new AdTx(7002, 1, new BigDecimal("1000000.00"), D5, 503L, 12L, null, "MS Входящий платёж №04400", false, false, "", "", "", null, "ITT р/с"));
+        List<AdTx> legs = List.of(
+                new AdTx(9001, 2, new BigDecimal("1000000.00"), D5, 502L, null, null, desc, true, false, "", "", "", null, "NSB р/с", 9002L),
+                new AdTx(9002, 1, new BigDecimal("1000000.00"), D5, 503L, null, null, desc, true, false, "", "", "", null, "ITT р/с", 9001L));
+        when(ad.transactions(any(), any())).thenReturn(regular, legs);
+
+        AdeskRun r = run(true);
+        r.account.put(ORG2 + ":acc-2", 503L);
+        svc.money(r);
+
+        verify(ad).createTransfer(502L, 503L, new BigDecimal("1000000.00"), D5, desc);
+        verify(ad).removeTransactions(List.of(7001L, 7002L));
+        verify(ad, never()).createTransactions(anyList());
+        verify(ad, never()).updateTransactions(anyList());
+        assertEquals(9001L, lo.getAdeskId());
+        assertEquals(9002L, li.getAdeskId());
+        assertTrue(AdeskSyncService.isTr(lo) && lo.getHash().equals(li.getHash()));
+        assertEquals(1, r.get("tr.created"));
+        verify(reverse).handle(same(r), eq(List.of()));
+
+        // qayta to'liq yurish: perevod joyida — hech narsa yaratilmaydi/o'chirilmaydi
+        when(ad.transactions(any(), any())).thenReturn(legs);
+        AdeskRun r2 = run(true);
+        r2.account.put(ORG2 + ":acc-2", 503L);
+        svc.money(r2);
+        verify(ad, times(1)).createTransfer(anyLong(), anyLong(), any(), any(), any());
+        verify(ad, times(1)).removeTransactions(anyList());
+        assertEquals(0, r2.get("tr.created") + r2.get("tr.dropped"));
+
+        // kirim MoySklad'dan o'chirildi: perevod Adesk'dan o'chiriladi, chiqim oddiy operatsiya bo'lib qaytadi
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(out));
+        when(ad.transactions(any(), any())).thenReturn(legs, List.of());
+        when(ad.createTransactions(anyList())).thenReturn(Map.of("ms:o1", 7100L));
+        AdeskRun r3 = run(true);
+        r3.account.put(ORG2 + ":acc-2", 503L);
+        svc.money(r3);
+        verify(ad).removeTransactions(List.of(9001L, 9002L));
+        assertEquals(1, r3.get("tr.dropped"));
+        assertEquals(7100L, lo.getAdeskId());
+        assertFalse(AdeskSyncService.isTr(lo));
+        assertEquals(AdeskLink.DELETED, li.getStatus());
+    }
+
+    @Test
+    void transferLegsNotFoundAfterCreateStopsWithoutRemovingOldOps() {
+        when(cfg.trConvert()).thenReturn(true);
+        MsMoneyDoc out = trDoc("o1", "paymentout", "02558", D5, 500_00, ORG, ACC, ORG2, "ei-tr", "");
+        MsMoneyDoc in = trDoc("i1", "paymentin", "04400", D5, 500_00, ORG2, "acc-2", ORG, "", "");
+        AdeskLink lo = link(AdeskLink.MONEY, "o1", 7001), li = link(AdeskLink.MONEY, "i1", 7002);
+        when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(lo, li));
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(out, in));
+        when(ad.transactions(any(), any())).thenReturn(List.of());
+        AdeskRun r = run(true);
+        r.account.put(ORG2 + ":acc-2", 503L);
+        svc.money(r);
+        verify(ad).createTransfer(anyLong(), anyLong(), any(), any(), any());
+        verify(ad, never()).removeTransactions(anyList());
+        assertEquals(AdeskLink.ERROR, lo.getStatus());
+        assertEquals(7001L, lo.getAdeskId(), "eski operatsiya bog'lanishi saqlanadi");
+        assertEquals(1, r.get("tr.error"));
+    }
+
     @Test
     void helpers() {
         assertEquals(2, AdeskSyncService.kindOf("Покупка основных средств"));

@@ -102,6 +102,18 @@ public class AdeskHandler {
                 audit.log(u.getId(), "ADESK_SOZLAMA", "settings", null, "reverse=1");
                 menu(s, chatId, msgId);
             }
+            case "adtc" -> {
+                if (cfg.trConvert()) {
+                    cfg.setTrConvert(false);
+                    audit.log(u.getId(), "ADESK_SOZLAMA", "settings", null, "trConvert=0");
+                    menu(s, chatId, msgId);
+                } else trConvertConfirm(chatId, msgId);
+            }
+            case "adtcy" -> {
+                cfg.setTrConvert(true);
+                audit.log(u.getId(), "ADESK_SOZLAMA", "settings", null, "trConvert=1");
+                menu(s, chatId, msgId);
+            }
             case "adm", "adme", "adms", "admr", "admc", "admy" -> {
                 if (!cfg.hasToken()) { sender.send(chatId, "❗️ Avval Adesk tokenini kiriting: 🔑 Token."); return true; }
                 try { mapCallback(u, s, cmd, arg, chatId, msgId); }
@@ -114,12 +126,14 @@ public class AdeskHandler {
                 r2.add(irow(btn("⏱ Oraliq", "a:adv:int"), btn("⚡ Adesk→MS", "a:adv:rint")));
                 r2.add(irow(btn("🕘 Hisobot vaqti", "a:adv:time"), btn("📣 Hisobot chati", "a:adv:chat")));
                 r2.add(irow(btn("🏷 Kirim statyasi", "a:adv:cin"), btn("🔗 Hisoblarni bog'lash", "a:adm:0")));
-                r2.add(irow(btn("↩️ Adesk → MoySklad", "a:adrv")));
+                r2.add(irow(btn("↩️ Adesk → MoySklad", "a:adrv"), btn("🔁 MS perevodlari", "a:adtc")));
                 r2.add(irow(btn("⬅️ Orqaga", BACK)));
                 sender.edit(chatId, msgId, "⚙️ <b>Adesk sozlamalari</b>\n\n"
                         + "⏱ Oraliq — MoySklad → Adesk sinxroni: har <b>" + cfg.intervalMin() + "</b> daqiqada\n"
                         + "⚡ Adesk→MS — Adesk'da kiritilganlarni MoySklad'ga yozish: har <b>" + cfg.reverseIntervalMin() + "</b> daqiqada"
-                        + (cfg.reverse() ? "" : " (↩️ Adesk → MoySklad o'chiq — ishlamaydi)") + "\n\nSozlamani tanlang:", inline(r2));
+                        + (cfg.reverse() ? "" : " (↩️ Adesk → MoySklad o'chiq — ishlamaydi)") + "\n"
+                        + "🔁 MS perevodlari — MoySklad'da kiritilgan perevodlar Adesk'da bitta «Перевод»: "
+                        + (cfg.trConvert() ? "<b>yoqiq</b>" : "o'chiq (ikki qator «Перемещение»)") + "\n\nSozlamani tanlang:", inline(r2));
             }
             case "ads" -> {
                 sender.send(chatId, runner.requestStop() ? "⏹ To'xtatish so'raldi — joriy qadam tugagach to'xtaydi. Bajarilgani saqlanadi."
@@ -486,6 +500,19 @@ public class AdeskHandler {
                 + "• kontragent va chiqim statyasi MoySklad'da bo'lmasa — shu nom bilan yaratiladi\n\n"
                 + "⚠️ Bu hujjatlar bot kassa hisobiga ham tushadi (MoySklad — asosiy manba). O'zgartirish va o'chirish faqat MoySklad'da qilinadi.\n\n"
                 + "Yoqilsinmi?", inline(List.of(irow(btn("✅ Ha, yoqilsin", "a:adrvy"), btn("❌ Yo'q", BACK)))));
+    }
+
+    private void trConvertConfirm(long chatId, int msgId) {
+        sender.edit(chatId, msgId, "🔁 <b>MoySklad perevodlari → Adesk «Перевод между счетами»</b>\n\n"
+                + "Yoqilsa, keyingi TO'LIQ sinxronda MoySklad'da kiritilgan har bir perevod (chiqim «Перемещение» + shu kungi kirim) "
+                + "Adesk'da bitta perevod bo'ladi, bot avval yaratgan ikki «Перемещение» qatori o'rniga.\n\n"
+                + "• MoySklad'da hech narsa o'zgarmaydi, o'chmaydi\n"
+                + "• Adesk'da hisob qoldiqlari (har kun oxiri ham) o'zgarmaydi\n"
+                + "• Adesk hisobotlarida bu summalar «Перемещение» statyasi qatorida emas, perevod sifatida ko'rinadi\n"
+                + "• siz Adesk'da qo'lda kiritgan operatsiyalarga tegilmaydi\n"
+                + "• perevod Adesk'da topilmasa — eski qatorlar o'chirilmaydi, ⚠️ Xatolar'ga yoziladi\n\n"
+                + "O'chirilsa — yangi aylantirish to'xtaydi, aylantirilganlar joyida qoladi.\n\nYoqilsinmi?",
+                inline(List.of(irow(btn("✅ Ha, yoqilsin", "a:adtcy"), btn("❌ Yo'q", BACK)))));
     }
 
     private static int idx(String arg, int size) {

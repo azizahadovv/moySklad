@@ -41,6 +41,7 @@ public class AdeskReverseService {
 
     private static final JsonNodeFactory JN = JsonNodeFactory.instance;
     private static final DateTimeFormatter MS_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter RU_DATE = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
     /** Bot o'zi yozgan operatsiya izohi: «… · MS Приходный ордер №07318» — bog'lanishi yo'qolgan bo'lsa ham MoySklad'ga qaytarilmaydi (dublikat). */
     private static final java.util.regex.Pattern BOT_MARK = java.util.regex.Pattern.compile("MS (Приходный ордер|Расходный ордер|Входящий платёж|Исходящий платёж|Приёмка|Отгрузка|Возврат[^№]*) №");
@@ -58,12 +59,13 @@ public class AdeskReverseService {
         }
         Map<String, String> expenseByName = new HashMap<>();
         r.expenseItems.forEach((id, name) -> expenseByName.put(AdeskSyncService.norm(name), id));
-        // Adesk «перевод» — ikki leg (chiqim va kirim): sana va summa bo'yicha juftlanadi, MoySklad'ga ikki hujjat bo'lib yoziladi
+        // Adesk «перевод» — ikki leg (chiqim va kirim): Adesk bergan juft id (pairedTransactionId) bo'yicha, u yo'q bo'lsa
+        // sana va summa bo'yicha juftlanadi (bir kunda bir xil summali ikki perevod adashmasin), MoySklad'ga ikki hujjat bo'lib yoziladi
         List<AdTx> outs = new ArrayList<>(transfers.stream().filter(t -> !t.income()).toList());
         List<AdTx> ins = new ArrayList<>(transfers.stream().filter(AdTx::income).toList());
         for (AdTx o : outs) {
             if (r.stopped()) return;
-            AdTx pair = ins.stream().filter(i -> i.date().equals(o.date()) && i.amount().compareTo(o.amount()) == 0).findFirst().orElse(null);
+            AdTx pair = pairOf(o, ins);
             if (pair == null) { fail(r, o, "perevodning kirim tomoni topilmadi (sana va summa bir xil bo'lishi kerak)"); continue; }
             ins.remove(pair);
             try {
@@ -91,6 +93,27 @@ public class AdeskReverseService {
                 log.warn("Adesk #{} MoySklad'ga yozilmadi: {}", t.id(), e.getMessage());
             }
         }
+    }
+
+    /** Perevod chiqim legining kirim jufti: avval Adesk juft id'si, keyin (juft id'si boshqa legga ishora qilmagan) sana + summa. */
+    static AdTx pairOf(AdTx out, List<AdTx> ins) {
+        if (out.pairedId() != null)
+            for (AdTx i : ins) if (i.id() == out.pairedId()) return i;
+        for (AdTx i : ins)
+            if ((out.pairedId() == null || i.pairedId() == null) && (i.pairedId() == null || i.pairedId() == out.id())
+                    && i.date().equals(out.date()) && i.amount().compareTo(out.amount()) == 0) return i;
+        return null;
+    }
+
+    /**
+     * MoySklad hujjat vaqti. Adesk faqat sanani beradi: bugungi operatsiya — yozilgan payt (MoySklad ro'yxatida o'z vaqtida,
+     * qo'lda kiritilgandek ko'rinadi; 2026-10-09: 12:00 da turgani uchun «yozilmayapti» deb o'ylangan), o'tgan sana — kun o'rtasi.
+     */
+    private String msMoment(java.time.LocalDate date) {
+        java.time.LocalDateTime at = date.equals(cfg.today())
+                ? java.time.LocalDateTime.now(cfg.zone()).withNano(0)
+                : date.atTime(LocalTime.NOON);
+        return ms.toMoscow(at).format(MS_TIME);
     }
 
     /**
@@ -147,7 +170,7 @@ public class AdeskReverseService {
         if (!cash) b.set("organizationAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
         b.set("agent", agent(r, t, orgId));
         b.put("sum", sum);
-        b.put("moment", ms.toMoscow(t.date().atTime(LocalTime.NOON)).format(MS_TIME));
+        b.put("moment", msMoment(t.date()));
         b.put("applicable", true);
         String cat = t.categoryName() == null ? "" : t.categoryName().trim();
         b.put("description", msDesc(t.id(), null, t.description(), t.income() && !cat.isEmpty() ? "статья: " + cat : null));
@@ -183,12 +206,14 @@ public class AdeskReverseService {
         String orgO = ko.substring(0, ko.indexOf(':')), orgI = ki.substring(0, ki.indexOf(':'));
         String nameO = r.orgs.stream().filter(o -> o.id().equals(orgO)).map(AdeskMsReader.MsOrg::name).findFirst().orElse("");
         long sum = Math.abs(out.signedTiyin());
-        String moment = ms.toMoscow(out.date().atTime(LocalTime.NOON)).format(MS_TIME);
+        String moment = msMoment(out.date());
         String expId = expenseId(r, out, cfg.catTransfer(), expenseByName);
-        String idO = postMoney(r, out, ko, orgO, orgI, sum, moment, msDesc(out.id(), "Перемещение", out.description(), null), null, expId, false);
+        // MoySklad'ning o'zida kiritilgan perevod kabi (2026-10-09, 02558/04400 bilan solishtirildi): ikkala tomonda bir xil
+        // «Перемещение собственных средств <jo'natuvchi firma> от dd.MM.yyyy», qarshi tomon hisobi (agentAccount) aniq, vaqt bir xil
+        String purpose = AdeskConfig.TRANSFER_PURPOSE + " " + nameO + " от " + out.date().format(RU_DATE);
+        String idO = postMoney(r, out, ko, orgO, ki, sum, moment, msDesc(out.id(), "Перемещение", out.description(), null), purpose, expId, false);
         try {
-            postMoney(r, in, ki, orgI, orgO, sum, moment, msDesc(in.id(), "Перемещение", in.description(), null),
-                    AdeskConfig.TRANSFER_PURPOSE + " " + nameO, null, true);
+            postMoney(r, in, ki, orgI, ko, sum, moment, msDesc(in.id(), "Перемещение", in.description(), null), purpose, null, true);
         } catch (RuntimeException e) {
             throw new IllegalStateException("chiqim yozildi (" + idO + "), kirim yozilmadi: " + e.getMessage() + " — MoySklad'da kirimni qo'lda kiriting", e);
         }
@@ -218,15 +243,21 @@ public class AdeskReverseService {
         } catch (Exception e) { return null; }
     }
 
-    private String postMoney(AdeskRun r, AdTx t, String key, String orgId, String agentOrg, long sum, String moment,
+    /** agentKey — qarshi tomon hisobi («<orgId>:<acc|CASH>»): agent shu firma; to'lov hujjatida (kassa emas) agentAccount ham qo'yiladi. */
+    private String postMoney(AdeskRun r, AdTx t, String key, String orgId, String agentKey, long sum, String moment,
                              String desc, String purpose, String expenseId, boolean income) {
         String accId = key.substring(key.indexOf(':') + 1);
         boolean cash = AdeskMsReader.CASH.equals(accId);
         String entity = income ? (cash ? "cashin" : "paymentin") : (cash ? "cashout" : "paymentout");
+        String agentOrg = agentKey.substring(0, agentKey.indexOf(':')), agentAcc = agentKey.substring(agentKey.indexOf(':') + 1);
         ObjectNode b = JN.objectNode();
         b.set("organization", meta("organization", "organization/" + orgId));
         if (!cash) b.set("organizationAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
         b.set("agent", meta("organization", "organization/" + agentOrg));
+        // MoySklad «Перемещение» tugmasidagidek: qarshi tomon bank hisobi; u kassa bo'lsa — hujjatning o'z hisobi (02588/07281)
+        if (!cash) b.set("agentAccount", AdeskMsReader.CASH.equals(agentAcc)
+                ? meta("account", "organization/" + orgId + "/accounts/" + accId)
+                : meta("account", "organization/" + agentOrg + "/accounts/" + agentAcc));
         b.put("sum", sum);
         b.put("moment", moment);
         b.put("applicable", true);

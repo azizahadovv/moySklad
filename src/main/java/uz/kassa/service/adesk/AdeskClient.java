@@ -36,9 +36,16 @@ public class AdeskClient {
     public record AdContractor(long id, String name, String phone) {}
     public record AdUnit(long id, String name, String symbol) {}
     public record AdProduct(long id, String name, String sku, int type) {}
+    /** pairedId — perevodning ikkinchi legi (Adesk «pairedTransactionId»), oddiy operatsiyada null. */
     public record AdTx(long id, int type, BigDecimal amount, LocalDate date, Long accountId, Long categoryId,
                        Long contractorId, String description, boolean transfer, boolean planned, String importedId,
-                       String categoryName, String contractorName, Long projectId, String accountName) {
+                       String categoryName, String contractorName, Long projectId, String accountName, Long pairedId) {
+        public AdTx(long id, int type, BigDecimal amount, LocalDate date, Long accountId, Long categoryId,
+                    Long contractorId, String description, boolean transfer, boolean planned, String importedId,
+                    String categoryName, String contractorName, Long projectId, String accountName) {
+            this(id, type, amount, date, accountId, categoryId, contractorId, description, transfer, planned, importedId,
+                    categoryName, contractorName, projectId, accountName, null);
+        }
         public boolean income() { return type == 1; }
         public long signedTiyin() { long t = amount.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).longValue(); return income() ? t : -t; }
     }
@@ -209,6 +216,20 @@ public class AdeskClient {
         http.postJson("transactions/remove", body);
     }
 
+    /**
+     * v1 «Перевод между счетами» (ikki hisob orasida). Javobda leg operatsiyalari id'si yo'q — chaqiruvchi ularni ro'yxatdan topadi.
+     * importedId yo'q, shuning uchun so'rov tarmoq xatosida qayta yuborilmaydi (dublikat perevod xavfi). Perevod id (0 — noma'lum).
+     */
+    public long createTransfer(long fromAccount, long toAccount, BigDecimal amount, LocalDate date, String description) {
+        Map<String, String> p = new LinkedHashMap<>();
+        p.put("amount", amount.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+        p.put("from_bank_account", String.valueOf(fromAccount));
+        p.put("to_bank_account", String.valueOf(toAccount));
+        p.put("date", date.format(ISO));
+        if (description != null && !description.isBlank()) p.put("description", cut(description, 510));
+        return http.postForm("transfer", p, false).path("transfer").path("id").asLong(0);
+    }
+
     /** Davrdagi fakt operatsiyalar (rejalashtirilganlarsiz). */
     public List<AdTx> transactions(LocalDate from, LocalDate to) {
         Map<String, String> p = new LinkedHashMap<>();
@@ -227,7 +248,7 @@ public class AdeskClient {
                 j.path("description").asText(""), j.path("isTransfer").asBoolean(false),
                 j.path("isPlanned").asBoolean(false), j.path("importedId").asText(""),
                 j.path("category").path("name").asText(""), j.path("contractor").path("name").asText(""),
-                idOf(j.path("project")), j.path("bankAccount").path("name").asText(""));
+                idOf(j.path("project")), j.path("bankAccount").path("name").asText(""), idOf(j.path("pairedTransactionId")));
     }
 
     public record AdProject(long id, String name) {}

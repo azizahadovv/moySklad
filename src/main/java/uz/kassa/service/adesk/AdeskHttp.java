@@ -54,12 +54,18 @@ public class AdeskHttp {
         return send(HttpRequest.newBuilder(URI.create(url)).GET(), url);
     }
 
-    public JsonNode postForm(String path, Map<String, String> params) {
+    public JsonNode postForm(String path, Map<String, String> params) { return postForm(path, params, true); }
+
+    /**
+     * idempotent=false — takroriy yuborish dublikat yaratishi mumkin bo'lgan so'rov (masalan perevod: importedId yo'q):
+     * faqat 429 da (so'rov bajarilmagan) qayta uriniladi, tarmoq xatosi/5xx da qayta yuborilmaydi.
+     */
+    public JsonNode postForm(String path, Map<String, String> params, boolean idempotent) {
         String url = cfg.baseUrl() + "/v1/" + path + "?api_token=" + enc(token());
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
                 .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                 .POST(HttpRequest.BodyPublishers.ofString(params == null ? "" : form(params), StandardCharsets.UTF_8));
-        return send(b, url);
+        return send(b, url, idempotent);
     }
 
     /* -------------------- v2 -------------------- */
@@ -110,7 +116,9 @@ public class AdeskHttp {
         if (wait > 0) Thread.sleep(wait);
     }
 
-    private JsonNode send(HttpRequest.Builder b, String url) {
+    private JsonNode send(HttpRequest.Builder b, String url) { return send(b, url, true); }
+
+    private JsonNode send(HttpRequest.Builder b, String url, boolean idempotent) {
         b.header("Accept", "application/json").timeout(Duration.ofSeconds(90));
         HttpRequest req = b.build();
         String shown = url.replaceAll("api_token=[^&]*", "api_token=***");
@@ -123,14 +131,14 @@ public class AdeskHttp {
                 Thread.currentThread().interrupt();
                 throw new AdeskException(0, 0, "to'xtatildi", true);
             } catch (Exception e) {
-                if (attempt < RETRIES) { pause(attempt, 0); continue; }
+                if (idempotent && attempt < RETRIES) { pause(attempt, 0); continue; }
                 throw new AdeskException(0, 0, "tarmoq xatosi: " + e.getMessage(), false);
             }
             int st = resp.statusCode();
             JsonNode j = parse(resp.body());
             int code = j == null ? 0 : j.path("code").asInt(0);
             if (st == 429 || code == 429 || st >= 500) {
-                if (attempt < RETRIES) {
+                if (attempt < RETRIES && (idempotent || st == 429 || code == 429)) {
                     long ra = resp.headers().firstValue("Retry-After").map(v -> { try { return Long.parseLong(v.trim()) * 1000; } catch (Exception e) { return 0L; } }).orElse(0L);
                     log.info("Adesk HTTP {} — kutib qayta ({}/{}): {}", st, attempt + 1, RETRIES, shown);
                     pause(attempt, ra);

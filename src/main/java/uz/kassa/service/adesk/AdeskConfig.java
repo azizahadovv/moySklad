@@ -33,6 +33,11 @@ public class AdeskConfig {
     public static final String CAT_TRANSFER = "adesk.cat.transfer";
     /** Adesk'da qo'lda kiritilgan operatsiyalarni MoySklad'ga yozish (1 — yoqiq). Standart: o'chiq. */
     public static final String REVERSE   = "adesk.reverse";
+    /**
+     * MoySklad'da kiritilgan perevodlarni (chiqim «Перемещение» + kirim, bir kunda) Adesk'da bitta «Перевод между счетами»
+     * qilish (1 — yoqiq). Standart: O'CHIQ — user talabi (2026-10-09): mavjud raqam/hujjat/hisobot o'zidan o'zgarmasin.
+     */
+    public static final String TR_CONVERT = "adesk.trConvert";
     /** Hisoblar bog'lash jadvali (JSON {msKey: adeskId, 0 — yangi yaratiladi}) va uning tasdiqlangani (1). */
     /** Adesk «проект» (operatsiyalar shu proyektga yoziladi; nom bo'yicha topiladi). «-» — proyektsiz. */
     public static final String PROJECT = "adesk.project";
@@ -132,6 +137,9 @@ public class AdeskConfig {
 
     public boolean accountsConfirmed() { return "1".equals(settings.get(ACC_CONFIRMED).orElse("0").trim()); }
     public void setReverse(boolean on) { settings.set(REVERSE, on ? "1" : "0"); }
+
+    public boolean trConvert() { return "1".equals(settings.get(TR_CONVERT).orElse("0").trim()); }
+    public void setTrConvert(boolean on) { settings.set(TR_CONVERT, on ? "1" : "0"); }
 
     public LocalTime reportTime() {
         try { return LocalTime.parse(settings.get(REPORT_TIME).orElse("21:00").trim()); }

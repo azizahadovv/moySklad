@@ -143,14 +143,15 @@ public class AdeskCheckService {
         for (AdTx t : adTx) {
             if (t.date() == null || t.date().isAfter(to) || t.planned()) continue;
             long v = Math.abs(t.signedTiyin());
-            String n = t.transfer() ? "Перевод (Adesk)" : catName.getOrDefault(t.categoryId(), t.categoryName().isBlank() ? "Статьясиз" : t.categoryName());
+            // Adesk perevodi legi — MoySklad tomonidagi kabi «Перемещение» (perevod MoySklad'da chiqim «Перемещение» + kirim bo'lib turadi)
+            String n = t.transfer() ? cfg.catTransfer() : catName.getOrDefault(t.categoryId(), t.categoryName().isBlank() ? "Статьясиз" : t.categoryName());
             String c = (t.income() ? "Кирим · " : "Чиқим · ") + n;
             byCat.computeIfAbsent(c, k -> new long[2])[1] += v;
             if (t.income()) adIn += v; else adOut += v;
             if (!moneyIds.contains(t.id())) {
                 manual++; manualSum += t.signedTiyin();
                 manualRows.add(new Object[]{t.id(), t.date() == null ? "" : t.date().format(DF), t.income() ? "кирим" : "чиқим",
-                        som(Math.abs(t.signedTiyin())), n, t.contractorName(), t.description()});
+                        som(Math.abs(t.signedTiyin())), t.transfer() ? "Перевод (Adesk)" : n, t.contractorName(), t.description()});
             }
         }
         List<Object[]> catRows = new ArrayList<>();

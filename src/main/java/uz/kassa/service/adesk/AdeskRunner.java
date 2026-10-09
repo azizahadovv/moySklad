@@ -227,6 +227,8 @@ public class AdeskRunner {
         part(sb, r, "Tovar/xizmat", "pr.created", "yangi", "pr.batch", "boshlang'ich partiya", "pr.linked", "bog'landi", "pr.updated", "yangilandi", "pr.error", "xato");
         part(sb, r, "Operatsiyalar", "tx.created", "yangi", "tx.updated", "yangilandi", "tx.relinked", "qayta bog'landi", "tx.removed", "o'chirildi",
                 "tx.restored", "tiklandi", "tx.fixed", "to'g'rilandi", "tx.dupRemoved", "dublikat o'chirildi", "tx.error", "xato");
+        part(sb, r, "Perevodlar", "tr.created", "yangi", "tr.relinked", "qayta bog'landi", "tr.oldRemoved", "eski qator o'chirildi",
+                "tr.dropped", "bekor qilindi", "tr.error", "xato");
         part(sb, r, "Otgruzka/priyomka", "cm.created", "yangi", "cm.updated", "yangilandi", "cm.removed", "o'chirildi", "cm.restored", "tiklandi", "cm.error", "xato");
         part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.transferToMs", "perevod", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma");
         boolean any = sb.indexOf("•") >= 0;
