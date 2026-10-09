@@ -161,7 +161,7 @@ public class AdeskRunner {
             stop.set(false);
             AdeskRun r = new AdeskRun(false, LocalDateTime.now(cfg.zone()), stop);
             sync.reverseOnly(r);
-            if (r.get("ad.toMs") + r.get("tx.dupRemoved") > 0) {
+            if (r.get("ad.toMs") + r.get("tx.dupRemoved") + r.get("ad.edited") + r.get("ad.deleted") + r.get("ad.unposted") > 0) {
                 cfg.set(AdeskConfig.LAST_RUN, summary(r));
                 log.info("Adesk → MoySklad: {}", summary(r).replace('\n', ' '));
             }
@@ -230,7 +230,8 @@ public class AdeskRunner {
         part(sb, r, "Perevodlar", "tr.created", "yangi", "tr.relinked", "qayta bog'landi", "tr.oldRemoved", "eski qator o'chirildi",
                 "tr.dropped", "bekor qilindi", "tr.error", "xato");
         part(sb, r, "Otgruzka/priyomka", "cm.created", "yangi", "cm.updated", "yangilandi", "cm.removed", "o'chirildi", "cm.restored", "tiklandi", "cm.error", "xato");
-        part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.transferToMs", "perevod", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma");
+        part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.transferToMs", "perevod", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma",
+                "ad.edited", "MoySklad'da tahrirlandi", "ad.deleted", "MoySklad korzinasiga", "ad.unposted", "проведение olib tashlandi");
         boolean any = sb.indexOf("•") >= 0;
         if (!any && r.fatal == null) sb.append("O'zgarish yo'q — hammasi bir xil.\n");
         synchronized (r.notes) {

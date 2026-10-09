@@ -283,7 +283,7 @@ class AdeskEndToEndLiveTest {
             AdeskHttp http = new AdeskHttp(cfg);
             AdeskClient ad = new AdeskClient(http);
             AdeskLinkRepo repo = memRepo();
-            AdeskReverseService reverse = new AdeskReverseService(cfg, ms, repo, props);
+            AdeskReverseService reverse = new AdeskReverseService(cfg, ms, repo, props, ad);
             AdeskSyncService sync = new AdeskSyncService(cfg, ad, msr, repo, reverse);
             AdeskCheckService check = new AdeskCheckService(cfg, ad, msr, repo);
             AdeskRunner runner = new AdeskRunner(cfg, sync, check, null, null, null, null);

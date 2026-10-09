@@ -230,6 +230,22 @@ public class AdeskClient {
         return http.postForm("transfer", p, false).path("transfer").path("id").asLong(0);
     }
 
+    /**
+     * Bitta operatsiya id bo'yicha. Adesk o'chirilganiga aniq «Не удается найти запрашиваемый объект» (success:false) beradi —
+     * shunda empty. Boshqa har qanday xato — exception (o'chirilgan deb hisoblanmaydi).
+     */
+    public Optional<AdTx> transaction(long id) {
+        try {
+            JsonNode t = http.get("transaction/" + id, Map.of()).path("transaction");
+            if (t.isMissingNode() || t.isNull() || t.path("id").asLong(0) != id)
+                throw new IllegalStateException("Adesk javobida operatsiya #" + id + " yo'q");
+            return Optional.of(tx(t));
+        } catch (AdeskHttp.AdeskException e) {
+            if (!e.fatal && e.getMessage() != null && e.getMessage().contains("Не удается найти")) return Optional.empty();
+            throw e;
+        }
+    }
+
     /** Davrdagi fakt operatsiyalar (rejalashtirilganlarsiz). */
     public List<AdTx> transactions(LocalDate from, LocalDate to) {
         Map<String, String> p = new LinkedHashMap<>();
@@ -257,10 +273,6 @@ public class AdeskClient {
     public List<AdProject> projects() {
         return listAll("projects", "projects", Map.of("status", "all"), false,
                 j -> new AdProject(j.path("id").asLong(), j.path("name").asText("")));
-    }
-
-    public AdTx transaction(long id) {
-        return tx(http.get("transaction/" + id, Map.of()).path("transaction"));
     }
 
     /* ==================== majburiyatlar (начисления / отгрузки) ==================== */

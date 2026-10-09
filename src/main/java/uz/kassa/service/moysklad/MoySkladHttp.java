@@ -181,6 +181,12 @@ public class MoySkladHttp {
     }
 
 
+    /** PUT JSON — mavjud obyektni o'zgartirish (📒 Adesk'da tahrirlangan operatsiya). Xatoda exception. */
+    JsonNode putJson(String url, String jsonBody) {
+        return request("PUT", url, jsonBody, false);
+    }
+
+
     /* ==================== TEZLIK CHEGARASI (2026-09-18) ====================
      * MoySklad limiti: 45 so'rov / 3 soniya, 5 parallel. Bot bir necha jadval ishi (nazorat, sinxron, ombor,
      * Click hisobot) bir vaqtda so'rov yuborib 429 «bo'roni»ga tushardi — bitta 429 dan keyin qolgan hamma
@@ -217,15 +223,20 @@ public class MoySkladHttp {
     }
 
     private JsonNode request(String url, String postBody, boolean nullOn404) {
+        return request(postBody == null ? "GET" : "POST", url, postBody, nullOn404);
+    }
+
+    private JsonNode request(String method, String url, String reqBody, boolean nullOn404) {
+        boolean get = "GET".equals(method);
         try {
             // MoySklad API Accept-Encoding: gzip bo'lmasa 415 qaytaradi
             HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
                     .header("Authorization", "Bearer " + currentToken())
                     .header("Accept", "application/json;charset=utf-8")
                     .header("Accept-Encoding", "gzip");
-            if (postBody == null) b.GET();
+            if (get) b.GET();
             else b.header("Content-Type", "application/json")
-                  .POST(HttpRequest.BodyPublishers.ofString(postBody, StandardCharsets.UTF_8));
+                  .method(method, HttpRequest.BodyPublishers.ofString(reqBody == null ? "" : reqBody, StandardCharsets.UTF_8));
             HttpRequest req = b.build();
             HttpResponse<byte[]> resp;
             int netTry = 0;
@@ -236,7 +247,7 @@ public class MoySkladHttp {
                 catch (java.io.IOException io) {
                     // 2026-10-06: «Connection reset» bir soatlik Adesk yuklashini butunlay to'xtatardi. GET o'qish — takrorlash xavfsiz:
                     // 2 martagacha qayta. POST qaytarilmaydi (yaratish so'rovi serverga yetgan bo'lsa dublikat bo'ladi).
-                    if (postBody != null || netTry >= 2) throw io;
+                    if (!get || netTry >= 2) throw io;
                     netTry++;
                     log.info("MoySklad tarmoq xatosi ({}) — qayta {}/2: {}", io.getMessage(), netTry, url);
                     Thread.sleep(1000L * netTry * netTry);
@@ -260,7 +271,7 @@ public class MoySkladHttp {
             if (resp.statusCode() != 200)
                 throw new IllegalStateException("MoySklad HTTP " + resp.statusCode() + ": "
                         + (body.length() > 200 ? body.substring(0, 200) : body));
-            return om.readTree(body);
+            return body.isBlank() ? om.createObjectNode() : om.readTree(body);   // korzinaga o'tkazish — bo'sh javob
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {

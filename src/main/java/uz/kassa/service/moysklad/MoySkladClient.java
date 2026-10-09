@@ -842,5 +842,15 @@ public class MoySkladClient {
         return api.postJson(props.getMoysklad().getBaseUrl() + "/" + pathQuery, jsonBody);
     }
 
+    /** 📒 Adesk'da tahrirlangan operatsiya: mavjud hujjatni o'zgartirish (PUT, faqat yuborilgan maydonlar). 401/403 — null. */
+    public JsonNode putEntity(String pathQuery, String jsonBody) {
+        return api.putJson(props.getMoysklad().getBaseUrl() + "/" + pathQuery, jsonBody);
+    }
+
+    /** 📒 Adesk'da o'chirilgan operatsiya: hujjat MoySklad «Корзина» siga o'tadi (u yerdan qayta tiklash mumkin). */
+    public void trashEntity(String entity, String id) {
+        api.postJson(props.getMoysklad().getBaseUrl() + "/entity/" + entity + "/" + id + "/trash", "");
+    }
+
 
 }

@@ -688,6 +688,7 @@ public class AdeskSyncService {
     private void reverseRecent(AdeskRun r, Map<String, AdeskLink> L, LocalDate after) {
         LocalDate today = cfg.today();
         List<AdTx> txs = ad.transactions(today.minusDays(7), today);
+        reverse.syncEdits(r, txs, today.minusDays(7), today);   // Adesk'da tahrirlangan/o'chirilgan → MoySklad (qo'lda ro'yxatidan OLDIN)
         Set<Long> linkedIds = new HashSet<>();
         for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
         List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())
@@ -1140,6 +1141,7 @@ public class AdeskSyncService {
         for (TxWant w : recreate) { L.get(w.d().id()).setAdeskId(null); }
         createTx(r, recreate, "tx.restored");
         updateTx(r, fix, "tx.fixed");
+        if (!r.stopped()) reverse.syncEdits(r, txs, from, to);   // Adesk'da tahrirlangan/o'chirilgan (origin AD) → MoySklad
         Set<Long> linkedIds = new HashSet<>();
         for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
         List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())).toList();
