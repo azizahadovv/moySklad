@@ -635,6 +635,19 @@ public class AdeskSyncService {
                 else if (l != null && ERROR.equals(l.getStatus())) { l.setStatus(SKIP); save(r, l); }   // xatoli edi, endi o'tkazilmagan — ro'yxatdan chiqadi
                 continue;
             }
+            // MoySklad hujjati Adesk'dan yozilgan («[Adesk #N] …» izohi): Adesk'da qayta YARATILMAYDI, bog'lanishi N ga tiklanadi.
+            // 2026-10-09: 02625/04496 Adesk'ka qaytib nusxa bo'lib tushgan edi (144232163/64) — perevod ikki marta ko'ringan.
+            Long fromAd = adeskOrigin(d);
+            if (fromAd != null) {
+                if (l == null || !fromAd.equals(l.getAdeskId()) || !FROM_AD.equals(l.getOrigin()) || !OK.equals(l.getStatus())) {
+                    if (l == null) l = AdeskLink.builder().kind(MONEY).msKey(d.id()).build();
+                    l.setAdeskId(fromAd); l.setOrigin(FROM_AD); l.setStatus(OK); l.setError(null); l.setName("Adesk #" + fromAd);
+                    l.setMsType(d.entity()); l.setDocDate(d.date()); l.setSumTiyin(d.signedTiyin()); l.setAccountKey(d.accountKey());
+                    save(r, l);
+                    r.inc("tx.adLinked");
+                }
+                continue;
+            }
             // Adesk'da kiritilib MoySklad'ga yozilgan hujjat (origin AD): Adesk — manba, qayta yangilanmaydi
             // (perevod legi Adesk'da «Нельзя редактировать операцию, являющуюся частичкой перевода» xatosini beradi)
             if (l != null && FROM_AD.equals(l.getOrigin()) && linked(l)) {
@@ -674,7 +687,53 @@ public class AdeskSyncService {
         for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
         List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())
                 && t.date() != null && (after == null || t.date().isAfter(after))).toList();
+        manual = dropBotDupes(r, manual);
         if (!manual.isEmpty()) reverse.handle(r, manual);
+    }
+
+    /**
+     * Tezkor Adesk → MoySklad (alohida oraliq, standart 2 daqiqa): to'liq sinxronni kutmasdan oxirgi 7 kunda Adesk'da
+     * qo'lda kiritilgan kirim/chiqim/perevodlar MoySklad'ga yoziladi. Faqat bog'lanishlar (DB) + 2 ta MoySklad so'rovi.
+     */
+    public void reverseOnly(AdeskRun r) {
+        r.stage = "Adesk → MoySklad";
+        r.orgs = msr.orgs();
+        r.expenseItems = msr.expenseItems();
+        for (AdeskLink l : links(r, ACCOUNT).values())
+            if (linked(l)) { r.account.put(l.getMsKey(), l.getAdeskId()); r.accountByAd.put(l.getAdeskId(), l.getMsKey()); }
+        reverseRecent(r, links(r, MONEY), null);
+        r.stage = "tugadi";
+    }
+
+    /** MoySklad izohidagi «[Adesk #N]» belgisi — hujjat Adesk'dan yozilgan (izohning istalgan joyida: eski hujjatlarda oxirida). */
+    private static final java.util.regex.Pattern AD_MARK = java.util.regex.Pattern.compile("\\[Adesk #(\\d+)");
+    /** Bot dublikati: Adesk'dan yozilgan MoySklad hujjatining Adesk'ka qaytgan nusxasi («[Adesk #N] … · MS … №…»). */
+    private static final java.util.regex.Pattern DUP_MARK = java.util.regex.Pattern.compile("\\[Adesk #\\d+.* · MS ");
+
+    static Long adeskOrigin(MsMoneyDoc d) {
+        java.util.regex.Matcher m = AD_MARK.matcher(d.description() == null ? "" : d.description().trim());
+        return m.find() ? Long.parseLong(m.group(1)) : null;
+    }
+
+    /** Bog'lanmagan Adesk operatsiyalaridan bot dublikatlarini Adesk'dan o'chiradi, qolganini qaytaradi. */
+    private List<AdTx> dropBotDupes(AdeskRun r, List<AdTx> manual) {
+        List<Long> dupes = new ArrayList<>();
+        List<AdTx> rest = new ArrayList<>();
+        for (AdTx t : manual) {
+            if (t.description() != null && DUP_MARK.matcher(t.description().trim()).find()) dupes.add(t.id());
+            else rest.add(t);
+        }
+        if (!dupes.isEmpty()) {
+            try {
+                ad.removeTransactions(dupes);
+                r.inc("tx.dupRemoved", dupes.size());
+                log.info("Adesk: bot dublikatlari o'chirildi {}", dupes);
+            } catch (AdeskException e) {
+                if (e.fatal) throw e;
+                r.note("Adesk'dagi bot dublikatlari o'chirilmadi (" + dupes + ") — " + e.getMessage());
+            }
+        }
+        return rest;
     }
 
     private TxWant want(AdeskRun r, MsMoneyDoc d, AdeskLink l) {
@@ -854,6 +913,7 @@ public class AdeskSyncService {
         Set<Long> linkedIds = new HashSet<>();
         for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
         List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())).toList();
+        manual = dropBotDupes(r, manual);
         if (!r.stopped()) reverse.handle(r, manual);
     }
 

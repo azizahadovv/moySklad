@@ -167,8 +167,8 @@ class AdeskSyncServiceTest {
         when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(l1, l2));
         when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(changed));
         when(ad.transactions(any(), any())).thenReturn(List.of(
-                new AdTx(7001, 1, new BigDecimal("200000.00"), LocalDate.of(2026, 9, 5), 501L, 11L, null, "", false, false, "", "", "", null),
-                new AdTx(8888, 2, new BigDecimal("50.00"), LocalDate.of(2026, 9, 6), 501L, 21L, null, "qo'lda", false, false, "", "Зарплата", "", null)));
+                new AdTx(7001, 1, new BigDecimal("200000.00"), LocalDate.of(2026, 9, 5), 501L, 11L, null, "", false, false, "", "", "", null, "NSB р/с"),
+                new AdTx(8888, 2, new BigDecimal("50.00"), LocalDate.of(2026, 9, 6), 501L, 21L, null, "qo'lda", false, false, "", "Зарплата", "", null, "NSB р/с")));
 
         AdeskRun r = run(true);
         svc.money(r);
@@ -204,7 +204,7 @@ class AdeskSyncServiceTest {
         when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(l));
         // Adesk'da kimdir summani o'zgartirgan
         when(ad.transactions(any(), any())).thenReturn(List.of(
-                new AdTx(7001, 2, new BigDecimal("999.00"), LocalDate.of(2026, 9, 5), 501L, 21L, null, "", false, false, "", "", "", null)));
+                new AdTx(7001, 2, new BigDecimal("999.00"), LocalDate.of(2026, 9, 5), 501L, 21L, null, "", false, false, "", "", "", null, "NSB р/с")));
         AdeskRun r = run(true);
         svc.money(r);
         verify(ad, times(1)).updateTransactions(anyList());
@@ -382,6 +382,34 @@ class AdeskSyncServiceTest {
         assertFalse(uz.kassa.bot.handlers.AdeskHandler.isButton("30.09.2026"));
         assertFalse(uz.kassa.bot.handlers.AdeskHandler.isButton("Выручка"));
         assertFalse(uz.kassa.bot.handlers.AdeskHandler.isButton("-"));
+    }
+
+    @Test
+    void docWrittenFromAdeskIsNotCopiedBackAndBotDuplicatesAreRemoved() {
+        MsMoneyDoc fromAd = new MsMoneyDoc("m1", "paymentout", "02625", LocalDate.of(2026, 9, 8), LocalDateTime.of(2026, 9, 8, 10, 0),
+                1_000_000_00L, 1_000_000_00L, "", 1, ORG, ORG + ":" + ACC, ORG2, "organization", "ei-tr", "[Adesk #555] Перемещение", "", true);
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(fromAd));
+        when(ad.transactions(any(), any())).thenReturn(List.of(
+                new AdTx(555, 2, new BigDecimal("1000000.00"), LocalDate.of(2026, 9, 8), 502L, null, null, "1", true, false, "", "", "", null, "NSB р/с"),
+                new AdTx(777, 2, new BigDecimal("1000000.00"), LocalDate.of(2026, 9, 8), 502L, 22L, null,
+                        "[Adesk #555] Перемещение · MS Исходящий платёж №02625", false, false, "", "Перемещение", "", null, "NSB р/с")));
+        AdeskRun r = run(true);
+        svc.money(r);
+        verify(ad, never()).createTransactions(anyList());
+        verify(ad, never()).updateTransactions(anyList());
+        verify(ad).removeTransactions(List.of(777L));
+        AdeskLink l = saved.stream().filter(x -> x.getMsKey().equals("m1")).reduce((a, b) -> b).orElseThrow();
+        assertEquals(555L, l.getAdeskId());
+        assertEquals(AdeskLink.FROM_AD, l.getOrigin());
+        assertEquals(1, r.get("tx.dupRemoved"));
+
+        // eski format (belgi oxirida) ham taniladi; yangi izohda foydalanuvchi matni saqlanadi
+        MsMoneyDoc old = new MsMoneyDoc("m2", "cashin", "07400", LocalDate.of(2026, 10, 8), null, 100_00L, 100_00L, "", 1, ORG,
+                ORG + ":CASH", ORG, "organization", "", "qo'lda yozildi [Adesk #888 · статья: Выручка]", "", true);
+        assertEquals(888L, AdeskSyncService.adeskOrigin(old));
+        assertEquals("[Adesk #144230678] Перемещение · 1", AdeskReverseService.msDesc(144230678L, "Перемещение", "1", null));
+        assertEquals("[Adesk #5] Перемещение", AdeskReverseService.msDesc(5L, "Перемещение", " ", null));
+        assertEquals("[Adesk #6] ijara · статья: Выручка", AdeskReverseService.msDesc(6L, null, "ijara", "статья: Выручка"));
     }
 
     @Test

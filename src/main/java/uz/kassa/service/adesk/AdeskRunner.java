@@ -54,6 +54,8 @@ public class AdeskRunner {
     private final AtomicBoolean stop = new AtomicBoolean(false);
     private volatile AdeskRun current;
     private volatile long lastIncAt = 0;
+    /** Oxirgi tezkor Adesk → MoySklad tekshiruvi (ms). */
+    private volatile long lastRevAt = 0;
     private volatile String fatalSentKey = "";
 
     @PostConstruct
@@ -72,7 +74,8 @@ public class AdeskRunner {
                 doRun(true, null, true);
                 return;
             }
-            if (System.currentTimeMillis() - lastIncAt >= cfg.intervalMin() * 60_000L) doRun(false, null, false);
+            if (System.currentTimeMillis() - lastIncAt >= cfg.intervalMin() * 60_000L) { doRun(false, null, false); return; }
+            if (cfg.reverse() && System.currentTimeMillis() - lastRevAt >= cfg.reverseIntervalMin() * 60_000L) doReverse();
         } catch (Throwable t) {
             log.warn("Adesk tick: {}", t.toString());
         }
@@ -151,6 +154,28 @@ public class AdeskRunner {
         }
     }
 
+    /** Tezkor Adesk → MoySklad: faqat qo'lda kiritilganlar; natija faqat biror narsa yozilgan/tozalangan bo'lsa saqlanadi. */
+    private void doReverse() {
+        if (!busy.compareAndSet(false, true)) return;
+        try {
+            stop.set(false);
+            AdeskRun r = new AdeskRun(false, LocalDateTime.now(cfg.zone()), stop);
+            sync.reverseOnly(r);
+            if (r.get("ad.toMs") + r.get("tx.dupRemoved") > 0) {
+                cfg.set(AdeskConfig.LAST_RUN, summary(r));
+                log.info("Adesk → MoySklad: {}", summary(r).replace('\n', ' '));
+            }
+        } catch (AdeskException e) {
+            if (e.fatal) notifyFatal(e.getMessage());
+            log.warn("Adesk → MoySklad to'xtadi: {}", e.getMessage());
+        } catch (Exception e) {
+            log.warn("Adesk → MoySklad: {}", e.toString());
+        } finally {
+            lastRevAt = System.currentTimeMillis();
+            busy.set(false);
+        }
+    }
+
     /** Solishtirish natijasi: matn + Excel. auto — kunlik hisobot (🔕 kaliti hisobga olinadi). */
     private void sendCheck(List<Long> chats, boolean auto) {
         AdeskCheckService.Result res = check.check();
@@ -201,9 +226,9 @@ public class AdeskRunner {
         part(sb, r, "Kontragentlar", "ct.created", "yangi", "ct.linked", "bog'landi", "ct.updated", "yangilandi", "ct.error", "xato");
         part(sb, r, "Tovar/xizmat", "pr.created", "yangi", "pr.batch", "boshlang'ich partiya", "pr.linked", "bog'landi", "pr.updated", "yangilandi", "pr.error", "xato");
         part(sb, r, "Operatsiyalar", "tx.created", "yangi", "tx.updated", "yangilandi", "tx.relinked", "qayta bog'landi", "tx.removed", "o'chirildi",
-                "tx.restored", "tiklandi", "tx.fixed", "to'g'rilandi", "tx.error", "xato");
+                "tx.restored", "tiklandi", "tx.fixed", "to'g'rilandi", "tx.dupRemoved", "dublikat o'chirildi", "tx.error", "xato");
         part(sb, r, "Otgruzka/priyomka", "cm.created", "yangi", "cm.updated", "yangilandi", "cm.removed", "o'chirildi", "cm.restored", "tiklandi", "cm.error", "xato");
-        part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma");
+        part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.transferToMs", "perevod", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma");
         boolean any = sb.indexOf("•") >= 0;
         if (!any && r.fatal == null) sb.append("O'zgarish yo'q — hammasi bir xil.\n");
         synchronized (r.notes) {

@@ -14,7 +14,9 @@ import java.time.LocalDate;
 public class AdeskLink {
 
     public static final String ORG = "ORG", ACCOUNT = "ACCOUNT", CATEGORY = "CATEGORY", CONTRACTOR = "CONTRACTOR",
-            EMPLOYEE = "EMPLOYEE", ORGC = "ORGC", PRODUCT = "PRODUCT", MONEY = "MONEY", COMMIT = "COMMIT";
+            EMPLOYEE = "EMPLOYEE", ORGC = "ORGC", PRODUCT = "PRODUCT", MONEY = "MONEY", COMMIT = "COMMIT",
+            /** Adesk → MoySklad yozilmagan operatsiya (kalit «ad:<Adesk id>») — ⚠️ Xatolar ro'yxatida sababi bilan ko'rinadi. */
+            ADESK = "ADESK";
     public static final String OK = "OK", ERROR = "ERROR", DELETED = "DELETED", SKIP = "SKIP";
     public static final String FROM_MS = "MS", FROM_AD = "AD";
 

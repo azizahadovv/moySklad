@@ -38,7 +38,7 @@ public class AdeskClient {
     public record AdProduct(long id, String name, String sku, int type) {}
     public record AdTx(long id, int type, BigDecimal amount, LocalDate date, Long accountId, Long categoryId,
                        Long contractorId, String description, boolean transfer, boolean planned, String importedId,
-                       String categoryName, String contractorName, Long projectId) {
+                       String categoryName, String contractorName, Long projectId, String accountName) {
         public boolean income() { return type == 1; }
         public long signedTiyin() { long t = amount.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).longValue(); return income() ? t : -t; }
     }
@@ -227,7 +227,7 @@ public class AdeskClient {
                 j.path("description").asText(""), j.path("isTransfer").asBoolean(false),
                 j.path("isPlanned").asBoolean(false), j.path("importedId").asText(""),
                 j.path("category").path("name").asText(""), j.path("contractor").path("name").asText(""),
-                idOf(j.path("project")));
+                idOf(j.path("project")), j.path("bankAccount").path("name").asText(""));
     }
 
     public record AdProject(long id, String name) {}

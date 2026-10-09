@@ -64,37 +64,77 @@ public class AdeskReverseService {
         for (AdTx o : outs) {
             if (r.stopped()) return;
             AdTx pair = ins.stream().filter(i -> i.date().equals(o.date()) && i.amount().compareTo(o.amount()) == 0).findFirst().orElse(null);
-            if (pair == null) { r.note("Adesk o'tkazmasi #" + o.id() + ": kirim legi topilmadi — yozilmadi"); r.inc("ad.toMsError"); continue; }
+            if (pair == null) { fail(r, o, "perevodning kirim tomoni topilmadi (sana va summa bir xil bo'lishi kerak)"); continue; }
             ins.remove(pair);
             try {
                 createTransferPair(r, o, pair, expenseByName);
                 r.inc("ad.toMs", 2);
                 r.inc("ad.transferToMs");
+                cleared(o);
+                cleared(pair);
             } catch (Exception e) {
-                r.inc("ad.toMsError");
-                r.note("Adesk o'tkazmasi #" + o.id() + " MoySklad'ga yozilmadi — " + e.getMessage());
+                fail(r, o, e.getMessage());
                 log.warn("Adesk o'tkazma #{} yozilmadi: {}", o.id(), e.getMessage());
             }
         }
-        for (AdTx i : ins) { r.note("Adesk o'tkazmasi #" + i.id() + ": chiqim legi topilmadi — yozilmadi"); r.inc("ad.toMsError"); }
+        for (AdTx i : ins) fail(r, i, "perevodning chiqim tomoni topilmadi (sana va summa bir xil bo'lishi kerak)");
         for (AdTx t : txs) {
             if (r.stopped()) return;
             r.progress = "Adesk → MoySklad #" + t.id();
             try {
                 String msId = createInMs(r, t, expenseByName);
                 r.inc("ad.toMs");
+                cleared(t);
                 log.info("Adesk #{} MoySklad'ga yozildi: {}", t.id(), msId);
             } catch (Exception e) {
-                r.inc("ad.toMsError");
-                r.note("Adesk #" + t.id() + " MoySklad'ga yozilmadi — " + e.getMessage());
+                fail(r, t, e.getMessage());
                 log.warn("Adesk #{} MoySklad'ga yozilmadi: {}", t.id(), e.getMessage());
             }
         }
     }
 
+    /**
+     * MoySklad izohi: «[Adesk #N] <shablon> · <Adesk'da yozilgan izoh> · <qo'shimcha>». Belgi doim boshida — hujjat Adesk'dan
+     * kelganini sinxron shundan taniydi (Adesk'ka qayta ko'chirilmaydi). Foydalanuvchi izohi yo'qolmaydi (2026-10-09: perevodda
+     * Adesk izohi «1» tushib qolgan edi).
+     */
+    static String msDesc(long adeskId, String head, String userText, String extra) {
+        List<String> parts = new ArrayList<>();
+        if (head != null && !head.isBlank()) parts.add(head);
+        if (userText != null && !userText.isBlank()) parts.add(userText.trim().replaceAll("\\s+", " "));
+        if (extra != null && !extra.isBlank()) parts.add(extra);
+        String s = "[Adesk #" + adeskId + "]" + (parts.isEmpty() ? "" : " " + String.join(" · ", parts));
+        return s.length() > 4000 ? s.substring(0, 4000) : s;
+    }
+
+    /** Yozilmagan operatsiya ⚠️ Xatolar ro'yxatiga (ADESK turi, «ad:<id>») — sababi bilan; keyingi urinishda yangilanadi. */
+    private void fail(AdeskRun r, AdTx t, String msg) {
+        r.inc("ad.toMsError");
+        AdeskLink l = repo.findByKindAndMsKey(ADESK, "ad:" + t.id())
+                .orElse(AdeskLink.builder().kind(ADESK).msKey("ad:" + t.id()).build());
+        l.setAdeskId(t.id());
+        l.setStatus(ERROR);
+        l.setError(msg);
+        l.setName((t.transfer() ? "Перевод" : t.income() ? "Кирим" : "Чиқим") + " · " + (t.accountName() == null ? "" : t.accountName()));
+        l.setDocDate(t.date());
+        l.setSumTiyin(t.signedTiyin());
+        l.setUpdatedAt(Instant.now());
+        repo.save(l);
+    }
+
+    /** Muvaffaqiyatli yozildi — oldingi xato yozuvi ro'yxatdan chiqadi. */
+    private void cleared(AdTx t) {
+        repo.findByKindAndMsKey(ADESK, "ad:" + t.id()).ifPresent(l -> {
+            l.setStatus(SKIP);
+            l.setError(null);
+            l.setUpdatedAt(Instant.now());
+            repo.save(l);
+        });
+    }
+
     private String createInMs(AdeskRun r, AdTx t, Map<String, String> expenseByName) {
         String key = t.accountId() == null ? null : r.accountByAd.get(t.accountId());
-        if (key == null) throw new IllegalStateException("hisob MoySklad hisobi bilan bog'lanmagan");
+        if (key == null) throw new IllegalStateException("«" + t.accountName() + "» hisobi MoySklad hisobiga bog'lanmagan — ⚙️ Sozlamalar → 🔗 Hisoblarni bog'lash");
         String orgId = key.substring(0, key.indexOf(':'));
         String accId = key.substring(key.indexOf(':') + 1);
         boolean cash = AdeskMsReader.CASH.equals(accId);
@@ -110,9 +150,7 @@ public class AdeskReverseService {
         b.put("moment", ms.toMoscow(t.date().atTime(LocalTime.NOON)).format(MS_TIME));
         b.put("applicable", true);
         String cat = t.categoryName() == null ? "" : t.categoryName().trim();
-        String desc = (t.description() == null ? "" : t.description().trim());
-        desc = (desc.isEmpty() ? "" : desc + " ") + "[Adesk #" + t.id() + (t.income() && !cat.isEmpty() ? " · статья: " + cat : "") + "]";
-        b.put("description", desc);
+        b.put("description", msDesc(t.id(), null, t.description(), t.income() && !cat.isEmpty() ? "статья: " + cat : null));
         ObjectNode st = stateMeta(entity, t.income() && AdeskSyncService.norm(cat).equals(AdeskSyncService.norm(cfg.catTransfer())));
         if (st != null) b.set("state", st);
         if (!t.income()) b.set("expenseItem", meta("expenseitem", "expenseitem/" + expenseId(r, t, cat, expenseByName)));
@@ -139,15 +177,17 @@ public class AdeskReverseService {
     private void createTransferPair(AdeskRun r, AdTx out, AdTx in, Map<String, String> expenseByName) {
         String ko = out.accountId() == null ? null : r.accountByAd.get(out.accountId());
         String ki = in.accountId() == null ? null : r.accountByAd.get(in.accountId());
-        if (ko == null || ki == null) throw new IllegalStateException("hisoblardan biri MoySklad hisobi bilan bog'lanmagan");
+        if (ko == null || ki == null)
+            throw new IllegalStateException("«" + (ko == null ? out.accountName() : in.accountName())
+                    + "» hisobi MoySklad hisobiga bog'lanmagan — ⚙️ Sozlamalar → 🔗 Hisoblarni bog'lash");
         String orgO = ko.substring(0, ko.indexOf(':')), orgI = ki.substring(0, ki.indexOf(':'));
         String nameO = r.orgs.stream().filter(o -> o.id().equals(orgO)).map(AdeskMsReader.MsOrg::name).findFirst().orElse("");
         long sum = Math.abs(out.signedTiyin());
         String moment = ms.toMoscow(out.date().atTime(LocalTime.NOON)).format(MS_TIME);
         String expId = expenseId(r, out, cfg.catTransfer(), expenseByName);
-        String idO = postMoney(r, out, ko, orgO, orgI, sum, moment, "[Adesk #" + out.id() + "] Перемещение", null, expId, false);
+        String idO = postMoney(r, out, ko, orgO, orgI, sum, moment, msDesc(out.id(), "Перемещение", out.description(), null), null, expId, false);
         try {
-            postMoney(r, in, ki, orgI, orgO, sum, moment, "[Adesk #" + in.id() + "] Перемещение",
+            postMoney(r, in, ki, orgI, orgO, sum, moment, msDesc(in.id(), "Перемещение", in.description(), null),
                     AdeskConfig.TRANSFER_PURPOSE + " " + nameO, null, true);
         } catch (RuntimeException e) {
             throw new IllegalStateException("chiqim yozildi (" + idO + "), kirim yozilmadi: " + e.getMessage() + " — MoySklad'da kirimni qo'lda kiriting", e);

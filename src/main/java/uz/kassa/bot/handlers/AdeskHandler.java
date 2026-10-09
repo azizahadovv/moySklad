@@ -111,11 +111,15 @@ public class AdeskHandler {
                 List<List<InlineKeyboardButton>> r2 = new ArrayList<>();
                 r2.add(irow(btn("🔑 Token", "a:adv:tok"), btn("🏢 Ombor firmasi", "a:ado")));
                 r2.add(irow(btn("📅 Davr boshi", "a:adv:start"), btn("📅 Davr oxiri", "a:adv:end")));
-                r2.add(irow(btn("🏷 Kirim statyasi", "a:adv:cin"), btn("⏱ Oraliq", "a:adv:int")));
+                r2.add(irow(btn("⏱ Oraliq", "a:adv:int"), btn("⚡ Adesk→MS", "a:adv:rint")));
                 r2.add(irow(btn("🕘 Hisobot vaqti", "a:adv:time"), btn("📣 Hisobot chati", "a:adv:chat")));
-                r2.add(irow(btn("🔗 Hisoblarni bog'lash", "a:adm:0"), btn("↩️ Adesk → MoySklad", "a:adrv")));
+                r2.add(irow(btn("🏷 Kirim statyasi", "a:adv:cin"), btn("🔗 Hisoblarni bog'lash", "a:adm:0")));
+                r2.add(irow(btn("↩️ Adesk → MoySklad", "a:adrv")));
                 r2.add(irow(btn("⬅️ Orqaga", BACK)));
-                sender.edit(chatId, msgId, "⚙️ <b>Adesk sozlamalari</b>\n\nSozlamani tanlang:", inline(r2));
+                sender.edit(chatId, msgId, "⚙️ <b>Adesk sozlamalari</b>\n\n"
+                        + "⏱ Oraliq — MoySklad → Adesk sinxroni: har <b>" + cfg.intervalMin() + "</b> daqiqada\n"
+                        + "⚡ Adesk→MS — Adesk'da kiritilganlarni MoySklad'ga yozish: har <b>" + cfg.reverseIntervalMin() + "</b> daqiqada"
+                        + (cfg.reverse() ? "" : " (↩️ Adesk → MoySklad o'chiq — ishlamaydi)") + "\n\nSozlamani tanlang:", inline(r2));
             }
             case "ads" -> {
                 sender.send(chatId, runner.requestStop() ? "⏹ To'xtatish so'raldi — joriy qadam tugagach to'xtaydi. Bajarilgani saqlanadi."
@@ -210,6 +214,8 @@ public class AdeskHandler {
             case "cin" -> "🏷 MoySklad kirim hujjatlarida statya yo'q — Adesk'da qaysi kirim statyasiga yozilsin?\nHozir: «"
                     + esc(cfg.catIncome()) + "»\n\nStatya nomini kiriting:";
             case "int" -> "⏱ Avtomatik sinxron oralig'i, daqiqa (2–240).\nHozir: " + cfg.intervalMin() + "\n\nDaqiqani kiriting:";
+            case "rint" -> "⚡ Adesk'da kiritilgan kirim/chiqim/perevodlarni MoySklad'ga yozish oralig'i, daqiqa (1–60).\n"
+                    + "Faqat ↩️ Adesk → MoySklad yoqiq bo'lsa ishlaydi.\nHozir: " + cfg.reverseIntervalMin() + "\n\nDaqiqani kiriting:";
             default -> null;
         };
         if (prompt == null) { menu(s, chatId, msgId); return; }
@@ -274,6 +280,11 @@ public class AdeskHandler {
                     int v = Integer.parseInt(t.replaceAll("\\D", ""));
                     if (v < 2 || v > 240) throw new IllegalArgumentException("2–240");
                     cfg.set(AdeskConfig.INTERVAL, String.valueOf(v));
+                }
+                case "rint" -> {
+                    int v = Integer.parseInt(t.replaceAll("\\D", ""));
+                    if (v < 1 || v > 60) throw new IllegalArgumentException("1–60");
+                    cfg.set(AdeskConfig.REVERSE_INTERVAL, String.valueOf(v));
                 }
                 default -> { menu(s, chatId, 0); return; }
             }
@@ -343,6 +354,7 @@ public class AdeskHandler {
             case AdeskLink.CATEGORY -> "Statya";
             case AdeskLink.CONTRACTOR, AdeskLink.EMPLOYEE, AdeskLink.ORGC -> "Kontragent";
             case AdeskLink.PRODUCT -> "Tovar";
+            case AdeskLink.ADESK -> "Adesk → MoySklad";
             default -> l.getKind();
         };
     }

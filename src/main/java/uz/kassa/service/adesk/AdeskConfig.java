@@ -44,6 +44,8 @@ public class AdeskConfig {
     public static final String REPORT_TIME  = "adesk.report.time";
     public static final String REPORT_CHATS = "adesk.report.chats";
     public static final String REPORT_SENT  = "adesk.report.sent";
+    /** Adesk → MoySklad tezkor tekshiruv oralig'i, daqiqa (faqat Adesk'da qo'lda kiritilganlar; standart 2). */
+    public static final String REVERSE_INTERVAL = "adesk.reverseInterval";
     /** Oddiy (inkremental) sinxron oralig'i, daqiqa. */
     public static final String INTERVAL  = "adesk.interval";
     /** Adesk API'ga soniyasiga nechta so'rov. */
@@ -147,6 +149,8 @@ public class AdeskConfig {
     }
 
     public int intervalMin() { return (int) longOf(INTERVAL, 10, 2, 240); }
+
+    public int reverseIntervalMin() { return (int) longOf(REVERSE_INTERVAL, 2, 1, 60); }
 
     public int rps() { return (int) longOf(RPS, 4, 1, 20); }
 
