@@ -281,7 +281,9 @@ public class AdeskClient {
                 if (seen.add(id)) { out.add(map.apply(x)); fresh++; }
             }
             total = j.path("recordsFiltered").asLong(total);
-            if (arr.size() == 0 || fresh == 0 || arr.size() < PAGE) break;
+            // «100 dan kam = oxirgi sahifa» deb bo'lmaydi: Adesk perevod juftini bitta sahifaga jamlaydi — sahifalar 99/101 bo'ladi
+            // (2026-10-09: 99 / 2952 da to'xtab, Adesk → MoySklad va solishtirish yiqildi). Oxiri — jami son yoki bo'sh sahifa.
+            if (arr.size() == 0 || fresh == 0) break;
             if (total >= 0 && out.size() >= total) break;
         }
         // Himoya: ro'yxat chala o'qilsa (sahifalash ishlamasa) — «yo'q» deb qayta yaratish dublikat beradi
