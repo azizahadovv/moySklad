@@ -1307,6 +1307,9 @@ public class AdeskSyncService {
         String head = "MS " + ruName(d.entity()) + " №" + d.number();
         String state = d.state() == null ? "" : d.state().trim();
         String s = head + (state.isEmpty() ? "" : " · " + state);
+        if (d.currencyIso() != null && !d.currencyIso().isBlank())   // valyutadagi hujjat — so'mga qaysi kurs bilan o'girilgani
+            s += " · " + som(d.origTiyin()).stripTrailingZeros().toPlainString() + " " + d.currencyIso()
+                    + " × " + BigDecimal.valueOf(d.rate()).stripTrailingZeros().toPlainString();
         String note = d.description() == null ? "" : d.description().replaceAll("\\s+", " ").trim();
         if (note.isEmpty()) return s.length() > 510 ? s.substring(0, 510) : s;
         int room = 510 - s.length() - 3;

@@ -280,6 +280,11 @@ class AdeskSyncServiceTest {
                 "x".repeat(900), true, List.of(), "Олинди");
         String ld = AdeskSyncService.commitDesc(longNote);
         assertTrue(ld.length() <= 510 && ld.startsWith("MS Приёмка №77 · Олинди · x"));
+
+        // valyutadagi hujjat: summa so'mda, izohda asl summa va kurs (2026-10-10: 75 USD Adesk'ka 75 so'm bo'lib ketgan edi)
+        MsGoodsDoc usd = new MsGoodsDoc("d-4", "purchasereturn", "00002", LocalDate.of(2026, 10, 9), 892_500_00L, ORG, "cp-1", "counterparty",
+                "", true, List.of(), "", "USD", 11900, 75_00L);
+        assertEquals("MS Возврат поставщику №00002 · 75 USD × 11900", AdeskSyncService.commitDesc(usd));
     }
 
     /** Otgruzka o'zgardi: AVVAL yangisi yaratiladi, keyin eskisi o'chiriladi; Adesk rad etsa — eskisi joyida (yo'qolmaydi). */

@@ -73,4 +73,27 @@ class AdeskMsReaderLiveTest {
         assertFalse(stock.isEmpty());
         System.out.println("kontragentlar: " + msr.count("entity/counterparty") + " · tovar: " + msr.count("entity/product") + " · xizmat: " + msr.count("entity/service"));
     }
+
+    /** Valyutadagi tovar hujjatlari so'mga o'giriladi (2026-10-10: 75 USD «Возврат поставщику» Adesk'ka 75 so'm bo'lib ketgan edi). */
+    @Test
+    void foreignCurrencyGoodsDocsAreConvertedToBase() {
+        AppProps props = new AppProps();
+        props.getMoysklad().setToken(System.getenv("MOYSKLAD_TOKEN"));
+        MoySkladClient ms = new MoySkladClient(props, new MoySkladHttp(props, new SettingsService(mock(SettingRepo.class))));
+        AdeskMsReader msr = new AdeskMsReader(ms);
+        LocalDate from = LocalDate.of(2026, 10, 1), to = LocalDate.of(2026, 10, 10);
+        int fx = 0;
+        for (String e : List.of("supply", "purchasereturn", "salesreturn", "demand"))
+            for (MsGoodsDoc d : msr.goodsDocs(e, from, to, null)) {
+                if (d.currencyIso().isBlank()) { assertEquals(d.origTiyin(), d.sumTiyin()); continue; }
+                fx++;
+                assertEquals(Math.round(d.origTiyin() * d.rate()), d.sumTiyin(), d.number());
+                long lines = d.positions().stream().mapToLong(p -> Math.round(p.priceTiyin() * p.quantity())).sum();
+                assertTrue(Math.abs(lines - d.sumTiyin()) <= Math.max(100, d.sumTiyin() / 1000),
+                        d.number() + ": pozitsiyalar " + lines + " ≠ summa " + d.sumTiyin());
+                if (fx <= 5) System.out.println(e + " " + d.number() + " " + AdeskSyncService.commitDesc(d) + " → " + d.sumTiyin() / 100 + " so'm");
+            }
+        System.out.println("oktyabr valyutadagi tovar hujjatlari: " + fx);
+        assertTrue(fx > 0);
+    }
 }
