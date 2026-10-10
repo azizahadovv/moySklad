@@ -1215,10 +1215,16 @@ public class AdeskSyncService {
                 String hash = sha(p.toString());
                 if (linked(l) && hash.equals(l.getHash()) && !ERROR.equals(l.getStatus())) continue;
                 boolean upd = linked(l);
-                if (upd) dropCommit(l.getAdeskId());   // pozitsiyalar to'g'ri almashishi uchun: o'chirib qayta yaratiladi
+                Long old = upd ? l.getAdeskId() : null;
+                // pozitsiyalar to'g'ri almashishi uchun qayta yaratiladi: AVVAL yangisi — Adesk rad etsa eskisi joyida qoladi (yo'qolmaydi),
+                // keyin eskisi o'chiriladi; o'chmasa — dublikat ⚠️ eslatmada (Adesk'da qo'lda o'chiriladi)
                 long id = ad.createCommitment(p);
                 commitOk(r, d, l, id, hash);
                 r.inc(upd ? "cm.updated" : "cm.created");
+                if (old != null && old != id && !dropCommit(old)) {
+                    r.inc("cm.error");
+                    r.note("Adesk'da eski majburiyat #" + old + " o'chirilmadi (" + ruName(d.entity()) + " №" + d.number() + ") — qo'lda o'chiring");
+                }
             } catch (AdeskException e) {
                 if (e.fatal) throw e;
                 commitErr(r, d, l, e.getMessage());
@@ -1261,8 +1267,9 @@ public class AdeskSyncService {
         p.put("contractor", String.valueOf(ctr));
         p.put("legal_entity", String.valueOf(le));
         p.put("currency", cfg.currency());
-        String desc = "MS " + ruName(d.entity()) + " №" + d.number() + (d.description().isBlank() ? "" : " · " + d.description().replaceAll("\\s+", " "));
-        p.put("description", desc.length() > 510 ? desc.substring(0, 507) + "…" : desc);
+        // 2026-10-10: otgruzka/priyomka ham operatsiyalar kabi «Asosiy» proyektida — proyekt sahifasida (Отгрузки, Выручка) ko'rinsin
+        if (r.projectId != null) p.put("project", String.valueOf(r.projectId));
+        p.put("description", commitDesc(d));
         // Adesk bitta hujjatda bir xil tovarni ikki qatorda qabul qilmaydi («identichnym id») — bir tovar qatorlari birlashtiladi:
         // soni yig'iladi, narx = jami summa / jami son (hujjat summasi o'zgarmaydi)
         Map<String, double[]> merged = new LinkedHashMap<>();   // "type:id" → {son, summa(tiyin)}
@@ -1292,13 +1299,40 @@ public class AdeskSyncService {
         return p;
     }
 
-    private void dropCommit(long id) {
-        try { ad.removeCommitment(id); }
-        catch (AdeskException e) { if (e.fatal) throw e; log.info("Adesk majburiyati {} o'chirilmadi (ehtimol allaqachon yo'q): {}", id, e.getMessage()); }
+    /**
+     * Majburiyat izohi: «MS Отгрузка №14998 · Карз перечисление · <MoySklad kommentariyasi>» (2026-10-10 user talabi: Adesk'da
+     * status yo'q — kommentariya oldidan MoySklad statusi). Bo'lmaganlari tushib qoladi. Max 510; belgi («MS … №») kesilmaydi.
+     */
+    static String commitDesc(MsGoodsDoc d) {
+        String head = "MS " + ruName(d.entity()) + " №" + d.number();
+        String state = d.state() == null ? "" : d.state().trim();
+        String s = head + (state.isEmpty() ? "" : " · " + state);
+        String note = d.description() == null ? "" : d.description().replaceAll("\\s+", " ").trim();
+        if (note.isEmpty()) return s.length() > 510 ? s.substring(0, 510) : s;
+        int room = 510 - s.length() - 3;
+        if (room <= 1) return s.length() > 510 ? s.substring(0, 510) : s;
+        if (note.length() > room) note = note.substring(0, room - 1) + "…";
+        return s + " · " + note;
+    }
+
+    /** true — o'chdi yoki Adesk'da allaqachon yo'q («Не удается найти»); false — boshqa xato (majburiyat Adesk'da qolgan). */
+    private boolean dropCommit(long id) {
+        try { ad.removeCommitment(id); return true; }
+        catch (AdeskException e) {
+            if (e.fatal) throw e;
+            if (e.getMessage() != null && e.getMessage().contains("Не удается найти")) return true;
+            log.warn("Adesk majburiyati {} o'chirilmadi: {}", id, e.getMessage());
+            return false;
+        }
     }
 
     private void removeCommit(AdeskRun r, AdeskLink l) {
-        dropCommit(l.getAdeskId());
+        if (!dropCommit(l.getAdeskId())) {   // Adesk'da qoldi — bog'lanish saqlanadi, ⚠️ Xatolar'da ko'rinadi, keyingi yurishda yana uriniladi
+            l.setStatus(ERROR); l.setError("MoySklad'da o'chirilgan, Adesk'dan majburiyat o'chirilmadi");
+            save(r, l);
+            r.inc("cm.error");
+            return;
+        }
         l.setStatus(DELETED); l.setError(null);
         save(r, l);
         r.inc("cm.removed");

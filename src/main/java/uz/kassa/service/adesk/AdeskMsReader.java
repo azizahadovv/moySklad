@@ -67,8 +67,15 @@ public class AdeskMsReader {
     /** Pozitsiya: narx — chegirmadan keyin, bitta birlik uchun (tiyin). */
     public record MsPos(String assortmentId, String assortmentType, double quantity, long priceTiyin) {}
 
+    /** state — MoySklad hujjat statusi nomi («Карз перечисление», «Накд», «Клик» …), bo'lmasa bo'sh. */
     public record MsGoodsDoc(String id, String entity, String number, LocalDate date, long sumTiyin, String orgId,
-                             String agentId, String agentType, String description, boolean applicable, List<MsPos> positions) {}
+                             String agentId, String agentType, String description, boolean applicable, List<MsPos> positions,
+                             String state) {
+        public MsGoodsDoc(String id, String entity, String number, LocalDate date, long sumTiyin, String orgId,
+                          String agentId, String agentType, String description, boolean applicable, List<MsPos> positions) {
+            this(id, entity, number, date, sumTiyin, orgId, agentId, agentType, description, applicable, positions, "");
+        }
+    }
 
     public record MsStock(String productId, double qty, long costTiyin) {}
 
@@ -255,7 +262,7 @@ public class AdeskMsReader {
     /** Tovar hujjatlari (pozitsiyalari bilan): supply / demand / salesreturn / purchasereturn. */
     public List<MsGoodsDoc> goodsDocs(String entity, LocalDate from, LocalDate to, LocalDateTime updatedFrom) {
         List<MsGoodsDoc> out = new ArrayList<>();
-        for (JsonNode r : ms.listAll("entity/" + entity + "?limit=100&expand=positions&filter=" + enc(period(from, to, updatedFrom)), 2000)) {
+        for (JsonNode r : ms.listAll("entity/" + entity + "?limit=100&expand=positions,state&filter=" + enc(period(from, to, updatedFrom)), 2000)) {
             JsonNode pos = r.path("positions");
             List<JsonNode> rows = new ArrayList<>();
             pos.path("rows").forEach(rows::add);
@@ -272,7 +279,7 @@ public class AdeskMsReader {
             out.add(new MsGoodsDoc(r.path("id").asText(), entity, r.path("name").asText(""), m == null ? from : m.toLocalDate(),
                     Math.round(r.path("sum").asDouble(0)), ms.idOf(r.path("organization")), ms.idOf(r.path("agent")),
                     r.path("agent").path("meta").path("type").asText(""), r.path("description").asText("").trim(),
-                    r.path("applicable").asBoolean(true), ps));
+                    r.path("applicable").asBoolean(true), ps, r.path("state").path("name").asText("").trim()));
         }
         return out;
     }

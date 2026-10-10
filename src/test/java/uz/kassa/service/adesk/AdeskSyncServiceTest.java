@@ -250,6 +250,7 @@ class AdeskSyncServiceTest {
         when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(4001, 2, new BigDecimal("3150000.00"), null, 900L, "")));
         AdeskRun r = run(true);
         r.orgLe.put(ORG, 1L);
+        r.projectId = 967986L;
 
         svc.commitments(r);
 
@@ -257,6 +258,7 @@ class AdeskSyncServiceTest {
         ArgumentCaptor<Map<String, String>> cap = ArgumentCaptor.forClass(Map.class);
         verify(ad).createCommitment(cap.capture());
         Map<String, String> p = cap.getValue();
+        assertEquals("967986", p.get("project"), "otgruzka ham «Asosiy» proyektida");
         assertEquals("out", p.get("type"), "otgruzka — kontragentga berdik");
         assertEquals("3150000.00", p.get("amount"));
         assertEquals("900", p.get("contractor"));
@@ -268,6 +270,53 @@ class AdeskSyncServiceTest {
         assertTrue(p.get("description").startsWith("MS Отгрузка №00045"));
         assertEquals(1, r.get("cm.created"));
         assertEquals(0, r.get("cm.restored"));
+
+        // izoh: raqam · MoySklad statusi · kommentariya (Adesk'da status yo'q)
+        MsGoodsDoc withState = new MsGoodsDoc("d-2", "demand", "14998", LocalDate.of(2026, 10, 10), 1_550_000_00L, ORG, "cp-1", "counterparty",
+                "Xakim aka berildi  boxchaga", true, List.of(), "Карз перечисление");
+        assertEquals("MS Отгрузка №14998 · Карз перечисление · Xakim aka berildi boxchaga", AdeskSyncService.commitDesc(withState));
+        assertEquals("MS Отгрузка №00045", AdeskSyncService.commitDesc(dem), "status ham, izoh ham yo'q — faqat raqam");
+        MsGoodsDoc longNote = new MsGoodsDoc("d-3", "supply", "77", LocalDate.of(2026, 10, 10), 1L, ORG, "cp-1", "counterparty",
+                "x".repeat(900), true, List.of(), "Олинди");
+        String ld = AdeskSyncService.commitDesc(longNote);
+        assertTrue(ld.length() <= 510 && ld.startsWith("MS Приёмка №77 · Олинди · x"));
+    }
+
+    /** Otgruzka o'zgardi: AVVAL yangisi yaratiladi, keyin eskisi o'chiriladi; Adesk rad etsa — eskisi joyida (yo'qolmaydi). */
+    @Test
+    void changedDemandIsRecreatedBeforeOldIsRemovedAndKeptOnReject() {
+        when(repo.findByKind(AdeskLink.CONTRACTOR)).thenReturn(List.of(link(AdeskLink.CONTRACTOR, "cp-1", 900)));
+        when(repo.findByKind(AdeskLink.PRODUCT)).thenReturn(List.of(link(AdeskLink.PRODUCT, "p-1", 31)));
+        AdeskLink cl = link(AdeskLink.COMMIT, "d-1", 4001);
+        cl.setHash("eski");
+        when(repo.findByKind(AdeskLink.COMMIT)).thenReturn(List.of(cl));
+        MsGoodsDoc dem = new MsGoodsDoc("d-1", "demand", "00045", LocalDate.of(2026, 9, 7), 3_000_000_00L, ORG, "cp-1", "counterparty", "", true,
+                List.of(new MsPos("p-1", "product", 2, 1_500_000_00L)));
+        when(msr.goodsDocs(eq("demand"), any(), any(), any())).thenReturn(List.of(dem));
+        when(msr.goodsDocs(argThat((String e) -> !"demand".equals(e)), any(), any(), any())).thenReturn(List.of());
+        when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(4002, 2, new BigDecimal("3000000.00"), null, 900L, "")));
+
+        // Adesk rad etdi — eskisi o'chirilmaydi, bog'lanish 4001 da qoladi
+        when(ad.createCommitment(anyMap())).thenThrow(new AdeskHttp.AdeskException(200, 0, "project: noto'g'ri", false));
+        AdeskRun r = run(true);
+        r.orgLe.put(ORG, 1L);
+        svc.commitments(r);
+        verify(ad, never()).removeCommitment(anyLong());
+        assertEquals(4001L, cl.getAdeskId());
+        assertEquals(AdeskLink.ERROR, cl.getStatus());
+
+        // Adesk qabul qildi — yangisi 4002, keyin eski 4001 o'chiriladi
+        reset(ad);
+        when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(4002, 2, new BigDecimal("3000000.00"), null, 900L, "")));
+        when(ad.createCommitment(anyMap())).thenReturn(4002L);
+        AdeskRun r2 = run(true);
+        r2.orgLe.put(ORG, 1L);
+        svc.commitments(r2);
+        org.mockito.InOrder o = inOrder(ad);
+        o.verify(ad).createCommitment(anyMap());
+        o.verify(ad).removeCommitment(4001L);
+        assertEquals(4002L, cl.getAdeskId());
+        assertEquals(1, r2.get("cm.updated"));
     }
 
     @Test
