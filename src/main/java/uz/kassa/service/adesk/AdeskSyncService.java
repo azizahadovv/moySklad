@@ -695,6 +695,7 @@ public class AdeskSyncService {
         reverse.syncEdits(r, txs, today.minusDays(7), today);   // Adesk'da tahrirlangan/o'chirilgan → MoySklad (qo'lda ro'yxatidan OLDIN)
         Set<Long> linkedIds = new HashSet<>();
         for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
+        if (cfg.reverse()) reverse.clearResolved(txs, today.minusDays(7), today, linkedIds);
         List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())
                 && t.date() != null && (after == null || t.date().isAfter(after))).toList();
         manual = dropBotDupes(r, manual);
@@ -1184,6 +1185,7 @@ public class AdeskSyncService {
         if (!r.stopped()) reverse.syncEdits(r, txs, from, to);   // Adesk'da tahrirlangan/o'chirilgan (origin AD) → MoySklad
         Set<Long> linkedIds = new HashSet<>();
         for (AdeskLink l : L.values()) if (linked(l)) linkedIds.add(l.getAdeskId());
+        if (cfg.reverse()) reverse.clearResolved(txs, from, to, linkedIds);
         List<AdTx> manual = txs.stream().filter(t -> !t.planned() && !linkedIds.contains(t.id())).toList();
         manual = dropBotDupes(r, manual);
         if (!r.stopped()) reverse.handle(r, manual);

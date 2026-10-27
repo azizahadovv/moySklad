@@ -13,6 +13,7 @@ import uz.kassa.service.adesk.AdeskClient.AdTx;
 import uz.kassa.service.moysklad.MoySkladClient;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -62,6 +63,30 @@ public class AdeskReverseService {
             n++;
         }
         if (n > 0) log.info("Adesk → MoySklad o'chiq: {} ta eski xato ro'yxatdan olindi", n);
+        return n;
+    }
+
+    /**
+     * [from, to] dagi «ad:» xatolari: Adesk'da o'chirilgan (ro'yxatda yo'q) yoki allaqachon MoySklad'ga yozilgan (bog'langan)
+     * operatsiyaniki — qayta urinilmaydi, ro'yxatdan olinadi (2026-10-27: o'chirib qayta kiritilgan perevodning eski 17001 xatosi
+     * yangisi yozilgandan keyin ham ko'rinib turgan). Hali yozilmaganlari keyin handle() da qayta urinadi.
+     */
+    public int clearResolved(List<AdTx> txs, LocalDate from, LocalDate to, Set<Long> linkedIds) {
+        Set<Long> present = new HashSet<>();
+        txs.forEach(t -> present.add(t.id()));
+        int n = 0;
+        for (AdeskLink l : repo.findByStatusOrderByUpdatedAtDesc(ERROR)) {
+            if (!ADESK.equals(l.getKind()) || l.getAdeskId() == null || l.getDocDate() == null) continue;
+            if (l.getDocDate().isBefore(from) || l.getDocDate().isAfter(to)) continue;
+            boolean gone = !present.contains(l.getAdeskId()), done = linkedIds.contains(l.getAdeskId());
+            if (!gone && !done) continue;
+            l.setStatus(SKIP);
+            l.setError(done ? "MoySklad'ga yozilgan" : "Adesk'da o'chirilgan");
+            l.setUpdatedAt(Instant.now());
+            repo.save(l);
+            n++;
+        }
+        if (n > 0) log.info("Adesk → MoySklad: {} ta eski xato ro'yxatdan olindi (o'chirilgan/yozilgan)", n);
         return n;
     }
 

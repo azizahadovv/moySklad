@@ -171,6 +171,22 @@ class AdeskReverseServiceTest {
     }
 
     @Test
+    void errorsOfDeletedOrAlreadyWrittenAdeskOpsAreCleared() {
+        AdeskLink gone = AdeskLink.builder().kind(AdeskLink.ADESK).msKey("ad:1").adeskId(1L).docDate(TODAY).status(AdeskLink.ERROR).error("17001").build();
+        AdeskLink done = AdeskLink.builder().kind(AdeskLink.ADESK).msKey("ad:2").adeskId(2L).docDate(TODAY).status(AdeskLink.ERROR).error("17001").build();
+        AdeskLink pending = AdeskLink.builder().kind(AdeskLink.ADESK).msKey("ad:3").adeskId(3L).docDate(TODAY).status(AdeskLink.ERROR).error("17001").build();
+        AdeskLink old = AdeskLink.builder().kind(AdeskLink.ADESK).msKey("ad:4").adeskId(4L).docDate(TODAY.minusDays(30)).status(AdeskLink.ERROR).error("x").build();
+        when(repo.findByStatusOrderByUpdatedAtDesc(AdeskLink.ERROR)).thenReturn(List.of(gone, done, pending, old));
+        int n = svc.clearResolved(List.of(tx(2, 2, "1", 503, null, true, ""), tx(3, 2, "1", 503, null, true, "")),
+                TODAY.minusDays(7), TODAY, Set.of(2L));
+        assertEquals(2, n);
+        assertEquals(AdeskLink.SKIP, gone.getStatus(), "Adesk'da o'chirilgan — qayta urinilmaydi");
+        assertEquals(AdeskLink.SKIP, done.getStatus(), "MoySklad'ga yozilgan");
+        assertEquals(AdeskLink.ERROR, pending.getStatus(), "hali yozilmagan — xato ko'rinib turadi");
+        assertEquals(AdeskLink.ERROR, old.getStatus(), "davrdan tashqari — tegilmaydi");
+    }
+
+    @Test
     void deletedInAdeskGoesToMoySkladTrash() {
         AdeskLink l = adLink("m1", 555, "cashout", ORG + ":CASH", -10_000_00, "AD:x");
         when(adc.transaction(555)).thenReturn(Optional.empty());
