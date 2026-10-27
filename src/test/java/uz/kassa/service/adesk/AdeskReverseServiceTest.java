@@ -74,6 +74,88 @@ class AdeskReverseServiceTest {
         return l;
     }
 
+    /* ---- 2026-10-27: MoySklad 412/17001 «счет контрагента не принадлежит указанному контрагенту» ---- */
+
+    /** org-1 hisoblari (asosiy — acc-default), MoySklad POST — muvaffaqiyat; yuborilgan tanalar qaytariladi. */
+    List<String> stubPosts() {
+        com.fasterxml.jackson.databind.node.ObjectNode accs = JsonNodeFactory.instance.objectNode();
+        accs.putArray("rows").addObject().put("id", "acc-1").put("isDefault", false);
+        ((com.fasterxml.jackson.databind.node.ArrayNode) accs.get("rows")).addObject().put("id", "acc-default").put("isDefault", true);
+        when(ms.fetchJson("entity/organization/" + ORG + "/accounts?limit=100")).thenReturn(accs);
+        List<String> bodies = new ArrayList<>();
+        when(ms.postEntity(anyString(), anyString())).thenAnswer(inv -> {
+            bodies.add(inv.getArgument(0) + " " + inv.getArgument(1));
+            return JsonNodeFactory.instance.objectNode().put("id", "ms-" + bodies.size());
+        });
+        return bodies;
+    }
+
+    static String agentAccountOf(String body) {
+        int i = body.indexOf("\"agentAccount\"");
+        if (i < 0) return null;
+        String href = body.substring(body.indexOf("\"href\":\"", i) + 8);
+        return href.substring(0, href.indexOf('"'));
+    }
+
+    @Test
+    void bankToOtherFirmsCashUsesAgentFirmsOwnAccount() {
+        // jonli holat (Adesk #146258513/14): «р/с 003 ITT» → «Касса 001 NSB», 30 000 000
+        List<String> bodies = stubPosts();
+        AdTx out = tx(146258513, 2, "30000000", 503, 146258514L, true, "");
+        AdTx in = tx(146258514, 1, "30000000", 501, 146258513L, true, "");
+        svc.handle(r, List.of(out, in));
+        assertEquals(2, bodies.size(), "ikkala leg ham yozilishi kerak");
+        String po = bodies.stream().filter(b -> b.startsWith("entity/paymentout")).findFirst().orElseThrow();
+        assertEquals("https://ms/entity/organization/" + ORG + "/accounts/acc-default", agentAccountOf(po),
+                "agentAccount agent firmaning (001 NSB) hisobi bo'lishi shart");
+        assertTrue(po.contains("\"organizationAccount\""));
+        String ci = bodies.stream().filter(b -> b.startsWith("entity/cashin")).findFirst().orElseThrow();
+        assertNull(agentAccountOf(ci), "kassa hujjatida hisob maydonlari bo'lmaydi");
+    }
+
+    @Test
+    void everyAgentAccountBelongsToAgentFirm() {
+        // barcha kombinatsiyalar: bank/kassa × o'z firma/boshqa firma — agentAccount doim agent firmaning hisobi yoki umuman yo'q
+        List<String> bodies = stubPosts();
+        when(ms.fetchJson("entity/organization/" + ORG2 + "/accounts?limit=100")).thenReturn(JsonNodeFactory.instance.objectNode().set("rows",
+                JsonNodeFactory.instance.arrayNode().add(JsonNodeFactory.instance.objectNode().put("id", "acc-2"))));
+        long[][] pairs = {{503, 501}, {501, 503}, {502, 501}, {501, 502}, {503, 502}, {502, 503}};
+        long id = 1000;
+        for (long[] p : pairs) {
+            svc.handle(r, List.of(tx(id, 2, "100", p[0], id + 1, true, ""), tx(id + 1, 1, "100", p[1], id, true, "")));
+            id += 2;
+        }
+        assertEquals(12, bodies.size());
+        for (String b : bodies) {
+            String aa = agentAccountOf(b);
+            if (aa == null) continue;
+            String agentHref = b.substring(b.indexOf("\"agent\""));
+            agentHref = agentHref.substring(agentHref.indexOf("\"href\":\"") + 8);
+            agentHref = agentHref.substring(0, agentHref.indexOf('"'));
+            String agentOrg = agentHref.substring(agentHref.lastIndexOf('/') + 1);
+            assertTrue(aa.startsWith("https://ms/entity/organization/" + agentOrg + "/accounts/"), "agentAccount agentga tegishli emas: " + b);
+        }
+    }
+
+    @Test
+    void mismatch17001IsRetriedOnceWithAgentDefaultAccount() {
+        List<String> bodies = stubPosts();
+        AtomicBoolean first = new AtomicBoolean(true);
+        doAnswer(inv -> {
+            String body = inv.getArgument(1);
+            if (first.getAndSet(false))
+                throw new IllegalStateException("MoySklad HTTP 412: {\"errors\":[{\"error\":\"Ошибка сохранения документа: счет контрагента не принадлежит указанному контрагенту\",\"code\":17001}]}");
+            bodies.add(inv.getArgument(0) + " " + body);
+            return JsonNodeFactory.instance.objectNode().put("id", "ms-" + bodies.size());
+        }).when(ms).postEntity(anyString(), anyString());
+        // o'z firmadagi bank → bank (502 → 503 emas): agent 003 ITT, hisobi eskirgan deb faraz — qayta urinishda ITT asosiy hisobi
+        when(ms.fetchJson("entity/organization/" + ORG2 + "/accounts?limit=100")).thenReturn(JsonNodeFactory.instance.objectNode().set("rows",
+                JsonNodeFactory.instance.arrayNode().add(JsonNodeFactory.instance.objectNode().put("id", "acc-2b").put("isDefault", true))));
+        svc.handle(r, List.of(tx(1, 2, "100", 502, 2L, true, ""), tx(2, 1, "100", 503, 1L, true, "")));
+        assertEquals(2, bodies.size(), "qayta urinish bilan ikkala leg yozilishi kerak");
+        assertEquals("https://ms/entity/organization/" + ORG2 + "/accounts/acc-2b", agentAccountOf(bodies.get(0)));
+    }
+
     @Test
     void deletedInAdeskGoesToMoySkladTrash() {
         AdeskLink l = adLink("m1", 555, "cashout", ORG + ":CASH", -10_000_00, "AD:x");

@@ -293,15 +293,48 @@ public class AdeskReverseService {
         b.set("organization", meta("organization", "organization/" + orgId));
         if (!cash) b.set("organizationAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
         b.set("agent", meta("organization", "organization/" + agentOrg));
-        // MoySklad «Перемещение» tugmasidagidek: qarshi tomon bank hisobi; u kassa bo'lsa — hujjatning o'z hisobi (02588/07281)
-        // agentAccount agent firmaga tegishli bo'lishi shart (aks holda 412/17001): qarshi tomon kassa va boshqa firma — qo'yilmaydi
-        if (!cash && !AdeskMsReader.CASH.equals(agentAcc)) b.set("agentAccount", meta("account", "organization/" + agentOrg + "/accounts/" + agentAcc));
-        else if (!cash && agentOrg.equals(orgId)) b.set("agentAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
+        // agentAccount HAR DOIM agent firmaning hisobi bo'lishi shart (aks holda 412/17001 «счет контрагента не принадлежит…»):
+        // qarshi tomon bank hisobi — o'sha; kassa bo'lsa — o'z firma ichida hujjatning o'z hisobi (02588/07281), boshqa firmaning
+        // kassasi bo'lsa — agent firmaning asosiy hisobi (MoySklad'dagi 67 ta firma-aro to'lovning hammasi shunday, 2026-10-27)
+        if (!cash) {
+            String aa = agentAccountId(orgId, accId, agentOrg, agentAcc);
+            if (aa != null) b.set("agentAccount", meta("account", "organization/" + agentOrg + "/accounts/" + aa));
+        }
         b.put("sum", sum);
         b.put("description", desc);
         if (purpose != null) b.put("paymentPurpose", purpose);
         if (expenseId != null) b.set("expenseItem", meta("expenseitem", "expenseitem/" + expenseId));
         return b;
+    }
+
+    /** Qarshi tomon (agent firma) hisobi id'si: bank — o'zi; kassa — o'z firmada hujjat hisobi, boshqa firmada asosiy hisob; yo'q — null. */
+    String agentAccountId(String orgId, String accId, String agentOrg, String agentAcc) {
+        if (!AdeskMsReader.CASH.equals(agentAcc)) return agentAcc;
+        if (agentOrg.equals(orgId)) return accId;
+        String d = defaultAccount(agentOrg);
+        return d.isEmpty() ? null : d;
+    }
+
+    /** Firma hisoblari keshi: orgId → asosiy (isDefault, bo'lmasa birinchi) hisob id'si; hisobi yo'q — "". */
+    private final Map<String, String> orgDefaultAcc = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private String defaultAccount(String orgId) {
+        return orgDefaultAcc.computeIfAbsent(orgId, o -> {
+            JsonNode j = ms.fetchJson("entity/organization/" + o + "/accounts?limit=100");
+            String first = "";
+            if (j != null) for (JsonNode a : j.path("rows")) {
+                String id = a.path("id").asText("");
+                if (id.isEmpty()) continue;
+                if (a.path("isDefault").asBoolean(false)) return id;
+                if (first.isEmpty()) first = id;
+            }
+            return first;
+        });
+    }
+
+    /** MoySklad 17001 — agentAccount agentga tegishli emas. */
+    static boolean agentAccountMismatch(String msg) {
+        return msg != null && (msg.contains("17001") || msg.contains("счет контрагента не принадлежит"));
     }
 
     private String postMoney(AdeskRun r, AdTx t, String key, ObjectNode b, String moment, boolean income) {
@@ -310,7 +343,21 @@ public class AdeskReverseService {
         b.put("applicable", true);
         ObjectNode st = stateMeta(entity, true);
         if (st != null) b.set("state", st);
-        JsonNode res = ms.postEntity("entity/" + entity, b.toString());
+        JsonNode res;
+        try {
+            res = ms.postEntity("entity/" + entity, b.toString());
+        } catch (RuntimeException e) {
+            if (!agentAccountMismatch(e.getMessage()) || !b.has("agentAccount")) throw e;
+            // hisob boshqa firmaga ko'chirilgan/o'chirilgan bo'lishi mumkin: kesh yangilanadi va agent firmaning asosiy hisobi bilan bir marta qayta
+            orgDefaultAcc.clear();
+            String href = b.path("agent").path("meta").path("href").asText("");
+            String agentOrg = href.substring(href.lastIndexOf('/') + 1);
+            String d = defaultAccount(agentOrg);
+            if (d.isEmpty()) b.remove("agentAccount");
+            else b.set("agentAccount", meta("account", "organization/" + agentOrg + "/accounts/" + d));
+            log.warn("MoySklad 17001 (Adesk #{}): agentAccount agent firmaning asosiy hisobiga almashtirildi, qayta yuborilmoqda", t.id());
+            res = ms.postEntity("entity/" + entity, b.toString());
+        }
         String id = res == null ? "" : res.path("id").asText("");
         if (id.isEmpty()) throw new IllegalStateException("MoySklad javobida id yo'q (token huquqi?)");
         AdeskLink l = repo.save(AdeskLink.builder().kind(MONEY).msKey(id).adeskId(t.id()).origin(FROM_AD).status(OK).hash(fp(t))

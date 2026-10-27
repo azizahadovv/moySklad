@@ -178,7 +178,7 @@ public class AdeskHttp {
         });
         else if (errs.isArray()) for (JsonNode e : errs) { if (sb.length() > 0) sb.append("; "); sb.append(e.toString()); }
         if (sb.length() == 0) sb.append("HTTP ").append(st);
-        String s = sb.toString();
+        String s = sb.toString().replace("&nbsp;", " ").replace(' ', ' ');   // Adesk matnida HTML bo'shliq keladi
         return s.length() > 400 ? s.substring(0, 400) : s;
     }
 

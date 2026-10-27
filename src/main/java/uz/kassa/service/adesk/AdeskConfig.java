@@ -47,6 +47,8 @@ public class AdeskConfig {
     public static final String ACC_CONFIRMED = "adesk.accConfirmed";
     /** Uzilgan MoySklad hisoblari (vergulli msKey): Adesk'ka umuman o'tmaydi, hisob ham yaratilmaydi. */
     public static final String ACC_OFF = "adesk.accOff";
+    /** Adesk statyalari (vergulli id) — majburiyat hisobida, kontragentsiz operatsiyani rad etadi: o'z firmaga chiqimda ham kontragent qo'yiladi. */
+    public static final String NEED_CTR = "adesk.catNeedCtr";
     /** Kunlik solishtirish hisoboti vaqti (HH:mm) va chatlari (vergulli; bo'sh — SuperAdmin/buxgalterlarga). */
     public static final String REPORT_TIME  = "adesk.report.time";
     public static final String REPORT_CHATS = "adesk.report.chats";
@@ -143,6 +145,17 @@ public class AdeskConfig {
         return s;
     }
     public void setOffAccounts(java.util.Collection<String> keys) { settings.set(ACC_OFF, String.join(",", keys)); }
+
+    public java.util.Set<Long> needCtrCategories() {
+        java.util.Set<Long> s = new java.util.HashSet<>();
+        for (String k : settings.get(NEED_CTR).orElse("").split(","))
+            try { if (!k.isBlank()) s.add(Long.parseLong(k.trim())); } catch (NumberFormatException ignored) {}
+        return s;
+    }
+    public void addNeedCtrCategory(long catId) {
+        java.util.Set<Long> s = new java.util.TreeSet<>(needCtrCategories());
+        if (s.add(catId)) settings.set(NEED_CTR, String.join(",", s.stream().map(String::valueOf).toList()));
+    }
 
     public boolean accountsConfirmed() { return "1".equals(settings.get(ACC_CONFIRMED).orElse("0").trim()); }
     public void setReverse(boolean on) { settings.set(REVERSE, on ? "1" : "0"); }

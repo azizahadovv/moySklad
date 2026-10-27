@@ -986,7 +986,8 @@ public class AdeskSyncService {
         Map<String, Long> cats = d.income() ? r.catIn : r.catOut;
         Long cat = cats.get(catName);
         if (cat == null) cat = category(r, d.income() ? 1 : 2, catName, ad.categories(), null, links(r, CATEGORY));
-        Long ctr = transfer ? null : contractorFor(r, d.agentType(), d.agentId(), d.orgId());
+        // majburiyatli statya kontragentsiz qabul qilinmaydi — agent o'z firmamiz bo'lsa ham kontragent sifatida qo'yiladi
+        Long ctr = transfer ? null : contractorFor(r, d.agentType(), d.agentId(), d.orgId(), cat != null && cfg.needCtrCategories().contains(cat));
         boolean origAd = l != null && FROM_AD.equals(l.getOrigin());
         String amount = som(d.sumTiyin()).toPlainString();
         String desc = txDesc(d);
@@ -1048,9 +1049,38 @@ public class AdeskSyncService {
                 }
             } catch (AdeskException e) {
                 if (e.fatal) throw e;
-                if (chunk.size() == 1) { moneyErr(r, chunk.get(0).d(), links(r, MONEY).get(chunk.get(0).d().id()), e.getMessage()); continue; }
+                if (chunk.size() == 1) {
+                    TxWant w2 = withContractor(r, chunk.get(0), e);
+                    if (w2 != null) createTx(r, List.of(w2), counter);
+                    else moneyErr(r, chunk.get(0).d(), links(r, MONEY).get(chunk.get(0).d().id()), e.getMessage());
+                    continue;
+                }
                 for (TxWant w : chunk) createTx(r, List.of(w), counter);   // xatoli hujjatni ajratish
             }
+        }
+    }
+
+    /** Adesk: «Нельзя назначить статьи … без контрагента … в обязательствах» — statya majburiyatli, kontragent shart. */
+    static boolean needsContractor(String msg) {
+        return msg != null && msg.replace("&nbsp;", " ").replace(' ', ' ').contains("без контрагента");
+    }
+
+    /**
+     * Majburiyatli statya kontragentsiz rad etildi: statya eslab qolinadi (keyingi hujjatlarda xato bo'lmaydi) va hujjat
+     * agent (o'z firma bo'lsa ham) kontragent bilan qayta quriladi. Qayta qurib bo'lmasa (agent yo'q) — null, xato yoziladi.
+     */
+    private TxWant withContractor(AdeskRun r, TxWant w, AdeskException e) {
+        if (!needsContractor(e.getMessage()) || w.ctr() != null || w.cat() == null || w.origAd()) return null;
+        cfg.addNeedCtrCategory(w.cat());
+        try {
+            TxWant w2 = want(r, w.d(), links(r, MONEY).get(w.d().id()));
+            if (w2.ctr() == null) return null;
+            r.inc("tx.ctrAdded");
+            log.info("Adesk statya #{} majburiyatli — MS {} kontragent bilan qayta yuboriladi", w.cat(), w.d().number());
+            return w2;
+        } catch (RuntimeException ex) {
+            log.warn("Kontragent bilan qayta qurilmadi (MS {}): {}", w.d().number(), ex.getMessage());
+            return null;
         }
     }
 
@@ -1085,7 +1115,12 @@ public class AdeskSyncService {
                 for (TxWant w : chunk) { moneyOk(r, w, links(r, MONEY).get(w.d().id()).getAdeskId()); r.inc(counter); }
             } catch (AdeskException e) {
                 if (e.fatal) throw e;
-                if (chunk.size() == 1) { moneyErr(r, chunk.get(0).d(), links(r, MONEY).get(chunk.get(0).d().id()), e.getMessage()); continue; }
+                if (chunk.size() == 1) {
+                    TxWant w2 = withContractor(r, chunk.get(0), e);
+                    if (w2 != null) updateTx(r, List.of(w2), counter);
+                    else moneyErr(r, chunk.get(0).d(), links(r, MONEY).get(chunk.get(0).d().id()), e.getMessage());
+                    continue;
+                }
                 for (TxWant w : chunk) updateTx(r, List.of(w), counter);
             }
         }

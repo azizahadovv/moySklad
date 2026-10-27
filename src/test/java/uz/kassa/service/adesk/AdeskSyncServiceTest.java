@@ -82,6 +82,54 @@ class AdeskSyncServiceTest {
                 .updatedAt(java.time.Instant.now().minusSeconds(3600)).build();
     }
 
+    /** 2026-10-27, Расходный ордер 02537/02523: agent — o'z firma, statya majburiyatli → Adesk rad etadi; kontragent bilan qayta. */
+    @Test
+    void obligationCategoryWithoutContractorIsRetriedWithOwnFirmAndRemembered() {
+        Set<Long> need = new HashSet<>();
+        when(cfg.needCtrCategories()).thenAnswer(inv -> new HashSet<>(need));
+        doAnswer(inv -> need.add(inv.getArgument(0))).when(cfg).addNeedCtrCategory(anyLong());
+        when(repo.findByKind(AdeskLink.ORGC)).thenReturn(List.of(link(AdeskLink.ORGC, ORG, 950)));
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(
+                doc("1", "cashout", 2_000_000_00, "CASH", "organization", ORG, "ei-zp", "", true)));
+        List<ObjectNode> sent = new ArrayList<>();
+        when(ad.createTransactions(anyList())).thenAnswer(inv -> {
+            List<ObjectNode> l = inv.getArgument(0);
+            sent.addAll(l);
+            if (l.get(0).path("contractorId").isNull())
+                throw new AdeskHttp.AdeskException(200, 0, AdeskHttp.errorText(200, new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+                        "{\"success\":false,\"message\":\"Нельзя назначить статьи для выбранных операций без&nbsp;контрагента, так как назначенные статьи обязаны учитываться в&nbsp;обязательствах.\"}"), ""), false);
+            return Map.of("ms:1", 7001L);
+        });
+        when(ad.transactions(any(), any())).thenReturn(List.of());
+
+        AdeskRun r = run(true);
+        svc.money(r);
+
+        assertEquals(2, sent.size(), "birinchi urinish rad etiladi, ikkinchisi kontragent bilan");
+        assertEquals(950, sent.get(1).path("contractorId").asLong(), "kontragent — o'z firmamiz (Adesk'dagi kontragenti)");
+        assertTrue(sent.get(1).path("isCommitment").asBoolean());
+        assertEquals(Set.of(21L), need, "statya eslab qolinadi");
+        assertEquals(1, r.get("tx.created"));
+        assertTrue(saved.stream().noneMatch(l -> AdeskLink.MONEY.equals(l.getKind()) && AdeskLink.ERROR.equals(l.getStatus())), "xato qolmaydi");
+
+        // keyingi yurishda shu statya darhol kontragent bilan ketadi — rad etish takrorlanmaydi
+        sent.clear();
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(
+                doc("2", "cashout", 1_990_000_00, "CASH", "organization", ORG, "ei-zp", "", true)));
+        doAnswer(inv -> { List<ObjectNode> l = inv.getArgument(0); sent.addAll(l); return Map.of("ms:2", 7002L); }).when(ad).createTransactions(anyList());
+        svc.money(run(true));
+        assertEquals(1, sent.size());
+        assertEquals(950, sent.get(0).path("contractorId").asLong());
+    }
+
+    @Test
+    void adeskErrorTextHasNoHtmlSpaces() {
+        String s = AdeskHttp.errorText(200, com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode().put("message", "без&nbsp;контрагента"), "");
+        assertEquals("без контрагента", s);
+        assertTrue(AdeskSyncService.needsContractor("Нельзя назначить статьи без&nbsp;контрагента"));
+        assertFalse(AdeskSyncService.needsContractor("boshqa xato"));
+    }
+
     @Test
     void moneyDocsBecomeAdeskTransactionsWithCategoryContractorAndCheckbox() {
         when(repo.findByKind(AdeskLink.CONTRACTOR)).thenReturn(List.of(link(AdeskLink.CONTRACTOR, "cp-1", 900)));
