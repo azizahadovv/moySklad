@@ -157,6 +157,20 @@ class AdeskReverseServiceTest {
     }
 
     @Test
+    void staleAdeskErrorsAreClearedWhenReverseIsOff() {
+        // jonli holat 27.10: adesk.reverse=0, 26.10 dagi 17001 xatolari ro'yxatda qolib ketgan
+        AdeskLink stale = AdeskLink.builder().kind(AdeskLink.ADESK).msKey("ad:146258513").adeskId(146258513L)
+                .status(AdeskLink.ERROR).error("MoySklad HTTP 412: 17001").build();
+        AdeskLink other = AdeskLink.builder().kind(AdeskLink.MONEY).msKey("m9").status(AdeskLink.ERROR).error("boshqa").build();
+        when(repo.findByStatusOrderByUpdatedAtDesc(AdeskLink.ERROR)).thenReturn(List.of(stale, other));
+        when(cfg.reverse()).thenReturn(false);
+        svc.handle(r, List.of(tx(146258513, 2, "30000000", 503, 146258514L, true, "")));
+        assertEquals(AdeskLink.SKIP, stale.getStatus(), "o'chiq yo'nalishning eski xatosi ro'yxatdan chiqadi");
+        assertEquals(AdeskLink.ERROR, other.getStatus(), "MoySklad → Adesk xatolariga tegilmaydi");
+        verify(ms, never()).postEntity(anyString(), anyString());
+    }
+
+    @Test
     void deletedInAdeskGoesToMoySkladTrash() {
         AdeskLink l = adLink("m1", 555, "cashout", ORG + ":CASH", -10_000_00, "AD:x");
         when(adc.transaction(555)).thenReturn(Optional.empty());

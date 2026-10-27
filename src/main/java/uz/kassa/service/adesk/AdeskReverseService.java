@@ -47,7 +47,26 @@ public class AdeskReverseService {
     /** Bot o'zi yozgan operatsiya izohi: «… · MS Приходный ордер №07318» — bog'lanishi yo'qolgan bo'lsa ham MoySklad'ga qaytarilmaydi (dublikat). */
     private static final java.util.regex.Pattern BOT_MARK = java.util.regex.Pattern.compile("MS (Приходный ордер|Расходный ордер|Входящий платёж|Исходящий платёж|Приёмка|Отгрузка|Возврат[^№]*) №");
 
+    /**
+     * ↩️ Adesk → MoySklad o'chiq: oldingi urinishlardan qolgan «ad:» xatolari qayta yuborilmaydi — ⚠️ Xatolar ro'yxatida
+     * qolib adashtirmasin (2026-10-27: 26.10 dagi 17001 lar o'chiq yo'nalishda «hali ham bor» bo'lib turgan). Yoqilsa — qayta urinadi.
+     */
+    public int clearStaleErrors() {
+        int n = 0;
+        for (AdeskLink l : repo.findByStatusOrderByUpdatedAtDesc(ERROR)) {
+            if (!ADESK.equals(l.getKind())) continue;
+            l.setStatus(SKIP);
+            l.setError("↩️ Adesk → MoySklad o'chiq — yuborilmadi (oldingi xato: " + (l.getError() == null ? "" : l.getError().substring(0, Math.min(120, l.getError().length()))) + ")");
+            l.setUpdatedAt(Instant.now());
+            repo.save(l);
+            n++;
+        }
+        if (n > 0) log.info("Adesk → MoySklad o'chiq: {} ta eski xato ro'yxatdan olindi", n);
+        return n;
+    }
+
     public void handle(AdeskRun r, List<AdTx> manual) {
+        if (!cfg.reverse()) clearStaleErrors();
         manual = manual.stream().filter(t -> t.description() == null || !BOT_MARK.matcher(t.description()).find()).toList();
         List<AdTx> transfers = manual.stream().filter(AdTx::transfer).toList();
         List<AdTx> txs = manual.stream().filter(t -> !t.transfer()).toList();

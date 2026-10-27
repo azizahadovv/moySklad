@@ -52,6 +52,7 @@ public class AdeskHandler {
     private final AdeskLinkRepo repo;
     private final AuditService audit;
     private final AdeskAccountMapper mapper;
+    private final uz.kassa.service.adesk.AdeskReverseService reverseSvc;
     private final uz.kassa.service.AppVersion appVersion;
 
     public boolean adminCallback(AppUser u, Session s, String cmd, String arg, long chatId, int msgId) {
@@ -93,6 +94,7 @@ public class AdeskHandler {
             case "adrv" -> {
                 if (cfg.reverse()) {
                     cfg.setReverse(false);
+                    reverseSvc.clearStaleErrors();
                     audit.log(u.getId(), "ADESK_SOZLAMA", "settings", null, "reverse=0");
                     menu(s, chatId, msgId);
                 } else reverseConfirm(chatId, msgId);
@@ -181,7 +183,7 @@ public class AdeskHandler {
         cfg.get(AdeskConfig.LAST_CHECK).ifPresent(x -> sb.append("<b>Oxirgi solishtirish</b>: ").append(esc(x)).append("\n"));
 
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:adg"), btn("🔁 Sinxron", "a:adf")));
+        rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:adg"), btn("🔁 To'liq sinxron", "a:adf")));
         rows.add(irow(btn("🧮 Solishtirish", "a:adc"), btn("⚠️ Xatolar", "a:ade:0")));
         boolean needMap = !cfg.accountsConfirmed();
         if (needMap) rows.add(0, irow(btn("🔗 Hisoblarni bog'lash", "a:adm:0")));
@@ -320,6 +322,7 @@ public class AdeskHandler {
     /* ==================== xatolar ==================== */
 
     private void errors(String arg, long chatId, int msgId) {
+        if (!cfg.reverse()) reverseSvc.clearStaleErrors();   // o'chiq yo'nalishning eski xatolari qayta yuborilmaydi — ko'rsatilmaydi
         List<AdeskLink> all = repo.findByStatusOrderByUpdatedAtDesc(AdeskLink.ERROR);
         int pages = Math.max(1, (all.size() + PAGE - 1) / PAGE);
         int p = Math.min(idx(arg, pages), pages - 1);
