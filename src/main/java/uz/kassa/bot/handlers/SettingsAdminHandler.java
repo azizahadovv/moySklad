@@ -54,16 +54,18 @@ public class SettingsAdminHandler {
 
     void kartaMasList(long chatId, int msgId) {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        java.util.Set<Long> hidden = settings.clickHidden();
         for (ClickAccount c : clickRepo.findByActiveTrueOrderByIdAsc()) {
             String otdel = c.getKassaId() == null ? "—"
                     : kassaRepo.findById(c.getKassaId()).map(Kassa::getName).orElse("?");
             String mas = kartaMasName(c);
-            rows.add(irow(btn("💳 " + c.getName() + " · " + otdel + " · " + mas,
+            rows.add(irow(btn((hidden.contains(c.getId()) ? "🚫 " : "💳 ") + c.getName() + " · " + otdel + " · " + mas,
                     "a:kmc:" + c.getId())));
         }
         rows.add(irow(sup.bk("a:p:set")));
         String text = "💳 <b>Карта масъуллари</b>\n\n"
-                + "Karta → otdel → mas'ul. O'zgartirish uchun kartani bosing:";
+                + "Karta → otdel → mas'ul. O'zgartirish uchun kartani bosing:\n"
+                + "<i>🚫 — Click hisobotidan uzilgan karta.</i>";
         // Reply-menyu (Настройка) yo'lidan ham TUGMALAR bilan ochilsin (sup.show() 0 da
         // inline'siz yuborardi — bu bo'limda tugmasiz ma'no yo'q)
         if (msgId > 0) sender.edit(chatId, msgId, text, inline(rows));
@@ -100,7 +102,20 @@ public class SettingsAdminHandler {
                 List.of(
                         irow(btn("👤 Mas'ulni tanlash", "a:kmu:" + id)),
                         irow(btn("🗑 Mas'ulni olib tashlash", "a:kmx:" + id)),
+                        irow(settings.clickHidden().contains(id)
+                                ? btn("✅ Hisobotga qaytarish", "a:kmh:" + id)
+                                : btn("🚫 Click hisobotidan uzish", "a:kmh:" + id)),
                         irow(sup.bk("a:kml"))));
+    }
+
+
+    /** Kartani Click hisobotidan uzish / qaytarish (MoySklad hisobi, balans va sinxron o'zgarmaydi). */
+    void kartaHideToggle(AppUser admin, long cardId, long chatId, int msgId) {
+        boolean hide = !settings.clickHidden().contains(cardId);
+        settings.setClickHidden(cardId, hide);
+        clickRepo.findById(cardId).ifPresent(c -> audit.log(admin.getId(), "KARTA_HISOBOT", "click", cardId,
+                admin.getFullName() + ": " + c.getName() + (hide ? " -> Click hisobotidan uzildi" : " -> hisobotga qaytarildi")));
+        kartaMasCard(cardId, chatId, msgId);
     }
 
 

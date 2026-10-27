@@ -47,10 +47,13 @@ public class ClickFarqService {
     private final ControlNotifier notifier;
     private final Sender sender;
     private final AuditService audit;
+    private final uz.kassa.service.SettingsService settings;
 
     /** @param windowStart bugungi Click hisobot oynasining boshi (Jobs.clickWindowStart). */
     public void tick(Instant windowStart) {
-        List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
+        java.util.Set<Long> hidden = settings.clickHidden();   // 🚫 hisobotdan uzilgan kartalarga farq jarimasi yo'q
+        List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc().stream()
+                .filter(c -> !hidden.contains(c.getId())).toList();
         if (accounts.isEmpty()) return;
         Map<String, Long> ms;
         try { ms = msClient.fetchAccountBalancesTiyin(); }

@@ -32,8 +32,11 @@ public class AdeskAccountMapper {
     private final AdeskLinkRepo repo;
     private final ObjectMapper om = new ObjectMapper();
 
-    /** Bitta MoySklad hisobi va tanlangan Adesk hisobi (null — yangi yaratiladi). */
-    public record Row(String msKey, String msName, String orgShort, boolean cash, Long adeskId) {}
+    /** Bitta MoySklad hisobi va tanlangan Adesk hisobi (null — yangi yaratiladi); off — 🚫 uzilgan, Adesk'ka o'tmaydi. */
+    public record Row(String msKey, String msName, String orgShort, boolean cash, Long adeskId, boolean off) {}
+
+    /** Qoralamada «uzilgan» belgisi. */
+    public static final long OFF = -1L;
 
     /** Ekran uchun: qatorlar, Adesk hisoblari va qaysi biri taklif (avtomatik) ekani. */
     public record View(List<Row> rows, List<AdAccount> adesk, Set<String> suggested) {
@@ -44,6 +47,8 @@ public class AdeskAccountMapper {
             return adesk.stream().filter(a -> !used.contains(a.id())).toList();
         }
         public long mapped() { return rows.stream().filter(r -> r.adeskId() != null).count(); }
+        public long off() { return rows.stream().filter(Row::off).count(); }
+        public long created() { return rows.size() - mapped() - off(); }
     }
 
     private volatile List<MsAccount> msCache;
@@ -69,22 +74,24 @@ public class AdeskAccountMapper {
             sug = suggest(msCache.stream().filter(a -> !existing.containsKey(a.key())).toList(), orgCache,
                     adCache.stream().filter(a -> !taken.contains(a.id())).toList());
         }
+        Set<String> offKeys = cfg.offAccounts();
         List<Row> rows = new ArrayList<>();
         for (MsAccount a : msCache) {
             MsOrg org = orgCache.get(a.orgId());
-            Long id = draft.isEmpty() ? existing.getOrDefault(a.key(), sug.get(a.key())) : draft.get(a.key());
-            if (id != null && (id == 0 || !adIds.contains(id))) id = null;
-            rows.add(new Row(a.key(), AdeskSyncService.accountName(a, org, nameCnt), org == null ? "" : org.shortName(), a.cash(), id));
+            Long id = draft.isEmpty() ? (offKeys.contains(a.key()) ? (Long) OFF : existing.getOrDefault(a.key(), sug.get(a.key()))) : draft.get(a.key());
+            boolean off = id != null && id == OFF;
+            if (id != null && (id <= 0 || !adIds.contains(id))) id = null;
+            rows.add(new Row(a.key(), AdeskSyncService.accountName(a, org, nameCnt), org == null ? "" : org.shortName(), a.cash(), id, off));
         }
         return new View(rows, adCache, draft.isEmpty() ? sug.keySet() : Set.of());
     }
 
-    /** Qatorga Adesk hisobini tanlash (null — yangi yaratiladi). Shu Adesk hisobi boshqa qatorda bo'lsa — u yerdan olinadi. */
+    /** Qatorga Adesk hisobini tanlash (null — yangi yaratiladi, {@link #OFF} — uzilsin). Shu Adesk hisobi boshqa qatorda bo'lsa — u yerdan olinadi. */
     public synchronized void set(String msKey, Long adeskId) {
         View v = view(false);
         Map<String, Long> m = new LinkedHashMap<>();
-        for (Row r : v.rows()) m.put(r.msKey(), r.adeskId() == null ? 0L : r.adeskId());
-        if (adeskId != null) m.replaceAll((k, id) -> id.equals(adeskId) ? 0L : id);
+        for (Row r : v.rows()) m.put(r.msKey(), r.off() ? OFF : r.adeskId() == null ? 0L : r.adeskId());
+        if (adeskId != null && adeskId > 0) m.replaceAll((k, id) -> id.equals(adeskId) ? 0L : id);
         m.put(msKey, adeskId == null ? 0L : adeskId);
         saveDraft(m);
     }
@@ -99,8 +106,10 @@ public class AdeskAccountMapper {
     public synchronized int confirm() {
         View v = view(false);
         int n = 0;
+        Set<String> off = new LinkedHashSet<>();
         for (Row r : v.rows()) {
-            if (r.adeskId() == null) {   // «➕ yangi» tanlangan: oldingi bog'lanish bo'lsa yopiladi — sinxron yangi hisob yaratadi
+            if (r.off()) off.add(r.msKey());
+            if (r.adeskId() == null) {   // 🚫 uzilgan ham: bog'lanish yopiladi, sinxron bu hisobga tegmaydi   // «➕ yangi» tanlangan: oldingi bog'lanish bo'lsa yopiladi — sinxron yangi hisob yaratadi
                 repo.findByKindAndMsKey(AdeskLink.ACCOUNT, r.msKey()).filter(AdeskSyncService::linked).ifPresent(l -> {
                     l.setStatus(AdeskLink.DELETED); l.setUpdatedAt(Instant.now()); repo.save(l);
                 });
@@ -117,9 +126,10 @@ public class AdeskAccountMapper {
             repo.save(l);
             n++;
         }
+        cfg.setOffAccounts(off);
         cfg.set(AdeskConfig.ACC_CONFIRMED, "1");
         cfg.set(AdeskConfig.ACC_MAP, "");   // qoralama tozalanadi — keyingi ochilishda joriy bog'lanishlardan boshlanadi
-        log.info("Adesk hisoblari bog'lash tasdiqlandi: {} ta bog'landi, {} ta yangi yaratiladi", n, v.rows().size() - n);
+        log.info("Adesk hisoblari bog'lash tasdiqlandi: {} ta bog'landi, {} ta yangi yaratiladi, {} ta uzildi", n, v.created(), off.size());
         return n;
     }
 

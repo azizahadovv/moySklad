@@ -400,7 +400,7 @@ public class AdeskHandler {
                 AdeskAccountMapper.View v = mapper.view(false);
                 int i = idx(p[0], v.rows().size());
                 long id = p.length > 1 ? Long.parseLong(p[1]) : 0;
-                mapper.set(v.rows().get(i).msKey(), id == 0 ? null : id);
+                mapper.set(v.rows().get(i).msKey(), id == 0 ? null : id);   // -1 — 🚫 uzilsin
                 mapList(pageOf(mapper.view(false), i), chatId, msgId);
             }
             case "admr" -> { mapper.reset(); mapList(0, chatId, msgId); }
@@ -408,8 +408,9 @@ public class AdeskHandler {
             case "admy" -> {
                 AdeskAccountMapper.View v = mapper.view(false);
                 int n = mapper.confirm();
-                audit.log(u.getId(), "ADESK_HISOB_BOGLASH", "settings", null, "bog'landi=" + n + ", yangi=" + (v.rows().size() - n));
-                sender.send(chatId, "✅ Hisoblar bog'landi: <b>" + n + "</b> ta. Yangi yaratiladi: <b>" + (v.rows().size() - n) + "</b> ta.\n"
+                audit.log(u.getId(), "ADESK_HISOB_BOGLASH", "settings", null, "bog'landi=" + n + ", yangi=" + v.created() + ", uzildi=" + v.off());
+                sender.send(chatId, "✅ Hisoblar bog'landi: <b>" + n + "</b> ta. Yangi yaratiladi: <b>" + v.created() + "</b> ta."
+                        + (v.off() > 0 ? " 🚫 Uzildi: <b>" + v.off() + "</b> ta." : "") + "\n"
                         + "Endi 🔁 To'liq sinxron bosing — Adesk'ka ma'lumot o'tishi shu bilan boshlanadi.");
                 menu(s, chatId, msgId);
             }
@@ -435,7 +436,8 @@ public class AdeskHandler {
         List<AdeskClient.AdAccount> free = v.unmapped();
         StringBuilder sb = new StringBuilder("🔗 <b>Hisoblarni bog'lash</b> (" + (p + 1) + "/" + pages + ")\n\n");
         sb.append("MoySklad: <b>").append(v.rows().size()).append("</b> hisob · Adesk: <b>").append(v.adesk().size()).append("</b> hisob\n");
-        sb.append("✅ Bog'lanadi: <b>").append(v.mapped()).append("</b> · ➕ yangi yaratiladi: <b>").append(v.rows().size() - v.mapped()).append("</b>\n");
+        sb.append("✅ Bog'lanadi: <b>").append(v.mapped()).append("</b> · ➕ yangi yaratiladi: <b>").append(v.created()).append("</b>")
+          .append(v.off() > 0 ? " · 🚫 uzilgan: <b>" + v.off() + "</b>" : "").append("\n");
         if (!free.isEmpty())
             sb.append("⚠️ Adesk'da bog'lanmay qoladi: ").append(free.size()).append(" ta — ")
               .append(esc(String.join(", ", free.stream().limit(8).map(AdeskClient.AdAccount::name).toList()))).append(free.size() > 8 ? " …" : "").append("\n");
@@ -447,7 +449,7 @@ public class AdeskHandler {
             int i = ord.get(k);
             AdeskAccountMapper.Row r = v.rows().get(i);
             AdeskClient.AdAccount a = v.adesk(r.adeskId());
-            String label = a == null ? "➕ " + cut(r.msName(), 30) + " · yangi" : "✅ " + cut(r.msName(), 22) + " → " + cut(a.name(), 20);
+            String label = r.off() ? "🚫 " + cut(r.msName(), 30) + " · uzilgan" : a == null ? "➕ " + cut(r.msName(), 30) + " · yangi" : "✅ " + cut(r.msName(), 22) + " → " + cut(a.name(), 20);
             rows.add(irow(btn(label, "a:adme:" + i)));
         }
         List<InlineKeyboardButton> nav = new ArrayList<>();
@@ -468,9 +470,11 @@ public class AdeskHandler {
         for (AdeskAccountMapper.Row x : v.rows()) if (x.adeskId() != null && x != r) usedBy.put(x.adeskId(), x.msName());
         StringBuilder sb = new StringBuilder("🔗 <b>").append(esc(r.msName())).append("</b>\n")
                 .append("MoySklad · ").append(esc(r.orgShort())).append(r.cash() ? " · naqd kassa" : "").append("\n\n")
-                .append("Adesk'dagi qaysi hisobga bog'lansin? ↪️ — boshqa MoySklad hisobiga bog'langan, tanlasangiz u yerdan olinadi.\n\nHisobni tanlang:");
+                .append("Adesk'dagi qaysi hisobga bog'lansin? ↪️ — boshqa MoySklad hisobiga bog'langan, tanlasangiz u yerdan olinadi.\n")
+                .append("🚫 Uzilsin — bu hisob Adesk'ka umuman o'tmaydi (bog'lanish uziladi, Adesk'dagi hisob o'zgarmaydi).\n\nHisobni tanlang:");
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
-        rows.add(irow(btn((r.adeskId() == null ? "✅ " : "") + "➕ Yangi yaratilsin", "a:adms:" + i + ".0")));
+        rows.add(irow(btn((r.adeskId() == null && !r.off() ? "✅ " : "") + "➕ Yangi yaratilsin", "a:adms:" + i + ".0"),
+                btn((r.off() ? "✅ " : "") + "🚫 Uzilsin", "a:adms:" + i + ".-1")));
         for (AdeskClient.AdAccount a : v.adesk()) {
             String mark = Objects.equals(r.adeskId(), a.id()) ? "✅ " : usedBy.containsKey(a.id()) ? "↪️ " : "";
             rows.add(irow(btn(mark + cut(a.name(), 34), "a:adms:" + i + "." + a.id())));
@@ -484,7 +488,8 @@ public class AdeskHandler {
         List<AdeskClient.AdAccount> free = v.unmapped();
         StringBuilder sb = new StringBuilder("🔗 <b>Bog'lashni tasdiqlash</b>\n\n");
         sb.append("✅ Bog'lanadi: <b>").append(v.mapped()).append("</b> ta — Adesk'dagi nomi MoySklad nomiga o'zgartiriladi\n");
-        sb.append("➕ Yangi yaratiladi: <b>").append(v.rows().size() - v.mapped()).append("</b> ta\n");
+        sb.append("➕ Yangi yaratiladi: <b>").append(v.created()).append("</b> ta\n");
+        if (v.off() > 0) sb.append("🚫 Uzilgan: <b>").append(v.off()).append("</b> ta — Adesk'ka o'tmaydi\n");
         if (!free.isEmpty()) sb.append("⚠️ Adesk'da bog'lanmay qoladi: <b>").append(free.size()).append("</b> ta — ")
                 .append(esc(String.join(", ", free.stream().map(AdeskClient.AdAccount::name).toList())))
                 .append(". Ular o'zgarmaydi, solishtirishda «ортиқча» bo'lib ko'rinadi.\n");

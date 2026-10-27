@@ -35,6 +35,31 @@ public class Sender {
 
     public void send(long chatId, String text) { send(chatId, text, null); }
 
+    /** Chat bo'yicha to'xtatish muddati: 429 (retry after) yoki «chat not found» dan keyin — Telegram'ni urib turmaslik uchun. */
+    private final java.util.Map<Long, Long> blockedUntil = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.regex.Pattern RETRY = java.util.regex.Pattern.compile("retry after (\\d+)");
+
+    private boolean blocked(long chatId) {
+        Long t = blockedUntil.get(chatId);
+        if (t == null) return false;
+        if (System.currentTimeMillis() < t) return true;
+        blockedUntil.remove(chatId);
+        return false;
+    }
+
+    /** Yuborish xatosi: 429 — retry after muddatiga, chat topilmasa/bloklangan — 6 soatga shu chat to'xtatiladi (bir marta log). */
+    private void failed(long chatId, TelegramApiException e) {
+        String m = String.valueOf(e.getMessage());
+        long ms = 0;
+        var r = RETRY.matcher(m);
+        if (r.find()) ms = (Long.parseLong(r.group(1)) + 1) * 1000L;
+        else if (m.contains("chat not found") || m.contains("bot was blocked") || m.contains("user is deactivated")) ms = 6 * 3600_000L;
+        if (ms > 0) {
+            blockedUntil.put(chatId, System.currentTimeMillis() + ms);
+            log.warn("Xabar yuborilmadi ({}): {} — chat {} soniya to'xtatildi", chatId, m, ms / 1000);
+        } else log.warn("Xabar yuborilmadi ({}): {}", chatId, m);
+    }
+
     /** Yuborilgan xabar ID sini qaytaradi (panel xabarlarini keyin o'chirish uchun). */
     public Integer sendId(long chatId, String text, ReplyKeyboard kb) {
         SendMessage m = SendMessage.builder()
@@ -43,10 +68,11 @@ public class Sender {
                 .parseMode("HTML")
                 .build();
         if (kb != null) m.setReplyMarkup(kb);
+        if (blocked(chatId)) return null;
         try {
             return bot().execute(m).getMessageId();
         } catch (TelegramApiException e) {
-            log.warn("Xabar yuborilmadi ({}): {}", chatId, e.getMessage());
+            failed(chatId, e);
             return null;
         }
     }
@@ -68,10 +94,11 @@ public class Sender {
                 .parseMode("HTML")
                 .build();
         if (kb != null) m.setReplyMarkup(kb);
+        if (blocked(chatId)) return;
         try {
             bot().execute(m);
         } catch (TelegramApiException e) {
-            log.warn("Xabar yuborilmadi ({}): {}", chatId, e.getMessage());
+            failed(chatId, e);
         }
     }
 

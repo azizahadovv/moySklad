@@ -239,6 +239,7 @@ public class AdminHandler {
             case "kmu" -> settingsH.kartaMasUsers(Long.parseLong(arg), chatId, msgId);
             case "kms" -> settingsH.kartaMasSet(u, arg, chatId, msgId);
             case "kmx" -> settingsH.kartaMasClear(u, Long.parseLong(arg), chatId, msgId);
+            case "kmh" -> settingsH.kartaHideToggle(u, Long.parseLong(arg), chatId, msgId);
             case "cge" -> {
                 s.state = Session.State.ADM_CG_ID;
                 sender.edit(chatId, msgId, "📣 <b>Гуруҳлар/Каналлар — yangi chat qo'shish</b>\n\n"

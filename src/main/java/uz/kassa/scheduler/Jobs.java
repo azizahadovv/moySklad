@@ -458,7 +458,9 @@ public class Jobs {
         try {
             java.util.List<Long> chatIds = clickChatIds();
             if (chatIds.isEmpty()) return;
-            List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc();
+            java.util.Set<Long> hidden = settings.clickHidden();   // 🚫 hisobotdan uzilgan kartalar
+            List<ClickAccount> accounts = clickRepo.findByActiveTrueOrderByIdAsc().stream()
+                    .filter(c -> !hidden.contains(c.getId())).toList();
             if (accounts.isEmpty()) return;
 
             // MoySklad joriy qoldiqlari — har qator yonida AVTOMATIK solishtiruv uchun

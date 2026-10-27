@@ -294,9 +294,9 @@ public class AdeskReverseService {
         if (!cash) b.set("organizationAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
         b.set("agent", meta("organization", "organization/" + agentOrg));
         // MoySklad «Перемещение» tugmasidagidek: qarshi tomon bank hisobi; u kassa bo'lsa — hujjatning o'z hisobi (02588/07281)
-        if (!cash) b.set("agentAccount", AdeskMsReader.CASH.equals(agentAcc)
-                ? meta("account", "organization/" + orgId + "/accounts/" + accId)
-                : meta("account", "organization/" + agentOrg + "/accounts/" + agentAcc));
+        // agentAccount agent firmaga tegishli bo'lishi shart (aks holda 412/17001): qarshi tomon kassa va boshqa firma — qo'yilmaydi
+        if (!cash && !AdeskMsReader.CASH.equals(agentAcc)) b.set("agentAccount", meta("account", "organization/" + agentOrg + "/accounts/" + agentAcc));
+        else if (!cash && agentOrg.equals(orgId)) b.set("agentAccount", meta("account", "organization/" + orgId + "/accounts/" + accId));
         b.put("sum", sum);
         b.put("description", desc);
         if (purpose != null) b.put("paymentPurpose", purpose);

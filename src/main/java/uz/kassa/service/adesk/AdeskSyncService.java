@@ -226,9 +226,11 @@ public class AdeskSyncService {
         Set<Long> used = usedIds(L);
         Map<String, Long> opening = null;
         LocalDate od = cfg.openingDate();
+        Set<String> off = cfg.offAccounts();
 
         for (MsAccount a : accs) {
             if (r.stopped()) return;
+            if (off.contains(a.key())) continue;   // 🚫 uzilgan hisob: Adesk'ka o'tmaydi
             MsOrg org = orgById.get(a.orgId());
             String name = accountName(a, org, nameCnt);
             int type = a.cash() ? 1 : 2;
@@ -619,6 +621,8 @@ public class AdeskSyncService {
             if (r.allMoney == null) r.allMoney = msr.moneyDocs(from, cfg.today(), null, r.currencies);
             docs = r.allMoney.stream().filter(d -> !d.date().isBefore(from) && !d.date().isAfter(to)).toList();
         } else docs = msr.moneyDocs(from, to, cur.minusMinutes(OVERLAP_MIN), r.currencies);
+        Set<String> off = cfg.offAccounts();
+        if (!off.isEmpty()) docs = docs.stream().filter(d -> !off.contains(d.accountKey())).toList();
         // Sozlamada yoqilgan bo'lsa (standart o'chiq), to'liq yurishda MoySklad'dagi perevod juftlari (chiqim «Перемещение» + kirim)
         // Adesk'da bitta «Перевод между счетами» bo'ladi; ular quyidagi oddiy oqimda o'tkazib yuboriladi.
         // O'chiq bo'lsa hech narsa o'zgarmaydi; avval aylantirilgan perevodlar ham joyida qoladi (isTr — tegilmaydi).
@@ -705,8 +709,9 @@ public class AdeskSyncService {
         r.stage = "Adesk → MoySklad";
         r.orgs = msr.orgs();
         r.expenseItems = msr.expenseItems();
+        Set<String> off = cfg.offAccounts();
         for (AdeskLink l : links(r, ACCOUNT).values())
-            if (linked(l)) { r.account.put(l.getMsKey(), l.getAdeskId()); r.accountByAd.put(l.getAdeskId(), l.getMsKey()); }
+            if (linked(l) && !off.contains(l.getMsKey())) { r.account.put(l.getMsKey(), l.getAdeskId()); r.accountByAd.put(l.getAdeskId(), l.getMsKey()); }
         reverseRecent(r, links(r, MONEY), null);
         r.stage = "tugadi";
     }

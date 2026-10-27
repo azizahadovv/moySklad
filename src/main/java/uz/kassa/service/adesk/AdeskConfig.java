@@ -45,6 +45,8 @@ public class AdeskConfig {
     public static final String SINGLE_LE = "adesk.singleLe";
     public static final String ACC_MAP = "adesk.accMap";
     public static final String ACC_CONFIRMED = "adesk.accConfirmed";
+    /** Uzilgan MoySklad hisoblari (vergulli msKey): Adesk'ka umuman o'tmaydi, hisob ham yaratilmaydi. */
+    public static final String ACC_OFF = "adesk.accOff";
     /** Kunlik solishtirish hisoboti vaqti (HH:mm) va chatlari (vergulli; bo'sh — SuperAdmin/buxgalterlarga). */
     public static final String REPORT_TIME  = "adesk.report.time";
     public static final String REPORT_CHATS = "adesk.report.chats";
@@ -134,6 +136,13 @@ public class AdeskConfig {
     }
 
     public boolean singleLe() { return !"0".equals(settings.get(SINGLE_LE).orElse("1").trim()); }
+
+    public java.util.Set<String> offAccounts() {
+        java.util.Set<String> s = new java.util.HashSet<>();
+        for (String k : settings.get(ACC_OFF).orElse("").split(",")) if (!k.isBlank()) s.add(k.trim());
+        return s;
+    }
+    public void setOffAccounts(java.util.Collection<String> keys) { settings.set(ACC_OFF, String.join(",", keys)); }
 
     public boolean accountsConfirmed() { return "1".equals(settings.get(ACC_CONFIRMED).orElse("0").trim()); }
     public void setReverse(boolean on) { settings.set(REVERSE, on ? "1" : "0"); }
