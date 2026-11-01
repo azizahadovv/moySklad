@@ -270,7 +270,7 @@ public class StatsHandler {
             if (boshl == 0)
                 sb.append("Sabab: boshlang'ich qoldiq kiritilmagan — tizim 0 dan boshlab "
                         + "hisoblayapti, MoySklad chiqimlari esa ayirilyapti.\n"
-                        + "Yechim: ⚙️ Настройка → 💼 Бошланғич қолдиқ → Buxgalteriya.\n");
+                        + "Yechim: ⚙️ Настройка → 💼 Молия → 💼 Бошланғич қолдиқ.\n");
         }
 
         if (!rasxodLines.isEmpty())

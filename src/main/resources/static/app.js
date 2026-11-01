@@ -312,7 +312,7 @@ async function pagePending(seg) {
   if (!open) return;
 
   document.getElementById('okFull').onclick = () => confirmSheet(
-    'Тўлиқ қабул қилиш', `Нақд <b>${fmt(p.naqd)}</b> ва click <b>${fmt(p.klik)}</b> сўм бухгалтерияга ўтади, кунлар ёпилади.`,
+    'Тўлиқ қабул қилиш', `Нақд <b>${fmt(p.naqd)}</b> сўм бухгалтерияга ўтади, click <b>${fmt(p.klik)}</b> сўм кассада қолади, кунлар ёпилади.`,
     () => decide(p.id, { action: 'approve' }));
   document.getElementById('okPart').onclick = () => sheet(html`
     <h2>✂️ Қисман қабул қилиш</h2>

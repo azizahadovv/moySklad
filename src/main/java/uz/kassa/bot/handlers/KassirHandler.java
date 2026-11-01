@@ -148,6 +148,7 @@ public class KassirHandler {
 
     private void today(AppUser u, long chatId) {
         Long kid = u.getKassaId();
+        if (kid == null) { sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan"); return; }   // aks holda findById(null) — javobsiz xato
         DayRecord d = dayRepo.findByKassaIdAndDate(kid, ledger.today()).orElse(null);
         List<DayRecord> pending = submissionService.submittableDays(kid);
         Balance n = ledger.view(OwnerType.KASSA, kid, MoneyType.NAQD);
@@ -182,6 +183,7 @@ public class KassirHandler {
 
     private void balance(AppUser u, long chatId) {
         Long kid = u.getKassaId();
+        if (kid == null) { sender.send(chatId, "⚠️ Sizga kassa biriktirilmagan"); return; }
         Balance n = ledger.view(OwnerType.KASSA, kid, MoneyType.NAQD);
         Balance k = ledger.view(OwnerType.KASSA, kid, MoneyType.KLIK);
         sender.send(chatId, "💰 <b>Balansim</b> — " + esc(names.owner(OwnerType.KASSA, kid)) + "\n\n"

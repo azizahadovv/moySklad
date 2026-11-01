@@ -242,7 +242,8 @@ public class Router {
             String[] kp = text.trim().split("\\s+");
             if (kp.length >= 3 && kp[1].equalsIgnoreCase("vaqt")) {
                 if (user.getRole() != Role.SUPERADMIN) { sender.send(chatId, "⚠️ Vaqtni faqat SuperAdmin o'zgartiradi"); return; }
-                if (!kp[2].matches("\\d{2}:\\d{2}")) { sender.send(chatId, "Format: <code>/kunlik vaqt 22:00</code> (5 daqiqaga karrali)"); return; }
+                // tick har 5 daqiqada aniq tenglikni tekshiradi — 5 ga karrali bo'lmagan vaqt (21:33) jim qabul qilinib, hisobot kelmasdi
+                if (!kp[2].matches("([01]\\d|2[0-3]):[0-5][05]")) { sender.send(chatId, "Format: <code>/kunlik vaqt 22:00</code> (5 daqiqaga karrali)"); return; }
                 settings.set(uz.kassa.service.DailyReportService.TIME_KEY, kp[2]);
                 sender.send(chatId, "✅ Kunlik hisobot vaqti: <b>" + kp[2] + "</b> (Click guruhlari + SuperAdmin + buxgalter)");
                 return;

@@ -375,7 +375,8 @@ public class DailyReportService {
                     {"Nuqta", "Kassa (do'kon). MoySklad'dagi otdel shu kassaga bog'langan — hujjat qaysi otdelda bo'lsa, o'sha nuqtaga tushadi."},
                     {"Kassir", "Botda shu kassaga biriktirilgan faol kassirlar."},
                     {"MoySklad kirimi", "Shu kuni MoySklad'da shu otdel nomidan o'tgan pul kirimlari: Приходный ордер (naqd) + "
-                            + "Входящий платёж («Клик» / «Терминал» statusli) + chakana savdo (naqd+naqdsiz) − chakana vozvrat. "
+                            + "Входящий платёж (click va terminal statusli — standart «Клик» va «Картадан тулов», sozlamada o'zgartiriladi) "
+                            + "+ chakana savdo (naqd+naqdsiz) − chakana vozvrat. "
                             + "Перечисление, Карз va boshqa statusli to'lovlar KIRMAYDI. Ro'yxat — «Hujjatlar» varag'ida."},
                     {"Naqd topshirilgan", "Shu kuni kassir buxgalteriyaga topshirgan NAQD pul (botda qabul qilingan topshiriqlar). "
                             + "Kirimdan kam bo'lishi normal: Klik/Terminal pul kassada naqd bo'lib turmaydi, naqd esa ertasi kuni topshirilishi mumkin."},

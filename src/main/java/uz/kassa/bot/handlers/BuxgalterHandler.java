@@ -473,7 +473,7 @@ public class BuxgalterHandler {
                         : touches(o, OwnerType.KASSA, Long.parseLong(who)))).count();
             if (total > lines.size())
                 sb.append("\n\n<i>…yana ").append(total - lines.size())
-                  .append(" ta. To'liq ro'yxat: 📊 Excel hisobot</i>");
+                  .append(" ta. To'liq ro'yxat: 📊 Ҳисоботлар → 📊 Свод</i>");
         }
         sender.edit(chatId, msgId, sb.toString(), periodButtons(who.equals("0") ? "b:hp" : "b:hp"));
     }

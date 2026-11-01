@@ -181,7 +181,7 @@ public class SubmissionService {
             // rezervda, qabul qilinsa bir pul IKKI MARTA yechiladi (minus sababi edi).
             if (!subRepo.findByKassaIdAndStatusOrderByIdAsc(kassaId, SubmissionStatus.KUTILMOQDA).isEmpty())
                 throw new BusinessException("Bu kassaning ko'rib chiqilmagan hisoboti bor — "
-                        + "avval uni qabul qiling yoki rad eting (🏪 KASSA → 📥 Кутилаётганлар, "
+                        + "avval uni qabul qiling yoki rad eting (🏠 Bosh menyu → 📥 Кутилаётганлар, "
                         + "yoki kassa kartasida 💵 Топширилмаган пул → 📥 Ҳисоботларни кўриш), "
                         + "keyin pul qabul qilinadi (aks holda bir pul ikki marta yechiladi).");
             // debit() mavjud qoldiqni QULF ostida tekshiradi — 0 balansdan qabul o'tmaydi.

@@ -153,7 +153,7 @@ public final class Keyboards {
     /** Barcha asosiy menyu tugmalari — bosilganda tugallanmagan dialog bekor qilinadi. */
     private static final java.util.Set<String> MENU_LABELS = java.util.Set.of(
             "📊 Bugungi holat", "💰 Balansim",
-            "📤 Hisobot topshirish", "🧾 Qarzlarim", "📜 Tarix",
+            "📤 Hisobot topshirish", "🔁 O'tkazma", "🧾 Qarzlarim", "📜 Tarix",   // 🔁 yo'q edi: izoh bosqichida bosilsa matni izoh bo'lib o'tkazma yaratilardi
             "🏪 Kassalar holati", "🧾 Qarzlar registri", "📊 Excel hisobot",
             "👥 Foydalanuvchi qo'shish", "🏪 Kassa qo'shish",
             "💼 Boshlang'ich qoldiq", "👤 Foydalanuvchilar",
