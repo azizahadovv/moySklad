@@ -103,6 +103,8 @@ public class NotifySwitches {
     public static final String TG_XABAR = "TG_XABAR";
     public static final String TG_JIM   = "TG_JIM";
     public static final String TG_XAVFSIZLIK = "TG_XAVFSIZLIK";
+    /** 🆕 Akkauntda yangi karta paydo bo'ldi — «ishxona yoki shaxsiy?» so'rovi. */
+    public static final String TG_KARTA_YANGI = "TG_KARTA_YANGI";
     /* ⚙️ texnik */
     public static final String TEXNIK_OGOH = "TEXNIK_OGOH";
     /** 📒 Adesk: token yaroqsiz / obuna tugagan — sinxron to'xtadi. */
@@ -199,6 +201,8 @@ public class NotifySwitches {
                     "akkaunt ulanishi uzilgan yoki N soat xabar kelmagan (tg-reader to'xtagan)", A),
             new Sw(TG_XAVFSIZLIK, G_TG, "🔐 Akkaunt xavfsizligi",
                     "ulangan akkauntga yangi (avval ko'rilmagan) qurilma kirganda → admin + akkaunt egasi", ABRX),
+            new Sw(TG_KARTA_YANGI, G_TG, "🆕 Yangi karta topildi",
+                    "ulangan akkauntda avval ko'rilmagan karta chiqqanda → SuperAdmin'dan «ishxona yoki shaxsiy?» so'raladi", A),
 
             new Sw(JR_XODIM, G_JARIMA, "⚖️ Jarima — xodimga darhol",
                     "ogohlantirish/jarima yozilganda va admin yopganda → xodimning o'ziga", RX),

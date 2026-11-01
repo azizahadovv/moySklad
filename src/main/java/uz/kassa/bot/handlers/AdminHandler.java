@@ -399,13 +399,13 @@ public class AdminHandler {
             case "otdel" -> {
                 if (text.equals(OSN_LABEL)) {
                     sup.navTo(u, s, "kassab", chatId,
-                            "🏦 <b>Отдел основной</b> (Буxгалтерия)\n\nBo'limni tanlang:", OSN_MENU);
+                            "🏦 <b>Отдел основной</b> (Буxгалтерия)\n\n" + sup.help(u, "osn", OSN_MENU) + "Bo'limni tanlang:", OSN_MENU);
                     return true;
                 }
                 Kassa k = sup.kassaByLabel(text);
                 if (k == null) return false;
                 sup.navTo(u, s, "kassa:" + k.getId(), chatId,
-                        "🏪 <b>" + esc(k.getName()) + "</b>\n\nBo'limni tanlang:", KASSA_MENU);
+                        "🏪 <b>" + esc(k.getName()) + "</b>\n\n" + sup.help(u, "kassa", KASSA_MENU) + "Bo'limni tanlang:", KASSA_MENU);
             }
             case "kassa" -> {
                 long id = sup.idOf(nav);
@@ -615,7 +615,7 @@ public class AdminHandler {
             case "davr" -> {
                 long id = sup.idOf(nav);
                 sup.navTo(u, s, "kassa:" + id, chatId,
-                        "🏪 <b>" + esc(names.owner(OwnerType.KASSA, id)) + "</b>\n\nBo'limni tanlang:",
+                        "🏪 <b>" + esc(names.owner(OwnerType.KASSA, id)) + "</b>\n\n" + sup.help(u, "kassa", KASSA_MENU) + "Bo'limni tanlang:",
                         KASSA_MENU);
             }
             case "sozkassa", "sozuser" -> {

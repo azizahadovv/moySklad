@@ -141,7 +141,21 @@ public class AdminSupport {
     void navMenu(AppUser u, Session s, String key, long chatId) {
         MenuSchemaService.MenuDef d = MenuSchemaService.MENUS.get(key);
         if (d == null || !d.free()) { navMenu(u, s, "sozlash", chatId); return; }
-        navTo(u, s, "m:" + key, chatId, "<b>" + esc(d.title()) + "</b>\n\nBo'limni tanlang:", schema.current(key));
+        List<String> items = schema.current(key);
+        navTo(u, s, "m:" + key, chatId, "<b>" + esc(d.title()) + "</b>\n\n"
+                + uz.kassa.bot.MenuHelp.block(key, visibleFor(u, items), labelSvc::display) + "Bo'limni tanlang:", items);
+    }
+
+    /** ℹ️ «• tugma — izoh» qatorlari (MenuHelp) shu foydalanuvchiga ko'rinadigan tugmalar uchun. */
+    String help(AppUser u, String ctx, List<String> labels) {
+        return uz.kassa.bot.MenuHelp.block(ctx, visibleFor(u, labels), labelSvc::display);
+    }
+
+    /** menuKb bilan bir xil filtr — ℹ️ izoh faqat ko'rinadigan tugmalar uchun. */
+    List<String> visibleFor(AppUser u, List<String> labels) {
+        return labels.stream()
+                .filter(l -> !LabelService.RENAMABLE.contains(l) || permSvc.visible(u, l))
+                .filter(l -> u.getRole() == Role.SUPERADMIN || !MenuSchemaService.SA_ONLY.contains(l)).toList();
     }
 
     /** Tugma qaysi guruhga tegishli (guruhga «Orqaga» uchun). */

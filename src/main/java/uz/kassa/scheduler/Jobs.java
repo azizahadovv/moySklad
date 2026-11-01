@@ -511,7 +511,11 @@ public class Jobs {
               .append("📊 <b>ХУЛОСА:</b>  ✅ тенг — ").append(stat[0])
               .append("   ⚠️ фарқ — ").append(stat[1])
               .append("   ❗️ киритилмаган — ").append(stat[2])
-              .append(stat[3] == 0 ? "" : "   ⏰ янгиланмаган — " + stat[3]).append("\n\n");
+              .append(stat[3] == 0 ? "" : "   ⏰ янгиланмаган — " + stat[3]).append("\n")
+              .append("<i>Фарқ = Мой склад − карта: «+» — MoySklad'да кўп, «−» — картада кўп.</i>\n");
+            long hiddenN = clickRepo.findByActiveTrueOrderByIdAsc().stream().filter(c -> hidden.contains(c.getId())).count();
+            if (hiddenN > 0) sb.append("<i>🚫 ").append(hiddenN).append(" та карта ҳисоботдан чиқарилган (⚙️ → 💳 Карта масъуллари).</i>\n");
+            sb.append("\n");
             // Foydalanuvchi qarori: ost qismda ЖАМИ ham KO'RSATILMAYDI — u bot
             // balanslari yig'indisi bo'lib, qatorlardagi MoySklad qiymatlari bilan
             // manba jihatdan farq qilib chalg'itardi (masalan 200 002 farq hodisasi).
@@ -565,7 +569,9 @@ public class Jobs {
         Long msv = (aid == null || aid.isBlank()) ? null : ms.get(aid);
         long msShown = msv != null ? msv : botBal * 100;   // TIYIN; MS o'qilmasa — bot (so'm) qiymati
         b.append("📦 Мой склад қолдиғи ").append(now).append(" ҳолатида: <b>")
-         .append(TextUtil.fmtTiyin(msShown)).append("</b>\n");
+         .append(TextUtil.fmtTiyin(msShown)).append("</b>")
+         // MoySklad qiymati o'qilmasa bot hisobi ko'rsatiladi — ochiq aytiladi (01.11.2026 gacha belgisiz edi)
+         .append(msv == null ? " <i>(MoySklad ўқилмади — бот ҳисоби)</i>" : "").append("\n");
         if (c.getCardBalance() == null) {
             stat[2]++;
             b.append("❗️ Карта қолдиғи: <b>киритилмаган</b>\n")
@@ -578,9 +584,13 @@ public class Jobs {
                     : java.time.LocalDateTime.ofInstant(c.getCardBalanceAt(), zone).format(CARD_TF);
             String by = c.getCardBalanceBy() == null ? ""
                     : TextUtil.esc(c.getCardBalanceBy().replace("(tasdiqlangan)", "").trim()) + " ✔";
+            boolean oldDay = c.getCardBalanceAt() != null
+                    && java.time.LocalDate.ofInstant(c.getCardBalanceAt(), zone).isBefore(java.time.LocalDate.now(zone));
             b.append("💳 Карта қолдиғи ").append(at).append(" ҳолатида: <b>")
              .append(TextUtil.fmtTiyin(kartaBal)).append("</b>")
              .append(by.isEmpty() ? "" : " <i>(" + by + ")</i>")
+             // kechagi qoldiq bugungi MoySklad bilan solishtirilmoqda — farq shundan bo'lishi mumkin
+             .append(oldDay ? "\n<i>⏰ бугун ҳали юборилмаган — фарқ эски қолдиқ билан ҳисобланди</i>" : "")
              .append("\n");
             long farq = msShown - kartaBal;
             if (farq == 0) {

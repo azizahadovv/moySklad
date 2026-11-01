@@ -64,6 +64,7 @@ public class ExcelReportService {
             summarySheet(wb, head, money, bold, ops, only, to);
             operationsSheet(wb, head, money, ops);
             moyskladSheet(wb, head, money, from, to, only);
+            helpSheet(wb, head, from, to, only);
 
             wb.write(bos);
             return bos.toByteArray();
@@ -314,6 +315,43 @@ public class ExcelReportService {
         autos(sh, cols.length);
     }
 
+    /* ---------------- 4: IZOH — har ustun qayerdan (01.11.2026, user: «qayerdan qancha summa kelyapti tushunarsiz») ---------------- */
+
+    private void helpSheet(Workbook wb, CellStyle head, LocalDate from, LocalDate to, Kassa only) {
+        Sheet sh = wb.createSheet("Izoh");
+        java.time.format.DateTimeFormatter df = java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy");
+        CellStyle wrap = wb.createCellStyle(); wrap.setWrapText(true); wrap.setVerticalAlignment(VerticalAlignment.TOP);
+        String[][] rows = {
+                {"Davr", from.format(df) + " — " + to.format(df) + (only == null ? " · barcha kassalar" : " · " + only.getName())
+                        + " · tuzildi " + java.time.LocalDateTime.now(props.zoneId()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))},
+                {"", ""},
+                {"«Umumiy» varag'i", ""},
+                {"Kirim Naqd / Klik / Terminal", "Davrdagi tasdiqlangan kirimlar: MoySklad'dan kelgan savdo va kirim hujjatlari (PRIXOD) + boshlang'ich qoldiq (BOSHLANGICH)."},
+                {"Chiqim Naqd / Klik / Terminal", "Davrdagi tasdiqlangan rasxod (RASXOD) va qaytarish (VOZVRAT)."},
+                {"Farq (naqd+klik)", "Kirim − Chiqim, terminalsiz. Bu balans o'zgarishi EMAS: kassadan buxgalteriyaga topshirish (TOPSHIRIQ), "
+                        + "kassalar orasidagi o'tkazma (OTKAZMA) va qo'lda tuzatish (KORREKTIROVKA) bu ustunlarga kirmaydi, lekin balansni o'zgartiradi."},
+                {"Joriy balans / Balans dd.MM", "Davr harakati emas — qoldiq: davr oxiridagi (bugun bo'lsa hozirgi) bot hisobidagi balans."},
+                {"Terminal", "Faqat jurnal uchun: pul bank hisobida, kassa balansiga kirmaydi va topshirilmaydi."},
+                {"Klik", "Click pul kassada qoladi, buxgalteriyaga o'tmaydi; hisobot qabul qilinganda faqat kunlar yopiladi."},
+                {"", ""},
+                {"«Tranzaksiyalar» varag'i", "Botdagi BARCHA amallar, har qanday holatda. Hisobga faqat Status = TASDIQLANGAN kiradi; "
+                        + "RAD_ETILGAN, BEKOR, KUTILMOQDA — kirmaydi, shuning uchun bu varaq yig'indisi «Umumiy» bilan teng emas."},
+                {"Turi", "PRIXOD — kirim · RASXOD — chiqim · VOZVRAT — qaytarish · OTKAZMA — kassalar orasida o'tkazma · "
+                        + "TOPSHIRIQ — kassadan buxgalteriyaga topshirish · KORREKTIROVKA — qo'lda tuzatish · BOSHLANGICH — boshlang'ich qoldiq"},
+                {"", ""},
+                {"«MoySklad» varag'i", "MoySklad'dagi kassa va to'lov hujjatlari (jonli o'qiladi): naqd orderlar va to'lovlar. "
+                        + "Chakana savdo cheklari bu varaqda yo'q. Summa — hujjatdagi summa, valyuta kursisiz."},
+        };
+        int r = 0;
+        for (String[] x : rows) {
+            Row row = sh.createRow(r++);
+            cell(row, 0, x[0], x[1].isEmpty() && !x[0].isEmpty() ? head : null);
+            cell(row, 1, x[1], wrap);
+        }
+        sh.setColumnWidth(0, 32 * 256);
+        sh.setColumnWidth(1, 100 * 256);
+    }
+
     /* ---------------- 3: MOYSKLAD (jonli API) ---------------- */
 
     private void moyskladSheet(Workbook wb, CellStyle head, CellStyle money,
@@ -324,6 +362,13 @@ public class ExcelReportService {
         row(sh, 0, head, (Object[]) cols);
         Map<String, String> groupNames = ms.fetchGroups();
         String onlyGroup = only == null ? null : only.getMoyskladGroupId();
+        if (only != null && (onlyGroup == null || onlyGroup.isBlank())) {
+            // Bitta kassa so'ralgan, lekin u MoySklad otdeliga bog'lanmagan: filtrsiz qoldirilsa BUTUN tashkilot
+            // hujjatlari chiqardi (kassir boshqa otdellarni ko'rardi, 01.11.2026 gacha)
+            row(sh, 1, null, "Kassa MoySklad otdeliga bog'lanmagan — hujjatlar ko'rsatilmaydi");
+            autos(sh, cols.length);
+            return;
+        }
         int r = 1;
         r = msRows(sh, r, "Приходный ордер", filt(ms.fetchDocsByMoment("cashin", from, to), onlyGroup), groupNames, money);
         r = msRows(sh, r, "Расходный ордер", filt(ms.fetchDocsByMoment("cashout", from, to), onlyGroup), groupNames, money);

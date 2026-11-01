@@ -55,6 +55,7 @@ public class ControlViewHandler {
             case "er" -> errorCard(u, Long.parseLong(arg), chatId, msgId, true);
             case "ex" -> errorIgnore(u, Long.parseLong(arg), chatId, msgId);
             case "dx" -> debtExcel(u, arg, chatId);
+            case "dp" -> debtOwnerPick(u, arg, chatId, msgId);
             case "ol" -> issueList(u, arg, chatId, msgId);
             case "rf" -> refresh(u, arg, chatId, msgId);
             case "es" -> statsView(u, arg, chatId, msgId);
@@ -68,32 +69,61 @@ public class ControlViewHandler {
 
     /* ==================== 🧾 ҚАРЗДОРЛАР ==================== */
 
-    /** arg: "" | "<kassaId|0>.<page>[.<statusIdx|-1>[.<tur 0-3>]]" — status indeksi distinctStates ro'yxati bo'yicha,
-     *  tur: 0 hammasi · 1 Юр · 2 ИП · 3 Физ. */
+    /** Muddat filtri: 0 hammasi · 1 o'tgan · 2 bugun · 3 yaqin 7 kun · 4 muddatsiz. */
+    private static final String[] DUE_LABELS = {"Barcha muddat", "⚠️ O'tgan", "📅 Bugun", "⏳ 7 kun", "❗ Muddatsiz"};
+
+    private static boolean dueMatches(Shipment x, int due, LocalDate today) {
+        LocalDate d = x.getDueAt();
+        return switch (due) {
+            case 1 -> d != null && d.isBefore(today);
+            case 2 -> d != null && d.equals(today);
+            case 3 -> d != null && d.isAfter(today) && !d.isAfter(today.plusDays(7));
+            case 4 -> d == null;
+            default -> true;
+        };
+    }
+
+    /** Xodim — MoySklad «Сотрудник» (otgruzka egasi). */
+    private static String ownerKey(Shipment x) { return x.getOwnerName().isBlank() ? "—" : x.getOwnerName(); }
+
+    /** Xodimlar alfavit bo'yicha — indeksi callback'da yuradi (otdel filtri o'zgarsa indeks qayta hisoblanadi). */
+    private static List<String> owners(List<Shipment> all) {
+        return all.stream().map(ControlViewHandler::ownerKey).distinct().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+    }
+
+    /** Tur · muddat · xodim filtrlari (status/otdel — visibleFor'da). */
+    private static List<Shipment> filter(List<Shipment> in, int type, int due, String owner, LocalDate today) {
+        return in.stream().filter(x -> ShipmentControlService.typeMatches(x, type) && dueMatches(x, due, today)
+                && (owner == null || owner.equals(ownerKey(x)))).toList();
+    }
+
+    private static int arg(String[] p, int i, int def) {
+        try { return p.length > i ? Integer.parseInt(p[i]) : def; } catch (NumberFormatException e) { return def; }
+    }
+
+    /** arg: "" | "<kassaId|0>.<page>[.<statusIdx|-1>[.<tur 0-3>[.<muddat 0-4>[.<xodimIdx|-1>]]]]" — status indeksi
+     *  distinctStates ro'yxati bo'yicha, tur: 0 hammasi · 1 Юр · 2 ИП · 3 Физ, xodim indeksi owners() bo'yicha. */
     void debtList(AppUser u, Session s, String arg, long chatId, int msgId) {
-        long kassa = 0; int page = 0; int st = -1; int type = 0;
-        if (!arg.isBlank()) {
-            String[] p = arg.split("\\.");
-            try {
-                kassa = Long.parseLong(p[0]);
-                page = p.length > 1 ? Integer.parseInt(p[1]) : 0;
-                st = p.length > 2 ? Integer.parseInt(p[2]) : -1;
-                type = p.length > 3 ? Integer.parseInt(p[3]) : 0;
-            } catch (NumberFormatException ignored) { }
-        }
+        String[] p = arg.isBlank() ? new String[0] : arg.split("\\.");
+        long kassa = 0;
+        try { kassa = p.length > 0 ? Long.parseLong(p[0]) : 0; } catch (NumberFormatException ignored) { }
+        int page = arg(p, 1, 0), st = arg(p, 2, -1), type = arg(p, 3, 0), due = arg(p, 4, 0), emp = arg(p, 5, -1);
         if (type < 0 || type >= ShipmentControlService.TYPE_KEYS.length) type = 0;
+        if (due < 0 || due >= DUE_LABELS.length) due = 0;
         boolean admin = u.getRole() == Role.SUPERADMIN || u.getRole() == Role.BUXGALTER;
         List<Shipment> all = ships.visibleFor(u, kassa > 0 ? kassa : null);
         List<String> states = ShipmentControlService.distinctStates(all);
         String stName = st >= 0 && st < states.size() ? states.get(st) : null;
         if (stName == null) st = -1;
-        List<Shipment> list = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
-        final int typeF = type;
-        long unknownType = list.stream().filter(x -> x.getAgentType().isBlank()).count();
-        if (type > 0) list = list.stream().filter(x -> ShipmentControlService.typeMatches(x, typeF)).toList();
-        final String tail = "." + type;
-        long total = 0;
+        List<String> owners = owners(all);
+        String owner = emp >= 0 && emp < owners.size() ? owners.get(emp) : null;
+        if (owner == null) emp = -1;
+        List<Shipment> byState = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+        long unknownType = byState.stream().filter(x -> x.getAgentType().isBlank()).count();
         LocalDate today = LocalDate.now(ks.zone());
+        List<Shipment> list = filter(byState, type, due, owner, today);
+        final String tail = "." + type + "." + due + "." + emp;
+        long total = 0;
         long overdue = 0, noDue = 0;
         for (Shipment x : list) {
             total += x.remain();
@@ -105,6 +135,8 @@ public class ControlViewHandler {
         else if (admin) sb.append(" (hammasi)");
         if (stName != null) sb.append(" · ").append(esc(stName)).append(ships.isQuietState(stName) ? " 🏦" : "");
         if (type > 0) sb.append(" · ").append(ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[type]));
+        if (due > 0) sb.append(" · ").append(DUE_LABELS[due]);
+        if (owner != null) sb.append(" · 👤 ").append(esc(owner));
         sb.append("\n");
         if (list.isEmpty()) sb.append("\nQarzdor otgruzkalar yo'q ✅");
         else {
@@ -130,15 +162,31 @@ public class ControlViewHandler {
         if (!nav.isEmpty()) rows.add(nav);
         // 🏢/👤 kontragent turi filtri
         {
-            List<Shipment> base = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+            List<Shipment> base = filter(byState, 0, due, owner, today);
+            String rest = "." + due + "." + emp;
             List<InlineKeyboardButton> r = new ArrayList<>();
-            r.add(btn((type == 0 ? "✅ " : "") + "Barcha tur", "kg:dl:" + kassa + ".0." + st + ".0"));
+            r.add(btn((type == 0 ? "✅ " : "") + "Barcha tur", "kg:dl:" + kassa + ".0." + st + ".0" + rest));
             for (int t = 1; t < ShipmentControlService.TYPE_KEYS.length; t++)
                 r.add(btn((type == t ? "✅ " : "") + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[t])
-                        + " (" + ShipmentControlService.countType(base, t) + ")", "kg:dl:" + kassa + ".0." + st + "." + t));
+                        + " (" + ShipmentControlService.countType(base, t) + ")", "kg:dl:" + kassa + ".0." + st + "." + t + rest));
             rows.add(r);
             if (unknownType > 0 && type > 0) sb.append("\n❔ ").append(unknownType).append(" ta otgruzkada kontragent turi hali o'qilmagan (bir necha soatda to'ldiriladi)");
         }
+        // 📅 muddat filtri
+        {
+            List<InlineKeyboardButton> r = new ArrayList<>();
+            for (int d = 0; d < DUE_LABELS.length; d++) {
+                String label = (due == d ? "✅ " : "") + DUE_LABELS[d]
+                        + (d == 0 ? "" : " (" + filter(byState, type, d, owner, today).size() + ")");
+                r.add(btn(label, "kg:dl:" + kassa + ".0." + st + "." + type + "." + d + "." + emp));
+                if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
+            }
+            if (!r.isEmpty()) rows.add(r);
+        }
+        // 👤 xodim filtri — alohida tanlash ekrani (xodimlar ko'p)
+        if (owners.size() > 1)
+            rows.add(irow(btn((owner == null ? "👤 Xodim: hammasi" : "✅ 👤 " + owner) + " ▸",
+                    "kg:dp:" + kassa + "." + st + "." + type + "." + due + ".0")));
         // 🏷 status filtri
         if (!states.isEmpty()) {
             List<InlineKeyboardButton> r = new ArrayList<>();
@@ -152,11 +200,12 @@ public class ControlViewHandler {
             if (!r.isEmpty()) rows.add(r);
         }
         if (admin) {
+            String keep = "." + type + "." + due + ".-1";   // otdel almashsa xodimlar ro'yxati o'zgaradi — xodim filtri tushadi
             List<InlineKeyboardButton> r = new ArrayList<>();
-            r.add(btn(kassa == 0 ? "✅ Hammasi" : "Hammasi", "kg:dl:0.0." + st + tail));
+            r.add(btn(kassa == 0 ? "✅ Hammasi" : "Hammasi", "kg:dl:0.0." + st + keep));
             for (Kassa k : kassaRepo.findByActiveTrueOrderByIdAsc()) {
                 if (k.isCashless()) continue;
-                r.add(btn((kassa == k.getId() ? "✅ " : "🏪 ") + k.getName(), "kg:dl:" + k.getId() + ".0." + st + tail));
+                r.add(btn((kassa == k.getId() ? "✅ " : "🏪 ") + k.getName(), "kg:dl:" + k.getId() + ".0." + st + keep));
                 if (r.size() == 3) { rows.add(r); r = new ArrayList<>(); }
             }
             if (!r.isEmpty()) rows.add(r);
@@ -168,26 +217,67 @@ public class ControlViewHandler {
     }
 
 
-    /** arg: "<kassa>[.<statusIdx>[.<tur>]]" — ro'yxatdagi filtrlar bilan bir xil. */
+    /** arg: "<kassa>[.<statusIdx>[.<tur>[.<muddat>[.<xodimIdx>]]]]" — ro'yxatdagi filtrlar bilan bir xil. */
     void debtExcel(AppUser u, String arg, long chatId) {
-        long kassa = 0; int st = -1; int type = 0;
         String[] p = arg.split("\\.");
-        try {
-            kassa = Long.parseLong(p[0]);
-            st = p.length > 1 ? Integer.parseInt(p[1]) : -1;
-            type = p.length > 2 ? Integer.parseInt(p[2]) : 0;
-        } catch (NumberFormatException ignored) { }
+        long kassa = 0;
+        try { kassa = Long.parseLong(p[0]); } catch (NumberFormatException ignored) { }
+        int st = arg(p, 1, -1), type = arg(p, 2, 0), due = arg(p, 3, 0), emp = arg(p, 4, -1);
+        if (type < 0 || type >= ShipmentControlService.TYPE_KEYS.length) type = 0;
+        if (due < 0 || due >= DUE_LABELS.length) due = 0;
         List<Shipment> all = ships.visibleFor(u, kassa > 0 ? kassa : null);
         List<String> states = ShipmentControlService.distinctStates(all);
         String stName = st >= 0 && st < states.size() ? states.get(st) : null;
-        List<Shipment> list = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
-        final int typeF = type;
-        if (type > 0) list = list.stream().filter(x -> ShipmentControlService.typeMatches(x, typeF)).toList();
+        List<String> owners = owners(all);
+        String owner = emp >= 0 && emp < owners.size() ? owners.get(emp) : null;
+        List<Shipment> byState = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+        List<Shipment> list = filter(byState, type, due, owner, LocalDate.now(ks.zone()));
         byte[] xlsx = excel.buildDebts(list, notifier::userName, notifier::kassaName, ks.zone());
         sender.sendDocument(chatId, xlsx, "qarzdorlar_" + ks.today() + ".xlsx",
                 "🧾 Qarzdorlar: " + list.size() + " ta" + (kassa > 0 ? " · " + notifier.kassaName(kassa) : "")
                 + (stName == null ? "" : " · " + stName)
-                + (type > 0 ? " · " + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[type]) : ""));
+                + (type > 0 ? " · " + ShipmentControlService.typeLabel(ShipmentControlService.TYPE_KEYS[type]) : "")
+                + (due > 0 ? " · " + DUE_LABELS[due] : "")
+                + (owner == null ? "" : " · 👤 " + owner));
+    }
+
+    /** 👤 Xodim tanlash. arg: "<kassa>.<statusIdx>.<tur>.<muddat>.<sahifa>" — son/summa boshqa filtrlar hisobga olingan holda. */
+    void debtOwnerPick(AppUser u, String arg, long chatId, int msgId) {
+        String[] p = arg.split("\\.");
+        long kassa = 0;
+        try { kassa = Long.parseLong(p[0]); } catch (NumberFormatException ignored) { }
+        int st = arg(p, 1, -1), type = arg(p, 2, 0), due = arg(p, 3, 0), pg = Math.max(0, arg(p, 4, 0));
+        if (type < 0 || type >= ShipmentControlService.TYPE_KEYS.length) type = 0;
+        if (due < 0 || due >= DUE_LABELS.length) due = 0;
+        List<Shipment> all = ships.visibleFor(u, kassa > 0 ? kassa : null);
+        List<String> states = ShipmentControlService.distinctStates(all);
+        String stName = st >= 0 && st < states.size() ? states.get(st) : null;
+        List<Shipment> byState = stName == null ? all : ships.visibleFor(u, kassa > 0 ? kassa : null, stName.equals("—") ? "" : stName);
+        List<Shipment> base = filter(byState, type, due, null, LocalDate.now(ks.zone()));
+        List<String> owners = owners(all);
+        String pre = "kg:dl:" + kassa + ".0." + st + "." + type + "." + due + ".";
+        int per = 2 * PAGE;
+        StringBuilder sb = new StringBuilder("👤 <b>Xodim bo'yicha</b>\n\n");
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        rows.add(irow(btn("Hammasi (" + base.size() + ")", pre + "-1")));
+        List<InlineKeyboardButton> r = new ArrayList<>();
+        for (int i = pg * per; i < Math.min(owners.size(), (pg + 1) * per); i++) {
+            String o = owners.get(i);
+            List<Shipment> mine = base.stream().filter(x -> o.equals(ownerKey(x))).toList();
+            long sum = mine.stream().mapToLong(Shipment::remain).sum();
+            if (!mine.isEmpty()) sb.append("• ").append(esc(o)).append(" — ").append(mine.size()).append(" ta · <b>").append(fmt(sum)).append("</b> so'm\n");
+            r.add(btn(o + " (" + mine.size() + ")", pre + i));
+            if (r.size() == 2) { rows.add(r); r = new ArrayList<>(); }
+        }
+        if (!r.isEmpty()) rows.add(r);
+        sb.append("\nXodimni tanlang:");
+        String self = "kg:dp:" + kassa + "." + st + "." + type + "." + due + ".";
+        List<InlineKeyboardButton> nav = new ArrayList<>();
+        if (pg > 0) nav.add(btn("⬅️ Oldingi", self + (pg - 1)));
+        if ((pg + 1) * per < owners.size()) nav.add(btn("Keyingi ➡️", self + (pg + 1)));
+        if (!nav.isEmpty()) rows.add(nav);
+        rows.add(irow(btn("⬅️ Ro'yxat", pre + "-1")));
+        sender.edit(chatId, msgId, sb.toString(), inline(rows));
     }
 
 

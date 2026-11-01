@@ -13,6 +13,7 @@ import uz.kassa.service.LedgerService;
 import uz.kassa.service.NotificationService;
 import uz.kassa.service.SettingsService;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -466,37 +467,54 @@ public class MoySkladAuditService {
      * + retail sotuv − retail vozvrat. Bot kun yozuvi bilan solishtiriladi (Farq).
      * Kalit — kassa id; hech qaysi otdelga bog'lanmagan hujjatlar — kalit -1.
      */
-    public Map<Long, Long> moyskladDaySales(LocalDate d) {
+    public Map<Long, Long> moyskladDaySales(LocalDate d) { return totals(moyskladDayDocs(d)); }
+
+    /** Kunlik hisobot «Hujjatlar» varag'i qatori: kassaId (-1 — otdelga bog'lanmagan), turi, №, kontragent, izoh, summa (so'm). */
+    public record DayDoc(long kassaId, String kind, String docNo, String agent, String note, long sum) {}
+
+    public static Map<Long, Long> totals(List<DayDoc> docs) {
         Map<Long, Long> out = new HashMap<>();
+        for (DayDoc x : docs) out.merge(x.kassaId(), x.sum(), Long::sum);
+        return out;
+    }
+
+    /** moyskladDaySales'ning hujjat darajasidagi tarkibi — jami shu ro'yxatdan yig'iladi (varaq va jadval doim mos). */
+    public List<DayDoc> moyskladDayDocs(LocalDate d) {
+        List<DayDoc> out = new ArrayList<>();
         Ctx ctx = sup.buildCtx();
         for (MoySkladClient.MsExpense e : client.fetchDocsByMoment("cashin", d, d)) {
             long sum = sup.somSum(e);
             if (sum <= 0) continue;
             Long k = ctx.groupToKassa().get(e.groupId());
-            out.merge(k == null ? -1L : k, sum, Long::sum);
+            out.add(new DayDoc(k == null ? -1L : k, "Приходный ордер (нақд)", e.docNo(), e.agent(), e.description(), sum));
         }
         for (MoySkladClient.MsExpense e : client.fetchDocsByMoment("paymentin", d, d)) {
             if (applier.paymentMt(e.state()) == null) continue;
             long sum = sup.somSum(e);
             if (sum <= 0) continue;
             Long k = ctx.groupToKassa().get(e.groupId());
-            out.merge(k == null ? -1L : k, sum, Long::sum);
+            out.add(new DayDoc(k == null ? -1L : k, "Входящий платёж · " + e.state(), e.docNo(), e.agent(), e.description(), sum));
         }
         try {
-            for (MoySkladClient.MsDoc sd : client.fetchSalesByMoment("retaildemand", d, d)) {
-                if (!sd.applicable()) continue;
-                Long k = ctx.storeToKassa().get(sd.storeId());
-                out.merge(k == null ? -1L : k, (sd.cashTiyin() + sd.noCashTiyin()) / 100, Long::sum);
-            }
-            for (MoySkladClient.MsDoc sd : client.fetchSalesByMoment("retailsalesreturn", d, d)) {
-                if (!sd.applicable()) continue;
-                Long k = ctx.storeToKassa().get(sd.storeId());
-                out.merge(k == null ? -1L : k, -(sd.cashTiyin() + sd.noCashTiyin()) / 100, Long::sum);
-            }
+            retail(out, ctx, client.fetchSalesByMoment("retaildemand", d, d), "Розничная продажа", 1);
+            retail(out, ctx, client.fetchSalesByMoment("retailsalesreturn", d, d), "Розничный возврат", -1);
         } catch (Exception ex) {
             log.debug("Kunlik retail o'qilmadi: {}", ex.getMessage());
         }
         return out;
+    }
+
+    /** Chakana cheklar ko'p — kassa bo'yicha bitta qatorga yig'iladi (soni, naqd/naqdsiz). */
+    private void retail(List<DayDoc> out, Ctx ctx, List<MoySkladClient.MsDoc> docs, String kind, int sign) {
+        Map<Long, long[]> agg = new java.util.LinkedHashMap<>();   // kassa → {soni, naqd, naqdsiz, so'm}
+        for (MoySkladClient.MsDoc sd : docs) {
+            if (!sd.applicable()) continue;
+            Long k = ctx.storeToKassa().get(sd.storeId());
+            long[] a = agg.computeIfAbsent(k == null ? -1L : k, x -> new long[4]);
+            a[0]++; a[1] += sd.cashTiyin(); a[2] += sd.noCashTiyin(); a[3] += (sd.cashTiyin() + sd.noCashTiyin()) / 100;
+        }
+        agg.forEach((k, a) -> out.add(new DayDoc(k, kind, a[0] + " та чек", "",
+                "нақд " + TextUtil.fmt(a[1] / 100) + " · нақдсиз " + TextUtil.fmt(a[2] / 100), sign * a[3])));
     }
 
 }

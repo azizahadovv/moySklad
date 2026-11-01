@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import uz.kassa.bot.Sender;
+import uz.kassa.bot.TextUtil;
 import uz.kassa.domain.TgCard;
 import uz.kassa.repo.TgCardRepo;
 import java.time.LocalDateTime;
@@ -26,29 +27,42 @@ public class TgCardReport {
     private static final String RULE = "━━━━━━━━━━━━━━━━━━━━";
 
     private final TgCardRepo cardRepo;
+    private final uz.kassa.repo.ClickAccountRepo clickRepo;
     private final TgReaderConfig cfg;
     private final Sender sender;
     private final ZoneId zone = ZoneId.of("Asia/Tashkent");
 
     /** Hisobot matni (guruh va bot ichida bir xil). */
     public String text() {
-        List<TgCard> cards = cardRepo.findAllByOrderByNameAscMaskAsc();
+        List<TgCard> cards = cardRepo.findAllByOrderByNameAscMaskAsc().stream()
+                .filter(c -> !c.isHidden()).toList();   // shaxsiy karta — hisobotga kirmaydi
         StringBuilder sb = new StringBuilder("💳 <b>Карта қолдиқлари</b>\n<i>" + DTF.format(LocalDateTime.now(zone)) + " — бот автомат йиғган (скриншотсиз)</i>\n" + RULE + "\n");
         if (cards.isEmpty()) { sb.append("Ҳали карта хабари келмаган."); return sb.toString(); }
         long total = 0;
+        boolean anyOld = false;
+        java.time.LocalDate today = java.time.LocalDate.now(zone);
         for (TgCard c : cards) {
-            if (c.isHidden()) continue;   // shaxsiy karta — hisobotga kirmaydi
             total += c.getBalance();
-            sb.append("💳 <b>").append(esc(c.getName().isBlank() ? "Карта" : c.getName())).append(" *").append(esc(c.getMask())).append("</b>\n");
-            sb.append("   қолдиқ <b>").append(fmt(c.getBalance() / 100)).append("</b> ").append(esc(c.getCurrency()));
+            sb.append("💳 <b>").append(esc(c.getName().isBlank() ? "Карта" : c.getName())).append(" *").append(esc(c.getMask())).append("</b>");
+            if (c.getClickAccountId() != null)   // qaysi Click hisobiga bog'langan — 📲 hisobotda shu nom bilan
+                clickRepo.findById(c.getClickAccountId()).ifPresent(ca -> sb.append(" → 📲 ").append(esc(ca.getName())));
+            sb.append("\n   қолдиқ <b>").append(TextUtil.fmtTiyin(c.getBalance())).append("</b> сўм");
             if (c.getLastTxnAt() != null) {
-                String dir = "KIRIM".equals(c.getLastDir()) ? "➕" : "➖";
-                sb.append(" · охирги ").append(dir).append(c.getLastAmount() == null ? "" : " " + fmt(c.getLastAmount() / 100))
+                // yo'nalish aniqlanmagan xabar «➖» emas, «•» — chiqim deb o'qilmasin
+                String dir = "KIRIM".equals(c.getLastDir()) ? "➕" : "RASXOD".equals(c.getLastDir()) ? "➖" : "•";
+                sb.append(" · охирги ").append(dir).append(c.getLastAmount() == null ? "" : " " + TextUtil.fmtTiyin(c.getLastAmount()))
                   .append(" (").append(DTF.format(c.getLastTxnAt())).append(")");
+            }
+            // ⏰ bugun bank botidan xabar kelmagan — qoldiq eski bo'lishi mumkin (01.11.2026 gacha yoshi ko'rinmasdi)
+            if (c.getUpdatedAt() != null && java.time.LocalDate.ofInstant(c.getUpdatedAt(), zone).isBefore(today)) {
+                anyOld = true;
+                sb.append("\n   ⏰ <i>").append(DTF.format(LocalDateTime.ofInstant(c.getUpdatedAt(), zone))).append(" дан бери хабар йўқ</i>");
             }
             sb.append("\n");
         }
-        sb.append(RULE).append("\nΣ <b>").append(fmt(total / 100)).append("</b> сўм");
+        sb.append(RULE).append("\nΣ <b>").append(TextUtil.fmtTiyin(total)).append("</b> сўм")
+          .append("\n<i>Қолдиқ — банк ботининг охирги хабаридан.").append(anyOld ? " ⏰ — бугун хабар келмаган, қолдиқ эски." : "")
+          .append(" 🙈 шахсий карталар киритилмаган.</i>");
         return sb.toString();
     }
 

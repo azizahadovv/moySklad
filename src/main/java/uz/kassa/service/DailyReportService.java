@@ -9,6 +9,7 @@ import uz.kassa.bot.Sender;
 import uz.kassa.bot.TextUtil;
 import uz.kassa.domain.*;
 import uz.kassa.repo.*;
+import uz.kassa.service.moysklad.MoySkladAuditService;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
@@ -21,20 +22,18 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 📋 KUNLIK KASSA SOLISHTIRISH SHAKLI (foydalanuvchi namunasi, 02.09.2026):
- * Sana · Nuqta · Kassir · MoySklad savdosi · Bot savdosi · Naqd topshirilgan
- * · P2P qoldiq (kun oxiri) · Farq · Moliya menejeri tasdig'i.
+ * 📋 KUNLIK KASSA SOLISHTIRISH SHAKLI (foydalanuvchi namunasi, 02.09.2026; 01.11.2026 qayta ishlandi):
+ * Sana · Nuqta · Kassir · MoySklad kirimi · Naqd topshirilgan · Karta qoldig'i · Moliya menejeri tasdig'i.
  * Ikki formatda: PNG rasm (Telegram matnda jadval chizolmaydi) + Excel (.xlsx),
- * ostida qisqa izoh va «✅ Tasdiqlash» tugmasi.
+ * ostida qisqa izoh va «✅ Tasdiqlash» tugmasi. Excel'da yana 2 varaq: «Hujjatlar» (kirim qaysi MoySklad
+ * hujjatlaridan yig'ilgan) va «Izoh» (har ustun qayerdan olinadi + har karta qoldig'ining manbasi).
  *
- * MoySklad savdosi — MoySklad API'dan BEVOSITA (kunlik hujjatlar otdel kesimida).
- * Bot savdosi    — botning kun yozuvi (prixod naqd+klik+terminal − vozvrat)
- *                  + otdelning Click hisoblariga shu kuni tushgan Klik kirimlar.
- * Farq           — MoySklad savdosi − Bot savdosi. Ikkala tizim bir xil bo'lsa 0;
- *                  farq bo'lsa hujjat botga tushmagan / ortiqcha yozilgan (foydalanuvchi
- *                  qarori: hisobot MoySklad bilan bot bir xilligini tekshirsin).
- * P2P qoldiq     — otdelga bog'langan Click kartasining kun oxiridagi qoldig'i
- *                  (skrinshot/qo'lda kiritilgan; kiritilmagan bo'lsa bot Click balansi, *).
+ * MoySklad kirimi — MoySklad API'dan BEVOSITA (kunlik hujjatlar otdel kesimida, MoySkladAuditService.moyskladDayDocs).
+ * Bot savdosi / Farq — 01.11.2026 dan jadvalda YO'Q (user qarori): bot kun yozuvi o'sha MoySklad hujjatlaridan
+ *                  sinxronlanadi, Farq deyarli doim 0 edi va hech narsa aytmasdi. Farq ≠ 0 bo'lsa (hujjat botga
+ *                  tushmagan) — faqat izohda ⚠️. Row.botSavdo/farq Mini App va shablonlar uchun qoladi.
+ * Karta qoldig'i  — otdelga bog'langan Click kartalarining OXIRGI kiritilgan qoldig'i (kun oxiri emas!)
+ *                  (HUMOcardbot/qo'lda; kiritilmagan bo'lsa bot Click balansi, *).
  */
 @Service
 @RequiredArgsConstructor
@@ -67,10 +66,17 @@ public class DailyReportService {
 
     /* ---------------- ma'lumot ---------------- */
 
-    public List<Row> rows(LocalDate d) {
+    public List<Row> rows(LocalDate d) { return rows(d, new ArrayList<>()); }
+
+    /** docsOut — kirimni tashkil etgan MoySklad hujjatlari («Hujjatlar» varag'i uchun) shu ro'yxatga yoziladi. */
+    public List<Row> rows(LocalDate d, List<MoySkladAuditService.DayDoc> docsOut) {
         Map<Long, Long> ms;
         boolean msKnown = true;
-        try { ms = auditSvc.moyskladDaySales(d); }
+        try {
+            List<MoySkladAuditService.DayDoc> docs = auditSvc.moyskladDayDocs(d);
+            docsOut.addAll(docs);
+            ms = MoySkladAuditService.totals(docs);
+        }
         catch (Exception e) { log.warn("Kunlik hisobot: MoySklad o'qilmadi: {}", e.getMessage()); ms = Map.of(); msKnown = false; }
 
         List<Row> out = new ArrayList<>();
@@ -106,7 +112,8 @@ public class DailyReportService {
 
     /** Jadval (rasm) + Excel + izoh + tasdiq tugmasi — bitta chatga. */
     public Integer sendTo(long chatId, LocalDate d) {
-        List<Row> rows = rows(d);
+        List<MoySkladAuditService.DayDoc> docs = new ArrayList<>();
+        List<Row> rows = rows(d, docs);
         DailyReportConfirm c = confirmRepo.findById(d).orElse(null);
         byte[] png = render(d, rows, c);
         String cap = caption(d, rows, c);
@@ -115,8 +122,8 @@ public class DailyReportService {
         Integer id = sender.sendPhoto(chatId, png, "kunlik-" + d + ".png", cap, kb);
         if (id == null) sender.send(chatId, cap, kb);   // rasm ketmasa — matn
         try {
-            sender.sendDocument(chatId, renderXlsx(d, rows, c), "kunlik-kassa-" + d + ".xlsx",
-                    "📊 Kunlik kassa solishtirish — " + d.format(D_UZ) + " (Excel)");
+            sender.sendDocument(chatId, renderXlsx(d, rows, c, docs), "kunlik-kassa-" + d + ".xlsx",
+                    "📊 Kunlik kassa solishtirish — " + d.format(D_UZ) + " (Excel: jadval · hujjatlar · izoh)");
         } catch (Exception e) {
             log.warn("Kunlik Excel ({}): {}", chatId, e.getMessage());
         }
@@ -163,14 +170,18 @@ public class DailyReportService {
     public String caption(LocalDate d, List<Row> rows, DailyReportConfirm c) {
         StringBuilder sb = new StringBuilder("📋 <b>Kunlik kassa solishtirish</b> — " + d.format(D_UZ) + "\n");
         for (Row r : rows)
-            sb.append(r.farq() == 0 ? "✅ " : "⚠️ ").append(TextUtil.esc(r.nuqta()))
-              .append(": MoySklad <b>").append(TextUtil.fmt(r.msSavdo())).append("</b> · bot <b>")
-              .append(TextUtil.fmt(r.botSavdo())).append("</b>")
-              .append(r.farq() == 0 ? "" : " · farq <b>" + (r.farq() > 0 ? "+" : "") + TextUtil.fmt(r.farq()) + "</b>")
-              .append("\n");
-        sb.append("<i>Farq = MoySklad savdosi − bot savdosi (0 — ikkala tizim bir xil)</i>\n");
+            sb.append("• ").append(TextUtil.esc(r.nuqta()))
+              .append(": kirim <b>").append(TextUtil.fmt(r.msSavdo())).append("</b> · naqd topshirildi <b>")
+              .append(TextUtil.fmt(r.naqdTopshirilgan())).append("</b>\n");
+        sb.append("<i>Kirim — MoySklad'dagi shu kungi kirim hujjatlari (naqd order + Klik/Terminal to'lov + chakana savdo − vozvrat). "
+                + "Har summa qaysi hujjatdan — Excel «Hujjatlar» varag'ida, ustunlar izohi — «Izoh» varag'ida.</i>\n");
+        for (Row r : rows)
+            if (r.msKnown() && r.farq() != 0)
+                sb.append("⚠️ ").append(TextUtil.esc(r.nuqta())).append(" — bot hisobida <b>")
+                  .append(TextUtil.fmt(Math.abs(r.farq()))).append("</b> so'm ").append(r.farq() > 0 ? "kam" : "ortiq")
+                  .append(" (hujjat botga tushmagan / o'chirilgan)\n");
         if (rows.stream().anyMatch(r -> !r.msKnown()))
-            sb.append("⚠️ MoySklad o'qilmadi — MoySklad ustunida bot qiymati\n");
+            sb.append("⚠️ MoySklad o'qilmadi — kirim ustunida bot qiymati\n");
         if (c != null)
             sb.append("✔️ Tasdiqladi: <b>").append(TextUtil.esc(c.getUserName() == null ? "?" : c.getUserName()))
               .append("</b>, ").append(LocalDateTime.ofInstant(c.getConfirmedAt(), props.zoneId())
@@ -189,10 +200,10 @@ public class DailyReportService {
 
     /* ---------------- rasm ---------------- */
 
-    private static final String[] HEAD = {"Sana", "Nuqta", "Kassir", "MoySklad\nsavdosi", "Bot\nsavdosi",
-            "Naqd\ntopshirilgan", "P2P qoldiq\n(kun oxiri)", "Farq", "Moliya menejeri\ntasdig'i"};
-    private static final int[] W = {115, 170, 200, 160, 160, 160, 170, 140, 200};
-    private static final int COL_FARQ = 7, COL_CONFIRM = 8;
+    private static final String[] HEAD = {"Sana", "Nuqta", "Kassir", "MoySklad\nkirimi",
+            "Naqd\ntopshirilgan", "Karta qoldig'i\n(oxirgi)", "Moliya menejeri\ntasdig'i"};
+    private static final int[] W = {115, 190, 300, 170, 160, 180, 200};
+    private static final int COL_CONFIRM = 6;
 
     public byte[] render(LocalDate d, List<Row> rows, DailyReportConfirm c) {
         System.setProperty("java.awt.headless", "true");
@@ -230,18 +241,16 @@ public class DailyReportService {
             if (r % 2 == 0) { g.setColor(alt); g.fillRect(pad, y, width - pad * 2, rowH); }
             g.setColor(line); g.drawLine(pad, y, width - pad, y);
             x = pad;
+            boolean syncWarn = row.msKnown() && row.farq() != 0;
             String[] cells = {
-                    d.format(D_UZ), row.nuqta(), row.kassir(),
+                    d.format(D_UZ), (syncWarn ? "(!) " : "") + row.nuqta(), row.kassir(),
                     TextUtil.fmt(row.msSavdo()) + (row.msKnown() ? "" : " ?"),
-                    TextUtil.fmt(row.botSavdo()),
                     TextUtil.fmt(row.naqdTopshirilgan()),
-                    row.p2pQoldiqTiyin() < 0 ? "—" : TextUtil.fmtTiyin(row.p2pQoldiqTiyin()) + (row.p2pKnown() ? "" : " *"),
-                    (row.farq() > 0 ? "+" : "") + TextUtil.fmt(row.farq()),
+                    row.p2pQoldiqTiyin() < 0 ? "—" : TextUtil.fmt(row.p2pQoldiqTiyin() / 100) + (row.p2pKnown() ? "" : " *"),
                     confirmTxt };
             for (int i = 0; i < cells.length; i++) {
-                g.setColor(i == COL_FARQ ? (row.farq() == 0 ? ok : warn)
-                        : (i == COL_CONFIRM && c != null ? ok : Color.DARK_GRAY));
-                g.setFont(i == 2 && cells[i].length() > 20 ? fs : fr);
+                g.setColor(i == 1 && syncWarn ? warn : (i == COL_CONFIRM && c != null ? ok : Color.DARK_GRAY));
+                g.setFont(i == 2 && cells[i].length() > 28 ? fs : fr);
                 g.drawString(clip(g, cells[i], W[i] - 20), x + 12, y + 31);
                 x += W[i];
             }
@@ -249,8 +258,8 @@ public class DailyReportService {
         }
         g.setColor(line); g.drawLine(pad, y, width - pad, y);
         g.setColor(grey); g.setFont(fs);
-        g.drawString("Farq = MoySklad savdosi − bot savdosi (0 — ikkala tizim bir xil).  * — karta qoldig'i kiritilmagan, bot Click balansi.",
-                pad, y + 18);
+        g.drawString("Kirim = MoySklad: naqd order + Klik/Terminal to'lov + chakana savdo − vozvrat (hujjatlar ro'yxati — Excel'da).  "
+                + "* — karta qoldig'i kiritilmagan, bot Click hisobi.  (!) — bot hisobi MoySklad'dan farq qiladi.", pad, y + 18);
         g.dispose();
         try {
             java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
@@ -263,8 +272,8 @@ public class DailyReportService {
 
     /* ---------------- Excel ---------------- */
 
-    /** Xuddi shu jadval .xlsx: sarlavha, ustun boshlari, qatorlar, pastda formula izohi. */
-    public byte[] renderXlsx(LocalDate d, List<Row> rows, DailyReportConfirm c) {
+    /** Xuddi shu jadval .xlsx + «Hujjatlar» (kirim tarkibi) + «Izoh» (ustunlar manbasi, karta qoldiqlari manbasi). */
+    public byte[] renderXlsx(LocalDate d, List<Row> rows, DailyReportConfirm c, List<MoySkladAuditService.DayDoc> docs) {
         try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
              java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream()) {
             var sh = wb.createSheet("Kunlik " + d.format(D_UZ));
@@ -280,14 +289,14 @@ public class DailyReportService {
             headSt.setFillPattern(org.apache.poi.ss.usermodel.FillPatternType.SOLID_FOREGROUND);
             headSt.setBorderBottom(org.apache.poi.ss.usermodel.BorderStyle.THIN);
             var money = wb.createCellStyle(); money.setDataFormat(wb.createDataFormat().getFormat("#,##0"));
-            var money2 = wb.createCellStyle(); money2.setDataFormat(wb.createDataFormat().getFormat("#,##0.00"));
             var warnF = wb.createFont(); warnF.setBold(true);
             warnF.setColor(org.apache.poi.ss.usermodel.IndexedColors.RED.getIndex());
             var warnSt = wb.createCellStyle(); warnSt.setFont(warnF);
-            warnSt.setDataFormat(wb.createDataFormat().getFormat("+#,##0;-#,##0;0"));
-            var okF = wb.createFont(); okF.setBold(true);
-            okF.setColor(org.apache.poi.ss.usermodel.IndexedColors.GREEN.getIndex());
-            var okSt = wb.createCellStyle(); okSt.setFont(okF); okSt.setDataFormat(wb.createDataFormat().getFormat("#,##0"));
+            var boldF = wb.createFont(); boldF.setBold(true);
+            var boldSt = wb.createCellStyle(); boldSt.setFont(boldF);
+            var boldMoney = wb.createCellStyle(); boldMoney.setFont(boldF); boldMoney.setDataFormat(wb.createDataFormat().getFormat("#,##0"));
+            var wrap = wb.createCellStyle(); wrap.setWrapText(true);
+            wrap.setVerticalAlignment(org.apache.poi.ss.usermodel.VerticalAlignment.TOP);
 
             int r = 0;
             var tr = sh.createRow(r++);
@@ -302,24 +311,113 @@ public class DailyReportService {
             String confirmTxt = c == null ? "—" : ("✔ " + (c.getUserName() == null ? "" : c.getUserName()) + " "
                     + LocalDateTime.ofInstant(c.getConfirmedAt(), props.zoneId()).format(DateTimeFormatter.ofPattern("dd.MM HH:mm")));
             for (Row row : rows) {
+                boolean syncWarn = row.msKnown() && row.farq() != 0;
                 var rr = sh.createRow(r++);
                 rr.createCell(0).setCellValue(d.format(D_UZ));
-                rr.createCell(1).setCellValue(row.nuqta());
-                rr.createCell(2).setCellValue(row.kassir());
+                var c1 = rr.createCell(1); c1.setCellValue((syncWarn ? "(!) " : "") + row.nuqta()); if (syncWarn) c1.setCellStyle(warnSt);
+                var c2 = rr.createCell(2); c2.setCellValue(row.kassir()); c2.setCellStyle(wrap);
                 var c3 = rr.createCell(3); c3.setCellValue(row.msSavdo()); c3.setCellStyle(money);
-                var c4 = rr.createCell(4); c4.setCellValue(row.botSavdo()); c4.setCellStyle(money);
-                var c5 = rr.createCell(5); c5.setCellValue(row.naqdTopshirilgan()); c5.setCellStyle(money);
-                var c6 = rr.createCell(6);
-                if (row.p2pQoldiqTiyin() < 0) c6.setCellValue("—");
-                else { c6.setCellValue(row.p2pQoldiqTiyin() / 100.0); c6.setCellStyle(money2); }
-                var c7 = rr.createCell(7); c7.setCellValue(row.farq()); c7.setCellStyle(row.farq() == 0 ? okSt : warnSt);
-                rr.createCell(8).setCellValue(confirmTxt);
+                var c4 = rr.createCell(4); c4.setCellValue(row.naqdTopshirilgan()); c4.setCellStyle(money);
+                var c5 = rr.createCell(5);
+                if (row.p2pQoldiqTiyin() < 0) c5.setCellValue("—");
+                else if (row.p2pKnown()) { c5.setCellValue(row.p2pQoldiqTiyin() / 100); c5.setCellStyle(money); }
+                else c5.setCellValue(TextUtil.fmt(row.p2pQoldiqTiyin() / 100) + " *");
+                rr.createCell(6).setCellValue(confirmTxt);
             }
             r++;
             sh.createRow(r++).createCell(0).setCellValue(
-                    "Farq = MoySklad savdosi − bot savdosi (0 — ikkala tizim bir xil). P2P qoldiq — Click kartasi qoldig'i (kun oxiri).");
-            int[] w = {13, 20, 30, 16, 16, 16, 18, 14, 26};
+                    "MoySklad kirimi — qaysi hujjatlardan yig'ilgani «Hujjatlar» varag'ida. Har ustun nimani bildiradi — «Izoh» varag'ida.");
+            sh.createRow(r++).createCell(0).setCellValue(
+                    "* — karta qoldig'i kiritilmagan, bot Click hisobi ko'rsatildi.  (!) — bot hisobi MoySklad'dan farq qiladi (hujjat botga tushmagan).");
+            int[] w = {13, 22, 42, 18, 16, 18, 26};
             for (int i = 0; i < w.length; i++) sh.setColumnWidth(i, w[i] * 256);
+
+            /* ---- 2-varaq: Hujjatlar — kirim qaysi MoySklad hujjatlaridan ---- */
+            var hs = wb.createSheet("Hujjatlar");
+            int hrn = 0;
+            var h0 = hs.createRow(hrn++);
+            h0.createCell(0).setCellValue("MoySklad kirimi qaysi hujjatlardan yig'ilgan — " + d.format(D_UZ)); h0.getCell(0).setCellStyle(boldSt);
+            hs.createRow(hrn++).createCell(0).setCellValue("Har nuqta ostida «Jami» — 1-varaqdagi «MoySklad kirimi» bilan bir xil.");
+            hrn++;
+            String[] dh = {"Nuqta", "Hujjat turi", "№", "Kontragent", "Izoh", "Summa"};
+            var dhr = hs.createRow(hrn++);
+            for (int i = 0; i < dh.length; i++) { var cell = dhr.createCell(i); cell.setCellValue(dh[i]); cell.setCellStyle(headSt); }
+            Map<Long, String> names = new java.util.LinkedHashMap<>();
+            for (Row row : rows) if (row.kassaId() != null) names.put(row.kassaId(), row.nuqta());
+            names.put(-1L, "Otdelga bog'lanmagan (hech qaysi nuqtaga kirmaydi)");
+            for (var e : names.entrySet()) {
+                List<MoySkladAuditService.DayDoc> mine = docs.stream().filter(x -> x.kassaId() == e.getKey()).toList();
+                if (mine.isEmpty()) continue;
+                for (var x : mine) {
+                    var dr = hs.createRow(hrn++);
+                    dr.createCell(0).setCellValue(e.getValue());
+                    dr.createCell(1).setCellValue(x.kind());
+                    dr.createCell(2).setCellValue(x.docNo() == null ? "" : x.docNo());
+                    dr.createCell(3).setCellValue(x.agent() == null ? "" : x.agent());
+                    dr.createCell(4).setCellValue(x.note() == null ? "" : x.note());
+                    var sc = dr.createCell(5); sc.setCellValue(x.sum()); sc.setCellStyle(money);
+                }
+                var tot = hs.createRow(hrn++);
+                tot.createCell(0).setCellValue("Jami — " + e.getValue()); tot.getCell(0).setCellStyle(boldSt);
+                var tc5 = tot.createCell(5); tc5.setCellValue(mine.stream().mapToLong(MoySkladAuditService.DayDoc::sum).sum()); tc5.setCellStyle(boldMoney);
+                hrn++;
+            }
+            if (docs.isEmpty()) hs.createRow(hrn++).createCell(0).setCellValue(
+                    rows.stream().allMatch(Row::msKnown) ? "Shu kuni kirim hujjati yo'q." : "MoySklad o'qilmadi — hujjatlar ro'yxati yo'q.");
+            int[] dw = {26, 30, 12, 30, 40, 16};
+            for (int i = 0; i < dw.length; i++) hs.setColumnWidth(i, dw[i] * 256);
+
+            /* ---- 3-varaq: Izoh — har ustun qayerdan olinadi + karta qoldiqlari manbasi ---- */
+            var is = wb.createSheet("Izoh");
+            int irn = 0;
+            var i0 = is.createRow(irn++); i0.createCell(0).setCellValue("Ustunlar nimani bildiradi"); i0.getCell(0).setCellStyle(boldSt);
+            String[][] help = {
+                    {"Nuqta", "Kassa (do'kon). MoySklad'dagi otdel shu kassaga bog'langan — hujjat qaysi otdelda bo'lsa, o'sha nuqtaga tushadi."},
+                    {"Kassir", "Botda shu kassaga biriktirilgan faol kassirlar."},
+                    {"MoySklad kirimi", "Shu kuni MoySklad'da shu otdel nomidan o'tgan pul kirimlari: Приходный ордер (naqd) + "
+                            + "Входящий платёж («Клик» / «Терминал» statusli) + chakana savdo (naqd+naqdsiz) − chakana vozvrat. "
+                            + "Перечисление, Карз va boshqa statusli to'lovlar KIRMAYDI. Ro'yxat — «Hujjatlar» varag'ida."},
+                    {"Naqd topshirilgan", "Shu kuni kassir buxgalteriyaga topshirgan NAQD pul (botda qabul qilingan topshiriqlar). "
+                            + "Kirimdan kam bo'lishi normal: Klik/Terminal pul kassada naqd bo'lib turmaydi, naqd esa ertasi kuni topshirilishi mumkin."},
+                    {"Karta qoldig'i (oxirgi)", "Nuqtaga bog'langan Click kartalari qoldiqlari yig'indisi — OXIRGI kiritilgan qiymat "
+                            + "(kun oxiridagi emas). Har karta qachon va kim tomonidan kiritilgani — pastdagi jadvalda. "
+                            + "* — karta qoldig'i hech kiritilmagan, o'rniga botdagi Click hisobi ko'rsatilgan."},
+                    {"Moliya menejeri tasdig'i", "Buxgalter/SuperAdmin «✅ Tasdiqlash» tugmasini bosgan vaqt va ism."},
+                    {"(!) belgisi", "Bot hisobidagi shu kungi kirim MoySklad'dagidan farq qiladi — hujjat botga tushmagan yoki MoySklad'da "
+                            + "keyin o'zgartirilgan/o'chirilgan. Bot o'zi qayta sinxronlaydi; saqlanib qolsa ⚙️ → 🔗 MoySklad → 🩺 Диагностика."},
+            };
+            for (String[] h : help) {
+                var hrw = is.createRow(irn++);
+                var a = hrw.createCell(0); a.setCellValue(h[0]); a.setCellStyle(boldSt);
+                var b = hrw.createCell(1); b.setCellValue(h[1]); b.setCellStyle(wrap);
+            }
+            irn++;
+            var k0 = is.createRow(irn++); k0.createCell(0).setCellValue("Karta qoldiqlari — manba"); k0.getCell(0).setCellStyle(boldSt);
+            String[] kh = {"Nuqta", "Karta / Click hisobi", "Qoldiq", "Kim kiritdi", "Qachon"};
+            var khr = is.createRow(irn++);
+            for (int i = 0; i < kh.length; i++) { var cell = khr.createCell(i); cell.setCellValue(kh[i]); cell.setCellStyle(headSt); }
+            DateTimeFormatter dtf = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+            for (Row row : rows) {
+                if (row.kassaId() == null) continue;
+                for (ClickAccount ca : clickRepo.findByActiveTrueOrderByIdAsc()) {
+                    if (!row.kassaId().equals(ca.getKassaId())) continue;
+                    var kr = is.createRow(irn++);
+                    kr.createCell(0).setCellValue(row.nuqta());
+                    kr.createCell(1).setCellValue(ca.getName());
+                    var q = kr.createCell(2);
+                    if (ca.getCardBalance() != null) {
+                        q.setCellValue(ca.getCardBalance() / 100); q.setCellStyle(money);
+                        kr.createCell(3).setCellValue(ca.getCardBalanceBy() == null ? "" : ca.getCardBalanceBy());
+                        kr.createCell(4).setCellValue(ca.getCardBalanceAt() == null ? ""
+                                : LocalDateTime.ofInstant(ca.getCardBalanceAt(), props.zoneId()).format(dtf));
+                    } else {
+                        q.setCellValue(TextUtil.fmt(ledger.view(OwnerType.CLICK, ca.getId(), MoneyType.KLIK).getAmount()) + " *");
+                        kr.createCell(3).setCellValue("kiritilmagan — bot Click hisobi");
+                    }
+                }
+            }
+            int[] iw = {26, 70, 16, 22, 18};
+            for (int i = 0; i < iw.length; i++) is.setColumnWidth(i, iw[i] * 256);
             wb.write(bos);
             return bos.toByteArray();
         } catch (java.io.IOException e) {

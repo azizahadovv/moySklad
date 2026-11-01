@@ -446,9 +446,15 @@ public class BuxgalterHandler {
                 // TERMINAL (karta) kirimga QO'SHILMAYDI — u bank hisobida, kassada pul yo'q
                 if ((o.getType() == OpType.PRIXOD || o.getType() == OpType.BOSHLANGICH)
                         && o.getMoneyType() != MoneyType.TERMINAL) kirim += o.getAmount();
-                if ((o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT
-                        || o.getType() == OpType.TOPSHIRIQ)
+                if ((o.getType() == OpType.RASXOD || o.getType() == OpType.VOZVRAT)
                         && o.getMoneyType() != MoneyType.TERMINAL) chiqim += o.getAmount();
+                // TOPSHIRIQ (kassa → buxgalteriya) yo'nalishi bo'yicha: Buxgalteriya uchun KIRIM, kassa uchun chiqim;
+                // «Hammasi»da sanalmaydi — pul tashkilot ichida qoladi (01.11.2026 gacha har doim chiqim edi)
+                if (o.getType() == OpType.TOPSHIRIQ && o.getMoneyType() != MoneyType.TERMINAL && !who.equals("0")) {
+                    boolean in = who.equals("B") ? o.getToOwnerType() == OwnerType.BUXGALTERIYA
+                            : o.getToOwnerType() == OwnerType.KASSA && Long.valueOf(who).equals(o.getToOwnerId());
+                    if (in) kirim += o.getAmount(); else chiqim += o.getAmount();
+                }
             }
             if (lines.size() < 25) lines.add(opText(o));
         }

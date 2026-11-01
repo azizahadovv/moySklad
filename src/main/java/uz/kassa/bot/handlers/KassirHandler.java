@@ -35,6 +35,7 @@ public class KassirHandler {
     private final OperationRepo opRepo;
     private final uz.kassa.webapp.ExcelReportService excelReport;
     private final PermService permSvc;
+    private final uz.kassa.bot.LabelService labelSvc;
     private final uz.kassa.service.BalansService balansSvc;
     private final uz.kassa.repo.AppUserRepo userRepo;
     private final uz.kassa.repo.SubmissionRepo subRepo;
@@ -406,7 +407,9 @@ public class KassirHandler {
     private void knavPanel(AppUser u, Session s, long chatId) {
         String name = u.getKassaId() == null ? "?" : names.owner(OwnerType.KASSA, u.getKassaId());
         s.data.put("knav", "panel");
-        kSend(s, chatId, "📊 <b>КАССАМ</b> — " + esc(name) + "\n\nBo'limni tanlang:",
+        kSend(s, chatId, "📊 <b>КАССАМ</b> — " + esc(name) + "\n\n"
+                        + uz.kassa.bot.MenuHelp.block("kassam", KASSAM_MENU.stream().filter(c -> permSvc.visible(u, c)).toList(), labelSvc::display)
+                        + "Bo'limni tanlang:",
                 levelMenu(KASSAM_MENU, c -> permSvc.visible(u, c)));
     }
 

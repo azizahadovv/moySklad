@@ -212,7 +212,9 @@ public class TgReaderService {
         if (c.merchant() != null) card.setLastMerchant(cut(c.merchant(), 200));
         if (c.at() != null) card.setLastTxnAt(c.at());
         card.setUpdatedAt(Instant.now());
+        boolean isNew = card.getId() == null;
         cardRepo.save(card);
+        if (isNew) askNewCard(acc, card);
         if (c.balance() != null && card.getClickAccountId() != null) {
             clickRepo.findById(card.getClickAccountId()).ifPresent(ca -> {
                 ca.setCardBalance(c.balance());
@@ -221,6 +223,20 @@ public class TgReaderService {
                 clickRepo.save(ca);
             });
         }
+    }
+
+    /** 🆕 Xodim akkauntida birinchi marta ko'rilgan karta — SuperAdmin'dan «ishxona yoki shaxsiy?» so'raladi: xodimning
+     * shaxsiy kartasi ishxona puli sifatida «💳 Карта қолдиқлари» hisobotiga va Σ ga tushib qolmasin (🙈 tg_card.hidden). */
+    private void askNewCard(TgAkkaunt acc, TgCard card) {
+        String who = acc.getName().isBlank() ? acc.getPhone() : acc.getName() + " (" + acc.getPhone() + ")";
+        String text = "🆕 <b>Yangi karta</b> — " + esc(card.getName().isBlank() ? "Karta" : card.getName()) + " *" + esc(card.getMask()) + "\n\n"
+                + "👤 " + esc(who) + (acc.getKassaId() == null ? "" : " · " + esc(notifier.kassaName(acc.getKassaId()))) + "\n"
+                + "қолдиқ <b>" + fmt(card.getBalance() / 100) + "</b> сўм\n\n"
+                + "<i>Shaxsiy karta bo'lsa yashiring — «💳 Карта қолдиқлари» hisobotiga va Σ ga kirmaydi, xabarlari saqlanmaydi.</i>\n"
+                + "Bu karta kimniki?";
+        InlineKeyboardMarkup kb = inline(List.of(irow(btn("🏢 Ishxona kartasi", "a:tgpn:" + card.getId()), btn("🙈 Shaxsiy", "a:tgpy:" + card.getId()))));
+        try { notifier.send(NotifySwitches.TG_KARTA_YANGI, notifier.superadmins(), text, kb); }
+        catch (Exception e) { log.warn("Yangi karta so'rovi yuborilmadi (*{}): {}", card.getMask(), e.getMessage()); }
     }
 
     /** Karta emas xabarlar uchun: matndagi birinchi «… UZS/so'm» summa satri (tiyin uchun toTiyin bilan). */
@@ -238,7 +254,7 @@ public class TgReaderService {
                 + " <b>Bot xabari</b> — " + esc(x.getSourceBot()) + "\n"
                 + "👤 " + esc(who) + (acc.getKassaId() == null ? "" : " · " + esc(notifier.kassaName(acc.getKassaId()))) + "\n";
         String body = (x.getNote().isBlank() ? "" : esc(x.getNote()) + "\n")
-                + (x.getAmount() == null ? "" : "💵 " + fmt(x.getAmount()) + " so'm\n")
+                + (x.getAmount() == null ? "" : "💵 " + uz.kassa.bot.TextUtil.fmtTiyin(x.getAmount()) + " so'm\n")   // amount — TIYIN
                 + "━━━━━━━━━━━━━━━━━━━━\n<i>" + esc(cut(x.getText(), 600)) + "</i>";
         String text = head + body;
         InlineKeyboardMarkup kb = inline(List.of(irow(btn("📨 Bot xabarlari", "tg:m"))));

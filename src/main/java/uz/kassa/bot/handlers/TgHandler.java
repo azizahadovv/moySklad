@@ -162,7 +162,7 @@ public class TgHandler {
         StringBuilder sb = new StringBuilder(mark(x.getVerdict()) + " <b>Bot xabari</b> — " + esc(x.getSourceBot()) + "\n");
         sb.append("👤 ").append(esc(a == null ? x.getPhone() : (a.getName().isBlank() ? a.getPhone() : a.getName()))).append("\n");
         sb.append("🕒 ").append(x.getMsgAt() == null ? "—" : DTF.format(x.getMsgAt()));
-        if (x.getAmount() != null) sb.append(" · 💵 ").append(fmt(x.getAmount())).append(" so'm");
+        if (x.getAmount() != null) sb.append(" · 💵 ").append(uz.kassa.bot.TextUtil.fmtTiyin(x.getAmount())).append(" so'm");   // amount — TIYIN
         sb.append("\n");
         if (!x.getNote().isBlank()) sb.append("📋 ").append(esc(x.getNote())).append("\n");
         sb.append("━━━━━━━━━━━━━━━━━━━━\n").append(esc(x.getText()));
@@ -172,10 +172,15 @@ public class TgHandler {
     /** 💳 Karta qoldiqlari (bot avtomat yig'gan). */
     private void cards(AppUser u, long chatId, int msgId) {
         StringBuilder sb = new StringBuilder(cardReport.text());
+        long hiddenN = cardRepo.findAllByOrderByNameAscMaskAsc().stream().filter(TgCard::isHidden).count();
+        if (hiddenN > 0) sb.append("\n\n<i>🙈 ").append(hiddenN).append(" ta shaxsiy karta hisobotga kirmaydi.</i>");
         if (!cfg.enabled()) sb.append("\n\n⚪ Modul o'chirilgan.");
         List<List<InlineKeyboardButton>> kb = new ArrayList<>();
         if (u.getRole() != Role.KASSIR) kb.add(irow(btn("📤 Guruhga yuborish", "tg:cr")));
-        if (u.getRole() == Role.SUPERADMIN) kb.add(irow(btn("🔗 📲 Клик билан боғлаш", "a:tgcl")));
+        if (u.getRole() == Role.SUPERADMIN) {
+            kb.add(irow(btn("🙈 Shaxsiy kartalar", "a:tgph")));
+            kb.add(irow(btn("🔗 📲 Клик билан боғлаш", "a:tgcl")));
+        }
         kb.add(irow(btn("📨 Xabarlar", "tg:m"), btn("⬅️ Настройка", "a:p:set")));
         sender.edit(chatId, msgId, sb.toString(), inline(kb));
     }
@@ -214,15 +219,55 @@ public class TgHandler {
 
     /** 🙈 Shaxsiy kartani hisobotdan yashirish / qaytarish (tg_card.hidden) — xabarlari baribir o'qiladi, faqat hisobot va Σ ga kirmaydi. */
     private void cardHideToggle(AppUser actor, String cardIdStr, long chatId, int msgId) {
-        long cardId = Long.parseLong(cardIdStr);
-        TgCard card = cardRepo.findById(cardId).orElse(null);
-        if (card != null) {
-            card.setHidden(!card.isHidden());
-            if (card.isHidden()) card.setClickAccountId(null);   // shaxsiy karta Click hisobiga bog'lanmaydi
-            cardRepo.save(card);
-            audit.log(actor.getId(), card.isHidden() ? "TG_KARTA_YASHIRILDI" : "TG_KARTA_KORSATILDI", "tg_card", cardId, card.getMask());
-        }
+        cardRepo.findById(Long.parseLong(cardIdStr)).ifPresent(card -> setHidden(actor, card, !card.isHidden()));
         cardLinkPick(cardIdStr, chatId, msgId);
+    }
+
+    private void setHidden(AppUser actor, TgCard card, boolean hidden) {
+        if (card.isHidden() == hidden) return;
+        card.setHidden(hidden);
+        if (hidden) card.setClickAccountId(null);   // shaxsiy karta Click hisobiga bog'lanmaydi
+        cardRepo.save(card);
+        audit.log(actor.getId(), hidden ? "TG_KARTA_YASHIRILDI" : "TG_KARTA_KORSATILDI", "tg_card", card.getId(), card.getMask());
+    }
+
+    /** 🙈 Shaxsiy kartalar — barcha kartalar ro'yxati, bosilsa hisobotdan yashiriladi / qaytariladi (bir bosishda). */
+    private void privList(long chatId, int msgId) {
+        StringBuilder sb = new StringBuilder("🙈 <b>Shaxsiy kartalar</b>\n\n"
+                + "Kartani bosing — hisobotdan yashiriladi yoki qaytariladi.\n"
+                + "<i>🙈 — shaxsiy: «💳 Карта қолдиқлари» hisobotiga va Σ ga kirmaydi, xabarlari saqlanmaydi, Клик hisobidan uziladi.</i>\n"
+                + "━━━━━━━━━━━━━━━━━━━━\n");
+        List<TgCard> cards = cardRepo.findAllByOrderByNameAscMaskAsc();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        if (cards.isEmpty()) sb.append("Ҳали карта хабари келмаган.");
+        for (TgCard c : cards) {
+            String name = (c.getName().isBlank() ? "Karta" : c.getName()) + " *" + c.getMask();
+            sb.append(c.isHidden() ? "🙈 " : "💳 ").append("<b>").append(esc(name)).append("</b> · ").append(esc(owner(c)));
+            if (!c.isHidden()) sb.append(" · ").append(fmt(c.getBalance() / 100));
+            sb.append("\n");
+            rows.add(irow(btn(cut((c.isHidden() ? "🙈 " : "💳 ") + name + " · " + owner(c), 40), "a:tgpt:" + c.getId())));
+        }
+        rows.add(irow(btn("⬅️ Orqaga", "tg:c")));
+        show(chatId, msgId, sb.toString(), inline(rows));
+    }
+
+    /** Karta qaysi xodim akkauntidan kelgani (akkaunt nomi, bo'lmasa telefon). */
+    private String owner(TgCard c) {
+        if (c.getPhone() == null) return "—";
+        TgAkkaunt a = svc.account(c.getPhone());
+        return a == null || a.getName().isBlank() ? c.getPhone() : a.getName();
+    }
+
+    /** 🆕 Yangi karta so'roviga javob (TgReaderService.askNewCard): 🙈 Shaxsiy yoki 🏢 Ishxona. */
+    private void answerNewCard(AppUser actor, String cardIdStr, boolean personal, long chatId, int msgId) {
+        TgCard card = cardRepo.findById(Long.parseLong(cardIdStr)).orElse(null);
+        if (card == null) { sender.edit(chatId, msgId, "⚠️ Karta topilmadi."); return; }
+        setHidden(actor, card, personal);
+        String name = esc(card.getName().isBlank() ? "Karta" : card.getName()) + " *" + esc(card.getMask());
+        sender.edit(chatId, msgId, personal
+                        ? "✅ Saqlandi: 🙈 <b>" + name + "</b> — shaxsiy karta, hisobotga kirmaydi."
+                        : "✅ Saqlandi: 🏢 <b>" + name + "</b> — ishxona kartasi, hisobotda qoladi.",
+                inline(List.of(irow(btn("🙈 Shaxsiy kartalar", "a:tgph")))));
     }
 
     private void cardLinkSet(AppUser actor, String arg, long chatId, int msgId) {
@@ -410,6 +455,10 @@ public class TgHandler {
             case "tgcli" -> cardLinkPick(arg, chatId, msgId);
             case "tgcls" -> cardLinkSet(u, arg, chatId, msgId);
             case "tgclh" -> cardHideToggle(u, arg, chatId, msgId);
+            case "tgph" -> privList(chatId, msgId);
+            case "tgpt" -> { cardRepo.findById(Long.parseLong(arg)).ifPresent(c -> setHidden(u, c, !c.isHidden())); privList(chatId, msgId); }
+            case "tgpy" -> answerNewCard(u, arg, true, chatId, msgId);
+            case "tgpn" -> answerNewCard(u, arg, false, chatId, msgId);
             case "tgrn" -> { int n = cardReport.reportNow(); sender.send(chatId, n == 0 ? "⚠️ Guruh sozlanmagan (тgreader.chat_ids yoki Click guruhi)" : "📤 Karta qoldiqlari " + n + " ta guruhga yuborildi"); menu(s, chatId, 0); }
             case "tgmo" -> { cfg.toggleMediaOcr(); audit.log(u.getId(), "TG_SOZLAMA", "settings", null, "media_ocr=" + cfg.mediaOcr()); menu(s, chatId, msgId); }
             case "tgbn" -> { sender.send(chatId, "💰 <b>Qoldiq so'rovi</b>\n" + svc.requestBalances(null, "qo'lda")); menu(s, chatId, 0); }
