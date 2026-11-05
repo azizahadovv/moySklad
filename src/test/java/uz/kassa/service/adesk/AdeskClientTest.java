@@ -88,4 +88,39 @@ class AdeskClientTest {
         AdeskClient c = new AdeskClient(http);
         assertThrows(IllegalStateException.class, () -> c.transactions(LocalDate.of(2026, 8, 31), LocalDate.of(2026, 10, 9)));
     }
+
+    /** Haqiqiy Adesk javobi: type matn ("in"/"out"). Son deb o'qilsa hamma yozuv 0 bo'ladi va solishtirish takrorlarni ko'rmaydi. */
+    @Test
+    void commitmentTypeIsTextAndShipmentFlagAndProjectAreRead() {
+        AdeskHttp http = mock(AdeskHttp.class);
+        when(http.postForm(eq("commitments"), anyMap())).thenAnswer(inv -> {
+            ObjectNode j = OM.createObjectNode();
+            ArrayNode arr = j.putArray("commitments");
+            if ("0".equals(((Map<?, ?>) inv.getArgument(1)).get("start"))) {
+                ObjectNode a = arr.addObject();
+                a.put("id", 1); a.put("type", "out"); a.put("amount", "10.00"); a.put("date", "15.10.2026");
+                a.put("description", "MS Отгрузка №15444"); a.put("isShipment", true); a.putObject("project").put("id", 967986);
+                ObjectNode b = arr.addObject();
+                b.put("id", 2); b.put("type", "in"); b.put("amount", "20.00"); b.put("date", "15.10.2026");
+                b.put("description", "MS Приходный ордер №7"); b.put("isShipment", false);
+            }
+            j.put("recordsFiltered", 2);
+            return j;
+        });
+        List<AdeskClient.AdCommit> c = new AdeskClient(http).commitments(LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 31));
+        assertEquals(2, c.get(0).type());
+        assertTrue(c.get(0).shipment());
+        assertEquals(967986L, c.get(0).projectId());
+        assertEquals(1, c.get(1).type());
+        assertFalse(c.get(1).shipment());
+        assertNull(c.get(1).projectId());
+    }
+
+    @Test
+    void transactionCountIsReadFromOneRequest() {
+        AdeskHttp http = mock(AdeskHttp.class);
+        when(http.get(eq("transactions"), anyMap())).thenReturn(page(0, 1, 4796));
+        assertEquals(4796L, new AdeskClient(http).countTransactions(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 11, 4)));
+        verify(http, times(1)).get(eq("transactions"), anyMap());
+    }
 }

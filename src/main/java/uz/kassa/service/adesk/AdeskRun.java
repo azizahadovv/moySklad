@@ -52,6 +52,7 @@ public class AdeskRun {
     public final Map<String, Integer> stats = new ConcurrentHashMap<>();
     public final List<String> notes = Collections.synchronizedList(new ArrayList<>());
     public volatile String fatal;
+    public volatile boolean staleDb;
 
     public AdeskRun(boolean full, LocalDateTime startedAt, AtomicBoolean stop) {
         this.full = full;

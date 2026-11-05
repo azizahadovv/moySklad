@@ -193,7 +193,7 @@ public class MoySkladHttp {
      * ish ham 429 olar, ombor sinxroni to'xtab qolardi. Endi BARCHA so'rovlar shu darvozadan o'tadi:
      * oynada 36 tadan ko'p emas, 4 paralleldan ko'p emas; 429 kelsa X-Lognex-Retry-After qadar hamma
      * kutadi va so'rov 2 martagacha qaytariladi. */
-    private static final int WINDOW_MS = 3000, WINDOW_MAX = 36, PARALLEL = 4, RETRY_429 = 2;
+    private static final int WINDOW_MS = 3000, WINDOW_MAX = 36, PARALLEL = 4, RETRY_429 = 2, RETRY_5XX = 3;
     private final java.util.ArrayDeque<Long> stamps = new java.util.ArrayDeque<>();
     private final java.util.concurrent.Semaphore parallel = new java.util.concurrent.Semaphore(PARALLEL, true);
     /** 429 dan keyin shu vaqtgacha (epoch ms) hech kim so'ramaydi. */
@@ -239,7 +239,7 @@ public class MoySkladHttp {
                   .method(method, HttpRequest.BodyPublishers.ofString(reqBody == null ? "" : reqBody, StandardCharsets.UTF_8));
             HttpRequest req = b.build();
             HttpResponse<byte[]> resp;
-            int netTry = 0;
+            int netTry = 0, srvTry = 0;
             for (int attempt = 0; ; attempt++) {
                 acquireSlot();
                 parallel.acquire();
@@ -254,7 +254,15 @@ public class MoySkladHttp {
                     continue;
                 }
                 finally { parallel.release(); }
-                if (resp.statusCode() != 429) break;
+                // 2026-11-04: MoySklad'ning qisqa 502/503/504 uzilishi butun sinxronni yiqitardi. O'qish qaytariladi; POST/PUT — yo'q (dublikat xavfi)
+                int code = resp.statusCode();
+                if (get && (code == 502 || code == 503 || code == 504) && srvTry < RETRY_5XX) {
+                    srvTry++;
+                    log.info("MoySklad HTTP {} — qayta {}/{}: {}", code, srvTry, RETRY_5XX, url);
+                    Thread.sleep(1500L * srvTry);
+                    continue;
+                }
+                if (code != 429) break;
                 long ms = retryAfterMs(resp);
                 synchronized (stamps) { pauseUntil = Math.max(pauseUntil, System.currentTimeMillis() + ms); }
                 if (attempt >= RETRY_429) break;

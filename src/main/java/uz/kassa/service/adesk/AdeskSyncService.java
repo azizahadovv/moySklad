@@ -49,6 +49,7 @@ public class AdeskSyncService {
 
     /** Barcha bosqichlar. Fatal Adesk xatosi (token/obuna) — {@link AdeskException} tashqariga chiqadi. */
     public void run(AdeskRun r) {
+        if (fenced(r)) return;
         r.stage = "ma'lumotnomalar";
         r.currencies = msr.currencies();
         r.orgs = msr.orgs();
@@ -74,6 +75,39 @@ public class AdeskSyncService {
         r.stage = name;
         r.progress = "";
         body.run();
+    }
+
+    /* ==================== 0a. ikkinchi nusxa himoyasi ==================== */
+
+    /** Bazadagi bog'lanish Adesk'dagidan shuncha kam bo'lsa — baza eskirgan: 100 ta yoki 3% dan katta farq. */
+    private static final int FENCE_MIN = 100;
+
+    /**
+     * 2026-10-27: kompyuterdagi bot nusxasi (bazasi 09.10 da to'xtagan, token haqiqiy) ishga tushib, Adesk'da 1 475 ta otgruzka/priyomkani
+     * qayta yaratdi. Har nusxaning adesk_link'i alohida, shu sabab u server yozganini ko'rmaydi. Eskirgan baza Adesk operatsiyalari soni
+     * bilan bitta so'rovda aniqlanadi: operatsiyalar importedId bilan yoziladi, sog'lom bazada deyarli hammasi bog'langan.
+     * null — davom etish mumkin; matn — to'xtash sababi.
+     */
+    public String staleInstance() {
+        if (cfg.fenceOff()) return null;
+        long total = ad.countTransactions(cfg.start(), cfg.today());
+        if (total <= 0) return null;
+        long linked = repo.countByKindAndStatus(MONEY, OK);
+        if (total - linked <= Math.max(FENCE_MIN, total * 3 / 100)) return null;
+        return "Bu nusxaning bazasi Adesk'dan orqada: Adesk'da " + total + " ta operatsiya, bog'langani " + linked + " ta. "
+                + "Boshqa bot nusxasi ishlayotgan bo'lishi mumkin, shuning uchun Adesk'ka hech narsa yozilmadi. "
+                + "Baza qonuniy tiklangan bo'lsa: 📒 Adesk → ⚙️ Sozlamalar → 🛡 Nusxa himoyasi";
+    }
+
+    /** Eskirgan bazada yurish hech narsaga tegmay to'xtaydi. */
+    private boolean fenced(AdeskRun r) {
+        String why = staleInstance();
+        if (why == null) return false;
+        r.fatal = why;
+        r.staleDb = true;
+        r.stage = "to'xtadi";
+        log.warn("Adesk: {}", why);
+        return true;
     }
 
     /* ==================== 0. birinchi ulanish himoyasi ==================== */
@@ -707,6 +741,7 @@ public class AdeskSyncService {
      * qo'lda kiritilgan kirim/chiqim/perevodlar MoySklad'ga yoziladi. Faqat bog'lanishlar (DB) + 2 ta MoySklad so'rovi.
      */
     public void reverseOnly(AdeskRun r) {
+        if (fenced(r)) return;
         r.stage = "Adesk → MoySklad";
         r.orgs = msr.orgs();
         r.expenseItems = msr.expenseItems();
@@ -1232,6 +1267,7 @@ public class AdeskSyncService {
             docs.addAll(msr.goodsDocs(e, from, to, all ? null : cur.minusMinutes(OVERLAP_MIN)));
         Set<String> seen = new HashSet<>();
         Map<String, Map<String, String>> params = new HashMap<>();
+        Map<String, Deque<AdCommit>> free = null;   // yaratishdan oldin bir marta o'qiladi; o'zgarish bo'lmasa so'rov ketmaydi
         int i = 0;
         for (MsGoodsDoc d : docs) {
             if (r.stopped()) return;
@@ -1260,9 +1296,11 @@ public class AdeskSyncService {
                 Long old = upd ? l.getAdeskId() : null;
                 // pozitsiyalar to'g'ri almashishi uchun qayta yaratiladi: AVVAL yangisi — Adesk rad etsa eskisi joyida qoladi (yo'qolmaydi),
                 // keyin eskisi o'chiriladi; o'chmasa — dublikat ⚠️ eslatmada (Adesk'da qo'lda o'chiriladi)
-                long id = ad.createCommitment(p);
+                if (free == null) free = freeIndex(ad.commitments(minDate(docs, from), maxDate(docs, to)), L);
+                AdCommit same = takeFree(free, d, p);   // Adesk'da aynan shu hujjat bor (boshqa nusxa yozgan, bog'lanish yo'qolgan) — nusxa yaratilmaydi
+                long id = same != null ? same.id() : ad.createCommitment(p);
                 commitOk(r, d, l, id, hash);
-                r.inc(upd ? "cm.updated" : "cm.created");
+                r.inc(same != null ? "cm.adopted" : upd ? "cm.updated" : "cm.created");
                 if (old != null && old != id && !dropCommit(old)) {
                     r.inc("cm.error");
                     r.note("Adesk'da eski majburiyat #" + old + " o'chirilmadi (" + ruName(d.entity()) + " №" + d.number() + ") — qo'lda o'chiring");
@@ -1278,7 +1316,9 @@ public class AdeskSyncService {
             for (AdeskLink l : new ArrayList<>(L.values()))
                 if (linked(l) && !seen.contains(l.getMsKey())) removeCommit(r, l);
             Set<Long> present = new HashSet<>();
-            ad.commitments(from, to).forEach(c -> present.add(c.id()));
+            List<AdCommit> listed = ad.commitments(from, to);
+            listed.forEach(c -> present.add(c.id()));
+            Map<String, Deque<AdCommit>> freeNow = freeIndex(listed, L);
             long missing = docs.stream().map(d -> L.get(d.id())).filter(l -> linked(l) && !ERROR.equals(l.getStatus()) && !present.contains(l.getAdeskId())
                     && (l.getUpdatedAt() == null || l.getUpdatedAt().isBefore(r.startedInstant))).count();
             if (missing > 20 && missing * 10 > L.size()) {   // ro'yxat chala o'qilgan bo'lishi mumkin — dublikat yaratmaslik uchun tiklanmaydi
@@ -1290,11 +1330,64 @@ public class AdeskSyncService {
                 Map<String, String> p = params.get(d.id());
                 if (!linked(l) || ERROR.equals(l.getStatus()) || p == null || present.contains(l.getAdeskId())) continue;
                 if (l.getUpdatedAt() != null && !l.getUpdatedAt().isBefore(r.startedInstant)) continue;   // shu yurishda yaratilgan
+                AdCommit same = takeFree(freeNow, d, p);
+                if (same != null) { commitOk(r, d, l, same.id(), l.getHash()); r.inc("cm.adopted"); continue; }
                 try { commitOk(r, d, l, ad.createCommitment(p), l.getHash()); r.inc("cm.restored"); }
                 catch (AdeskException e) { if (e.fatal) throw e; commitErr(r, d, l, e.getMessage()); }
             }
         }
         if (!r.stopped()) setCursor("commit", r.startedAt);
+    }
+
+    /** Izoh boshi: «MS Отгрузка №14998». Bir xil hujjatni boshqa nusxa yozgan yozuvda ham aniqlash kaliti. */
+    static String commitHead(MsGoodsDoc d) { return "MS " + ruName(d.entity()) + " №" + d.number(); }
+
+    private static final java.util.regex.Pattern GOODS_HEAD =
+            java.util.regex.Pattern.compile("MS (Отгрузка|Приёмка|Возврат покупателя|Возврат поставщику) №.+");
+
+    /** Otgruzka/priyomka formatidagi izohdan bosh qism; boshqa yozuv (pul operatsiyasi asosidagi, qo'lda) — null. */
+    static String goodsHead(String description) {
+        if (description == null) return null;
+        int i = description.indexOf(" · ");
+        String h = (i < 0 ? description : description.substring(0, i)).trim();
+        return GOODS_HEAD.matcher(h).matches() ? h : null;
+    }
+
+    private static String commitKey(String head, LocalDate date, long tiyin) { return head + "|" + date + "|" + tiyin; }
+
+    /** Bog'lanmagan otgruzka/priyomka yozuvlari: hujjat kaliti (bosh qism, sana, summa) bo'yicha. */
+    private static Map<String, Deque<AdCommit>> freeIndex(List<AdCommit> list, Map<String, AdeskLink> L) {
+        Set<Long> used = usedIds(L);
+        Map<String, Deque<AdCommit>> m = new HashMap<>();
+        for (AdCommit c : list) {
+            String h = goodsHead(c.description());
+            if (h == null || !c.shipment() || c.date() == null || used.contains(c.id())) continue;
+            m.computeIfAbsent(commitKey(h, c.date(), tiyin(c.amount())), k -> new ArrayDeque<>()).add(c);
+        }
+        return m;
+    }
+
+    /**
+     * Shu hujjatning bog'lanmagan yozuvi: proyekti ham kutilgandek bo'lishi shart. Proyektsiz eski yetim yozuvga bog'lansa,
+     * hujjat Adesk Выручка'sidan tushib qolardi. Har yozuv bir marta beriladi (bir xil raqamli ikki hujjat).
+     */
+    private static AdCommit takeFree(Map<String, Deque<AdCommit>> free, MsGoodsDoc d, Map<String, String> params) {
+        Deque<AdCommit> q = free.get(commitKey(commitHead(d), d.date(), d.sumTiyin()));
+        if (q == null) return null;
+        Long project = params.containsKey("project") ? Long.valueOf(params.get("project")) : null;
+        for (Iterator<AdCommit> it = q.iterator(); it.hasNext(); ) {
+            AdCommit c = it.next();
+            if (Objects.equals(c.projectId(), project)) { it.remove(); return c; }
+        }
+        return null;
+    }
+
+    private static LocalDate minDate(List<MsGoodsDoc> docs, LocalDate fallback) {
+        return docs.stream().map(MsGoodsDoc::date).filter(Objects::nonNull).min(Comparator.naturalOrder()).orElse(fallback);
+    }
+
+    private static LocalDate maxDate(List<MsGoodsDoc> docs, LocalDate fallback) {
+        return docs.stream().map(MsGoodsDoc::date).filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(fallback);
     }
 
     private Map<String, String> commitParams(AdeskRun r, ProdCtx pc, MsGoodsDoc d) {
@@ -1310,7 +1403,8 @@ public class AdeskSyncService {
         p.put("legal_entity", String.valueOf(le));
         p.put("currency", cfg.currency());
         // 2026-10-10: otgruzka/priyomka ham operatsiyalar kabi «Asosiy» proyektida — proyekt sahifasida (Отгрузки, Выручка) ko'rinsin
-        if (r.projectId != null) p.put("project", String.valueOf(r.projectId));
+        // 2026-11-04: yetkazuvchiga qaytarish tushum emas: proyektli «out» Adesk Выручка'siga kiradi, proyektsizi faqat ombor va kontragent qarzini o'zgartiradi
+        if (r.projectId != null && !"purchasereturn".equals(d.entity())) p.put("project", String.valueOf(r.projectId));
         p.put("description", commitDesc(d));
         // Adesk bitta hujjatda bir xil tovarni ikki qatorda qabul qilmaydi («identichnym id») — bir tovar qatorlari birlashtiladi:
         // soni yig'iladi, narx = jami summa / jami son (hujjat summasi o'zgarmaydi)

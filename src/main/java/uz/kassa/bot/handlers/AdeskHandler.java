@@ -82,6 +82,23 @@ public class AdeskHandler {
                 if (runner.requestCheck(chatId)) sender.send(chatId, "⏳ Solishtirilmoqda (1–3 daqiqa) — natija va Excel shu yerga keladi.");
                 else sender.send(chatId, "⏳ Sinxron hozir ishlayapti — tugagach qayta bosing.");
             }
+            case "adcl" -> {
+                if (!cfg.hasToken()) { sender.send(chatId, "❗️ Adesk tokeni kiritilmagan."); return true; }
+                if (runner.requestCleanupPlan(chatId, "a:adcy", BACK)) sender.send(chatId, "⏳ Ro'yxat tuzilmoqda (2–5 daqiqa). Adesk'da hali hech narsa o'zgarmaydi.");
+                else sender.send(chatId, "⏳ Sinxron hozir ishlayapti — tugagach qayta bosing.");
+            }
+            case "adcy" -> {
+                int n = idx(arg, Integer.MAX_VALUE);
+                if (runner.requestCleanupRun(chatId, n)) {
+                    audit.log(u.getId(), "ADESK_TOZALASH", "settings", null, "tasdiq=" + n);
+                    sender.edit(chatId, msgId, "⏳ O'chirilmoqda: <b>" + n + "</b> ta yozuv. Tugagach natija shu yerga keladi, jarayon 📒 Adesk panelida ko'rinadi.");
+                } else sender.send(chatId, "⏳ Sinxron hozir ishlayapti — tugagach ro'yxatni qayta oching.");
+            }
+            case "adfo" -> {
+                cfg.setFenceOff(!cfg.fenceOff());
+                audit.log(u.getId(), "ADESK_SOZLAMA", "settings", null, "fenceOff=" + cfg.fenceOff());
+                menu(s, chatId, msgId);
+            }
             case "ade" -> errors(arg, chatId, msgId);
             case "ado" -> orgList(chatId, msgId);
             case "ados" -> {
@@ -129,13 +146,16 @@ public class AdeskHandler {
                 r2.add(irow(btn("🕘 Hisobot vaqti", "a:adv:time"), btn("📣 Hisobot chati", "a:adv:chat")));
                 r2.add(irow(btn("🏷 Kirim statyasi", "a:adv:cin"), btn("🔗 Hisoblarni bog'lash", "a:adm:0")));
                 r2.add(irow(btn("↩️ Adesk → MoySklad", "a:adrv"), btn("🔁 MS perevodlari", "a:adtc")));
+                r2.add(irow(btn("🛡 Nusxa himoyasi", "a:adfo")));
                 r2.add(irow(btn("⬅️ Orqaga", BACK)));
                 sender.edit(chatId, msgId, "⚙️ <b>Adesk sozlamalari</b>\n\n"
                         + "⏱ Oraliq — MoySklad → Adesk sinxroni: har <b>" + cfg.intervalMin() + "</b> daqiqada\n"
                         + "⚡ Adesk→MS — Adesk'da kiritilganlarni MoySklad'ga yozish: har <b>" + cfg.reverseIntervalMin() + "</b> daqiqada"
                         + (cfg.reverse() ? "" : " (↩️ Adesk → MoySklad o'chiq — ishlamaydi)") + "\n"
                         + "🔁 MS perevodlari — MoySklad'da kiritilgan perevodlar Adesk'da bitta «Перевод»: "
-                        + (cfg.trConvert() ? "<b>yoqiq</b>" : "o'chiq (ikki qator «Перемещение»)") + "\n\nSozlamani tanlang:", inline(r2));
+                        + (cfg.trConvert() ? "<b>yoqiq</b>" : "o'chiq (ikki qator «Перемещение»)") + "\n"
+                        + "🛡 Nusxa himoyasi — baza Adesk'dan orqada qolsa sinxron to'xtaydi: " + (cfg.fenceOff() ? "⚠️ <b>o'chiq</b>" : "<b>yoqiq</b>")
+                        + "\n\nSozlamani tanlang:", inline(r2));
             }
             case "ads" -> {
                 sender.send(chatId, runner.requestStop() ? "⏹ To'xtatish so'raldi — joriy qadam tugagach to'xtaydi. Bajarilgani saqlanadi."
@@ -185,6 +205,7 @@ public class AdeskHandler {
         List<List<InlineKeyboardButton>> rows = new ArrayList<>();
         rows.add(irow(btn(cfg.enabled() ? "⏸ O'chirish" : "▶️ Yoqish", "a:adg"), btn("🔁 To'liq sinxron", "a:adf")));
         rows.add(irow(btn("🧮 Solishtirish", "a:adc"), btn("⚠️ Xatolar", "a:ade:0")));
+        rows.add(irow(btn("🧹 Ortiqcha yozuvlar", "a:adcl")));
         boolean needMap = !cfg.accountsConfirmed();
         if (needMap) rows.add(0, irow(btn("🔗 Hisoblarni bog'lash", "a:adm:0")));
         rows.add(irow(btn("⚙️ Sozlamalar", "a:adt"), btn(st != null ? "⏹ To'xtatish" : "🔃 Yangilash", st != null ? "a:ads" : "a:ad")));

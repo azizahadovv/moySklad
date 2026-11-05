@@ -121,7 +121,7 @@ public class AdeskReverseService {
                 cleared(pair);
             } catch (Exception e) {
                 fail(r, o, e.getMessage());
-                log.warn("Adesk o'tkazma #{} yozilmadi: {}", o.id(), e.getMessage());
+                if (uz.kassa.service.LogThrottle.allow("adesk.tr." + o.id() + "|" + e.getMessage(), 3_600_000L)) log.warn("Adesk o'tkazma #{} yozilmadi: {}", o.id(), e.getMessage());
             }
         }
         for (AdTx i : ins) fail(r, i, "perevodning chiqim tomoni topilmadi (sana va summa bir xil bo'lishi kerak)");
@@ -135,7 +135,7 @@ public class AdeskReverseService {
                 log.info("Adesk #{} MoySklad'ga yozildi: {}", t.id(), msId);
             } catch (Exception e) {
                 fail(r, t, e.getMessage());
-                log.warn("Adesk #{} MoySklad'ga yozilmadi: {}", t.id(), e.getMessage());
+                if (uz.kassa.service.LogThrottle.allow("adesk.tx." + t.id() + "|" + e.getMessage(), 3_600_000L)) log.warn("Adesk #{} MoySklad'ga yozilmadi: {}", t.id(), e.getMessage());
             }
         }
     }

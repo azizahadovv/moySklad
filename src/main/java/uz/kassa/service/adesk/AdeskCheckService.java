@@ -189,8 +189,10 @@ public class AdeskCheckService {
         List<AdCommit> commits = ad.commitments(from, to);
         long msOutDocs = msr.countDocs("demand", from, to) + msr.countDocs("purchasereturn", from, to);
         long msInDocs = msr.countDocs("supply", from, to) + msr.countDocs("salesreturn", from, to);
-        long adOutC = commits.stream().filter(c -> c.type() == 2).count();
-        long adInC = commits.stream().filter(c -> c.type() == 1).count();
+        // Adesk pul operatsiyasi asosida o'zi yaratgan yozuvlar (isShipment=false) hujjat emas — sanalmaydi
+        List<AdCommit> goods = commits.stream().filter(c -> c.shipment() && AdeskSyncService.goodsHead(c.description()) != null).toList();
+        long adOutC = goods.stream().filter(c -> c.type() == 2).count();
+        long adInC = goods.stream().filter(c -> c.type() == 1).count();
         // bo'sh hujjatlar (0 so'm, pozitsiyasiz) Adesk'ka o'tmaydi — MoySklad tomonidan ayiriladi; xatolilar alohida ko'rsatiladi
         Set<String> outTypes = Set.of("demand", "purchasereturn");
         long emptyOut = 0, emptyIn = 0, errOut = 0, errIn = 0;
@@ -207,6 +209,29 @@ public class AdeskCheckService {
         if (emptyOut + emptyIn > 0)
             sb.append("ℹ️ Бўш ҳужжатлар (0 сўм, позициясиз): ").append(emptyOut + emptyIn).append(" та — ўтказилмайди\n");
         if (msOutDocs != adOutC || msInDocs != adInC) equal = false;
+
+        /* bog'lanmagan начислениялар: 2026-11-04 da shu tekshiruv yo'qligi sabab 4 384 ta takror (Выручка +3,94 mlrd) bir oy ko'rinmadi */
+        Set<Long> commitIds = new HashSet<>();
+        for (AdeskLink l : repo.findByKind(COMMIT)) if (AdeskSyncService.linked(l)) commitIds.add(l.getAdeskId());
+        List<AdCommit> orphans = AdeskCleanupService.orphans(commits, commitIds);
+        List<Object[]> orphanRows = new ArrayList<>();
+        long orphanOut = 0, orphanIn = 0;
+        for (AdCommit c : orphans) {
+            long v = AdeskSyncService.tiyin(c.amount());
+            if (c.type() == 2) orphanOut += v; else orphanIn += v;
+            orphanRows.add(new Object[]{c.id(), c.date() == null ? "" : c.date().format(DF), c.type() == 2 ? "отгрузка" : "приёмка", som(v),
+                    c.projectId() == null ? "йўқ" : "бор", c.description()});
+        }
+        if (!orphans.isEmpty()) {
+            sb.append("⚠️ Adesk'да боғланмаган начислениялар: <b>").append(orphans.size()).append("</b> та · отгрузка <b>")
+              .append(fmtTiyin(orphanOut)).append("</b> · приёмка <b>").append(fmtTiyin(orphanIn)).append("</b> сўм (📒 Adesk → 🧹 Ortiqcha yozuvlar)\n");
+            equal = false;
+        }
+        long retN = 0, retSum = 0;
+        for (AdCommit c : goods)
+            if (commitIds.contains(c.id()) && c.description().startsWith("MS Возврат покупателя")) { retN++; retSum += AdeskSyncService.tiyin(c.amount()); }
+        if (retN > 0)
+            sb.append("ℹ️ Возврат покупателя: ").append(retN).append(" та · <b>").append(fmtTiyin(retSum)).append("</b> сўм — MoySklad тушумдан айиради, Adesk айирмайди\n");
 
         long msCp = msr.count("entity/counterparty");
         long adCp = repo.countByKindAndStatus(CONTRACTOR, OK);
@@ -289,7 +314,8 @@ public class AdeskCheckService {
                 new SheetDef("Ўтмаган ҳужжатлар", new String[]{"Сана", "Ҳужжат", "№", "Сумма", "Сабаб", "MoySklad ҳавола"}, missRows),
                 new SheetDef("Хатолар", new String[]{"Тур", "Ҳужжат", "Номи/№", "Сана", "Сумма", "Сабаб", "MoySklad ҳавола"}, errRows),
                 new SheetDef("Бўш ҳужжатлар", new String[]{"Сана", "Ҳужжат", "№", "Сумма", "Сабаб", "MoySklad ҳавола"}, skipRows),
-                new SheetDef("Adesk қўлда", new String[]{"Adesk ID", "Сана", "Тур", "Сумма", "Статья", "Контрагент", "Изоҳ"}, manualRows));
+                new SheetDef("Adesk қўлда", new String[]{"Adesk ID", "Сана", "Тур", "Сумма", "Статья", "Контрагент", "Изоҳ"}, manualRows),
+                new SheetDef("Боғланмаган начислениялар", new String[]{"Adesk ID", "Сана", "Тур", "Сумма", "Проект", "Изоҳ"}, orphanRows));
         String shortLine = (equal ? "✅ тенг" : "⚠️ фарқ") + " · ҳисоблар " + accOk + "/" + (accOk + accBad.size())
                 + " · ҳужжатлар " + adLinked + "/" + msDocs + (errs.isEmpty() ? "" : " · хато " + errs.size());
         String extra = "";

@@ -61,6 +61,7 @@ public class AdeskConfig {
     public static final String RPS       = "adesk.rps";
     /** Inkremental kursorlar: adesk.cur.<tur> (bot vaqti, ISO). */
     public static final String CURSOR    = "adesk.cur.";
+    public static final String FENCE_OFF = "adesk.fenceOff";
     /** Oxirgi ishga tushish natijasi (matn) — panelda ko'rsatiladi. */
     public static final String LAST_RUN  = "adesk.lastRun";
     /** Oxirgi solishtirish qisqa natijasi. */
@@ -128,6 +129,10 @@ public class AdeskConfig {
         String t = v == null ? "" : v.trim();
         return t.isEmpty() || !Character.isLetterOrDigit(t.codePointAt(0)) ? def : t;
     }
+
+    /** 🛡 Nusxa himoyasi o'chirilganmi (baza qonuniy tiklanganda; standart yoqiq). */
+    public boolean fenceOff() { return "1".equals(settings.get(FENCE_OFF).orElse("0").trim()); }
+    public void setFenceOff(boolean off) { settings.set(FENCE_OFF, off ? "1" : "0"); }
 
     public boolean reverse() { return "1".equals(settings.get(REVERSE).orElse("0").trim()); }
 

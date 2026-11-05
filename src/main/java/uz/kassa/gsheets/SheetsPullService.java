@@ -105,7 +105,7 @@ public class SheetsPullService {
             }
             kassaPullOk = true;
         } catch (Exception e) {
-            log.warn("Sheets Kassalar o'qish: {}", e.getMessage());
+            if (uz.kassa.service.LogThrottle.allow("sheets.Kassalar|" + e.getMessage(), 3_600_000L)) log.warn("Sheets Kassalar o'qish: {}", e.getMessage());
         }
         pendingKassas = pending;
     }
@@ -275,7 +275,7 @@ public class SheetsPullService {
             }
             usersPullOk = true;
         } catch (Exception e) {
-            log.warn("Sheets Foydalanuvchilar o'qish: {}", e.getMessage());
+            if (uz.kassa.service.LogThrottle.allow("sheets.Foydalanuvchilar|" + e.getMessage(), 3_600_000L)) log.warn("Sheets Foydalanuvchilar o'qish: {}", e.getMessage());
         }
         pendingUsers = pending;
     }
@@ -329,7 +329,7 @@ public class SheetsPullService {
                 });
             }
         } catch (Exception e) {
-            log.warn("Sheets Shablon o'qish: {}", e.getMessage());
+            if (uz.kassa.service.LogThrottle.allow("sheets.Shablon|" + e.getMessage(), 3_600_000L)) log.warn("Sheets Shablon o'qish: {}", e.getMessage());
         }
     }
 

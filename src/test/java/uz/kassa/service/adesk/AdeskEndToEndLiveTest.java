@@ -286,7 +286,7 @@ class AdeskEndToEndLiveTest {
             AdeskReverseService reverse = new AdeskReverseService(cfg, ms, repo, props, ad);
             AdeskSyncService sync = new AdeskSyncService(cfg, ad, msr, repo, reverse);
             AdeskCheckService check = new AdeskCheckService(cfg, ad, msr, repo);
-            AdeskRunner runner = new AdeskRunner(cfg, sync, check, null, null, null, null);
+            AdeskRunner runner = new AdeskRunner(cfg, sync, check, null, null, null, null, null);
 
             long t0 = System.currentTimeMillis();
             AdeskRun r1 = new AdeskRun(true, LocalDateTime.now(ZoneId.of("Asia/Tashkent")), new AtomicBoolean(false));

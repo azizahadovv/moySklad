@@ -22,6 +22,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static uz.kassa.bot.Keyboards.btn;
+import static uz.kassa.bot.Keyboards.inline;
+import static uz.kassa.bot.Keyboards.irow;
 import static uz.kassa.bot.TextUtil.esc;
 
 /**
@@ -43,6 +46,7 @@ public class AdeskRunner {
     private final AppUserRepo userRepo;
     private final NotifySwitches sw;
     private final ExcelReportService excel;
+    private final AdeskCleanupService cleanup;
 
     private final ScheduledExecutorService exec = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "adesk");
@@ -113,6 +117,49 @@ public class AdeskRunner {
         return true;
     }
 
+    /** 🧹 Ortiqcha yozuvlar ro'yxati (faqat o'qiydi): natija, Excel va tasdiq tugmalari chatga keladi. */
+    public boolean requestCleanupPlan(long chatId, String confirmData, String backData) {
+        return background(chatId, "ro'yxat", () -> {
+            AdeskCleanupService.Plan p = cleanup.plan();
+            if (p.blocked() != null) { sender.send(chatId, "⚠️ Ro'yxat tuzilmadi — " + esc(p.blocked())); return; }
+            if (p.remove().isEmpty()) {
+                sender.send(chatId, "✅ Adesk'da ortiqcha yozuv yo'q." + (p.keep().isEmpty() ? "" : "\nBog'lanmagan: " + p.keep().size() + " ta (MoySklad'da bor, tegilmaydi)."));
+                return;
+            }
+            sender.sendDocument(chatId, excel.buildSheets(cleanup.sheets(p)), "adesk-ortiqcha-" + LocalDate.now(cfg.zone()) + ".xlsx", "🧹 Adesk: ortiqcha yozuvlar ro'yxati");
+            sender.send(chatId, cleanup.previewText(p), inline(List.of(irow(btn("✅ Ha, o'chirilsin", confirmData + ":" + p.remove().size()), btn("❌ Yo'q", backData)))));
+        });
+    }
+
+    /** Tasdiqdan keyin o'chirish: expected dan ko'p yozuv o'chirilmaydi. */
+    public boolean requestCleanupRun(long chatId, int expected) {
+        return background(chatId, "o'chirish", () -> {
+            AdeskRun r = current;
+            AdeskCleanupService.Outcome o = cleanup.execute(expected, stop::get, n -> { if (r != null) r.progress = n + "/" + expected; });
+            sender.send(chatId, cleanup.resultText(o));
+        });
+    }
+
+    /** Yagona «adesk» oqimida bajaradi: sinxron bilan bir vaqtda yurmaydi. */
+    private boolean background(long chatId, String stage, Runnable job) {
+        if (running() || !queued.compareAndSet(false, true)) return false;
+        exec.execute(() -> {
+            queued.set(false);
+            if (!busy.compareAndSet(false, true)) return;
+            stop.set(false);
+            AdeskRun r = new AdeskRun(false, LocalDateTime.now(cfg.zone()), stop);
+            r.stage = "🧹 " + stage;
+            current = r;
+            try { job.run(); }
+            catch (Exception e) {
+                log.warn("Adesk tozalash: {}", e.toString());
+                sender.send(chatId, "⚠️ Bajarilmadi — " + esc(String.valueOf(e.getMessage())));
+            }
+            finally { current = null; busy.set(false); }
+        });
+        return true;
+    }
+
     public boolean requestStop() {
         if (current == null) return false;
         stop.set(true);
@@ -140,6 +187,7 @@ public class AdeskRunner {
                 lastIncAt = System.currentTimeMillis();
                 current = null;
             }
+            if (r.staleDb) notifyStale(r.fatal);
             String summary = summary(r);
             cfg.set(AdeskConfig.LAST_RUN, summary);
             if (chatId != null) sender.send(chatId, summary);
@@ -161,6 +209,7 @@ public class AdeskRunner {
             stop.set(false);
             AdeskRun r = new AdeskRun(false, LocalDateTime.now(cfg.zone()), stop);
             sync.reverseOnly(r);
+            if (r.staleDb) { notifyStale(r.fatal); return; }
             if (r.get("ad.toMs") + r.get("tx.dupRemoved") + r.get("ad.edited") + r.get("ad.deleted") + r.get("ad.unposted") > 0) {
                 cfg.set(AdeskConfig.LAST_RUN, summary(r));
                 log.info("Adesk → MoySklad: {}", summary(r).replace('\n', ' '));
@@ -210,6 +259,16 @@ public class AdeskRunner {
             if (u.getTelegramId() != null && sw.allow(NotifySwitches.ADESK_XATO, u)) sender.send(u.getTelegramId(), text);
     }
 
+    /** Eskirgan baza — SuperAdmin'larga kuniga bir marta: avtomatik yurish jim to'xtab qolmasin. */
+    private void notifyStale(String msg) {
+        String key = LocalDate.now(cfg.zone()) + "|stale";
+        if (key.equals(fatalSentKey) || !sw.on(NotifySwitches.ADESK_XATO)) return;
+        fatalSentKey = key;
+        for (AppUser u : userRepo.findByRoleAndActiveTrue(Role.SUPERADMIN))
+            if (u.getTelegramId() != null && sw.allow(NotifySwitches.ADESK_XATO, u))
+                sender.send(u.getTelegramId(), "⚠️ <b>Adesk sinxroni to'xtadi</b> — " + esc(msg));
+    }
+
     /* ==================== natija matni ==================== */
 
     String summary(AdeskRun r) {
@@ -229,7 +288,7 @@ public class AdeskRunner {
                 "tx.restored", "tiklandi", "tx.fixed", "to'g'rilandi", "tx.dupRemoved", "dublikat o'chirildi", "tx.error", "xato");
         part(sb, r, "Perevodlar", "tr.created", "yangi", "tr.relinked", "qayta bog'landi", "tr.oldRemoved", "eski qator o'chirildi",
                 "tr.dropped", "bekor qilindi", "tr.error", "xato");
-        part(sb, r, "Otgruzka/priyomka", "cm.created", "yangi", "cm.updated", "yangilandi", "cm.removed", "o'chirildi", "cm.restored", "tiklandi", "cm.error", "xato");
+        part(sb, r, "Otgruzka/priyomka", "cm.created", "yangi", "cm.updated", "yangilandi", "cm.adopted", "bog'landi", "cm.removed", "o'chirildi", "cm.restored", "tiklandi", "cm.error", "xato");
         part(sb, r, "Adesk'da qo'lda", "ad.manual", "operatsiya", "ad.toMs", "MoySklad'ga yozildi", "ad.transferToMs", "perevod", "ad.toMsError", "yozilmadi", "ad.manualTransfer", "o'tkazma",
                 "ad.edited", "MoySklad'da tahrirlandi", "ad.deleted", "MoySklad korzinasiga", "ad.unposted", "проведение olib tashlandi");
         boolean any = sb.indexOf("•") >= 0;

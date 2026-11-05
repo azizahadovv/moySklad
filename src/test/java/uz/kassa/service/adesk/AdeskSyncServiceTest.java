@@ -676,4 +676,156 @@ class AdeskSyncServiceTest {
         assertEquals("Auth required", AdeskHttp.errorText(200, om.readTree("{\"success\": false, \"message\": \"Auth required\", \"code\": 401}"), ""));
         assertEquals("name: Обязательное поле.", AdeskHttp.errorText(200, om.readTree("{\"success\": false, \"errors\": {\"name\": [\"Обязательное поле.\"]}}"), ""));
     }
+
+    /* ==================== 2026-11-04: ikkinchi nusxa / eskirgan baza himoyasi ==================== */
+
+    private MsGoodsDoc demand45() {
+        return new MsGoodsDoc("d-1", "demand", "00045", LocalDate.of(2026, 9, 7), 3_150_000_00L, ORG, "cp-1", "counterparty", "", true,
+                List.of(new MsPos("p-1", "product", 2, 1_575_000_00L)));
+    }
+
+    private AdeskRun commitRun(boolean full, List<MsGoodsDoc> demands) {
+        when(repo.findByKind(AdeskLink.CONTRACTOR)).thenReturn(List.of(link(AdeskLink.CONTRACTOR, "cp-1", 900)));
+        when(repo.findByKind(AdeskLink.PRODUCT)).thenReturn(List.of(link(AdeskLink.PRODUCT, "p-1", 31)));
+        when(msr.goodsDocs(eq("demand"), any(), any(), any())).thenReturn(demands);
+        when(msr.goodsDocs(argThat((String e) -> !"demand".equals(e)), any(), any(), any())).thenReturn(List.of());
+        AdeskRun r = run(full);
+        r.orgLe.put(ORG, 1L);
+        r.projectId = 967986L;
+        return r;
+    }
+
+    /** Bazada bog'lanish yo'q, Adesk'da esa aynan shu hujjat bor (boshqa nusxa yozgan) — yangisi yaratilmaydi, bog'lanadi. */
+    @Test
+    void unlinkedDocAdoptsSameAdeskCommitmentInsteadOfCreatingDuplicate() {
+        AdeskRun r = commitRun(false, List.of(demand45()));
+        when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(777, 2, new BigDecimal("3150000.00"), LocalDate.of(2026, 9, 7), 900L,
+                "MS Отгрузка №00045 · Олинди", true, 967986L)));
+
+        svc.commitments(r);
+
+        verify(ad, never()).createCommitment(anyMap());
+        assertEquals(1, r.get("cm.adopted"));
+        assertEquals(777L, saved.stream().filter(l -> "d-1".equals(l.getMsKey())).findFirst().orElseThrow().getAdeskId());
+    }
+
+    /** Yo'qolgan bog'lanish bir xil raqamli IKKI hujjatga bitta yozuvni bermaydi: ikkinchisi yaratiladi. */
+    @Test
+    void oneAdeskCommitmentIsAdoptedOnlyOnce() {
+        MsGoodsDoc twin = new MsGoodsDoc("d-2", "demand", "00045", LocalDate.of(2026, 9, 7), 3_150_000_00L, ORG, "cp-1", "counterparty", "", true,
+                List.of(new MsPos("p-1", "product", 2, 1_575_000_00L)));
+        AdeskRun r = commitRun(false, List.of(demand45(), twin));
+        when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(777, 2, new BigDecimal("3150000.00"), LocalDate.of(2026, 9, 7), 900L,
+                "MS Отгрузка №00045", true, 967986L)));
+        when(ad.createCommitment(anyMap())).thenReturn(778L);
+
+        svc.commitments(r);
+
+        verify(ad, times(1)).createCommitment(anyMap());
+        assertEquals(1, r.get("cm.adopted"));
+        assertEquals(1, r.get("cm.created"));
+    }
+
+    /** Proyektsiz eski yetim yozuv Adesk tushumiga kirmaydi — unga bog'lansa hujjat foyda-zarardan tushib qoladi. */
+    @Test
+    void orphanWithoutProjectIsNotAdopted() {
+        AdeskRun r = commitRun(false, List.of(demand45()));
+        when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(777, 2, new BigDecimal("3150000.00"), LocalDate.of(2026, 9, 7), 900L,
+                "MS Отгрузка №00045", true, null)));
+        when(ad.createCommitment(anyMap())).thenReturn(778L);
+
+        svc.commitments(r);
+
+        verify(ad).createCommitment(anyMap());
+        assertEquals(0, r.get("cm.adopted"));
+    }
+
+    /** To'liq yurishda tiklash ham nusxa yaratmaydi: bog'langan id yo'q, lekin xuddi shu hujjat boshqa id bilan bor. */
+    @Test
+    void restoreAdoptsExistingCommitmentInsteadOfCreating() {
+        AdeskRun first = commitRun(true, List.of(demand45()));
+        when(ad.createCommitment(anyMap())).thenReturn(4001L);
+        svc.commitments(first);
+        AdeskLink cl = saved.stream().filter(l -> "d-1".equals(l.getMsKey())).findFirst().orElseThrow();
+        cl.setUpdatedAt(java.time.Instant.parse("2026-10-01T00:00:00Z"));
+        when(repo.findByKind(AdeskLink.COMMIT)).thenReturn(List.of(cl));
+        clearInvocations(ad);
+        when(ad.commitments(any(), any())).thenReturn(List.of(new AdCommit(4999, 2, new BigDecimal("3150000.00"), LocalDate.of(2026, 9, 7), 900L,
+                "MS Отгрузка №00045", true, 967986L)));
+        AdeskRun second = run(true);
+        second.orgLe.put(ORG, 1L);
+        second.projectId = 967986L;
+
+        svc.commitments(second);
+
+        verify(ad, never()).createCommitment(anyMap());
+        assertEquals(4999L, cl.getAdeskId());
+        assertEquals(1, second.get("cm.adopted"));
+    }
+
+    /** Yetkazuvchiga qaytarish Adesk tushumiga kirmasin: proyektsiz yuboriladi (proyektli «out» = Выручка). */
+    @Test
+    void purchaseReturnIsSentWithoutProjectSoItIsNotRevenue() {
+        MsGoodsDoc ret = new MsGoodsDoc("r-1", "purchasereturn", "00001", LocalDate.of(2026, 10, 9), 485_280_00L, ORG, "cp-1", "counterparty", "", true,
+                List.of(new MsPos("p-1", "product", 1, 485_280_00L)));
+        when(repo.findByKind(AdeskLink.CONTRACTOR)).thenReturn(List.of(link(AdeskLink.CONTRACTOR, "cp-1", 900)));
+        when(repo.findByKind(AdeskLink.PRODUCT)).thenReturn(List.of(link(AdeskLink.PRODUCT, "p-1", 31)));
+        when(msr.goodsDocs(eq("purchasereturn"), any(), any(), any())).thenReturn(List.of(ret));
+        when(msr.goodsDocs(argThat((String e) -> !"purchasereturn".equals(e)), any(), any(), any())).thenReturn(List.of());
+        when(ad.createCommitment(anyMap())).thenReturn(5L);
+        AdeskRun r = run(false);
+        r.orgLe.put(ORG, 1L);
+        r.projectId = 967986L;
+
+        svc.commitments(r);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, String>> cap = ArgumentCaptor.forClass(Map.class);
+        verify(ad).createCommitment(cap.capture());
+        assertEquals("out", cap.getValue().get("type"));
+        assertNull(cap.getValue().get("project"), "yetkazuvchiga qaytarish tushum emas");
+    }
+
+    /** Bog'lanishlar jadvali Adesk'dan ancha orqada — bu boshqa nusxa yoki eski baza: hech narsa yozilmaydi. */
+    @Test
+    void staleLinkTableStopsTheRunBeforeAnyWrite() {
+        when(ad.countTransactions(any(), any())).thenReturn(4796L);
+        when(repo.countByKindAndStatus(AdeskLink.MONEY, AdeskLink.OK)).thenReturn(3100L);
+        AdeskRun r = run(false);
+
+        svc.run(r);
+
+        assertNotNull(r.fatal);
+        assertTrue(r.staleDb);
+        verifyNoInteractions(msr);
+        verify(ad, never()).createCommitment(anyMap());
+    }
+
+    @Test
+    void healthyLinkTablePassesTheFence() {
+        when(ad.countTransactions(any(), any())).thenReturn(4796L);
+        when(repo.countByKindAndStatus(AdeskLink.MONEY, AdeskLink.OK)).thenReturn(4794L);
+        assertNull(svc.staleInstance());
+    }
+
+    @Test
+    void fenceCanBeTurnedOffForALegitimatelyRestoredDatabase() {
+        when(ad.countTransactions(any(), any())).thenReturn(4796L);
+        when(repo.countByKindAndStatus(AdeskLink.MONEY, AdeskLink.OK)).thenReturn(0L);
+        when(cfg.fenceOff()).thenReturn(true);
+        assertNull(svc.staleInstance());
+    }
+
+    @Test
+    void reverseOnlyIsAlsoFenced() {
+        when(ad.countTransactions(any(), any())).thenReturn(4796L);
+        when(repo.countByKindAndStatus(AdeskLink.MONEY, AdeskLink.OK)).thenReturn(3100L);
+        AdeskRun r = run(false);
+
+        svc.reverseOnly(r);
+
+        assertTrue(r.staleDb);
+        verifyNoInteractions(msr);
+        verifyNoInteractions(reverse);
+    }
 }

@@ -49,7 +49,11 @@ public class AdeskClient {
         public boolean income() { return type == 1; }
         public long signedTiyin() { long t = amount.movePointRight(2).setScale(0, java.math.RoundingMode.HALF_UP).longValue(); return income() ? t : -t; }
     }
-    public record AdCommit(long id, int type, BigDecimal amount, LocalDate date, Long contractorId, String description) {}
+    public record AdCommit(long id, int type, BigDecimal amount, LocalDate date, Long contractorId, String description, boolean shipment, Long projectId) {
+        public AdCommit(long id, int type, BigDecimal amount, LocalDate date, Long contractorId, String description) {
+            this(id, type, amount, date, contractorId, description, true, null);
+        }
+    }
 
     /* ==================== yuridik shaxslar ==================== */
 
@@ -267,6 +271,18 @@ public class AdeskClient {
                 idOf(j.path("project")), j.path("bankAccount").path("name").asText(""), idOf(j.path("pairedTransactionId")));
     }
 
+    /** Davrdagi fakt operatsiyalar soni (bitta so'rov); javobda son bo'lmasa -1. */
+    public long countTransactions(LocalDate from, LocalDate to) {
+        Map<String, String> p = new LinkedHashMap<>();
+        p.put("range", "custom");
+        p.put("range_start", from.format(ISO));
+        p.put("range_end", to.format(ISO));
+        p.put("status", "completed");
+        p.put("start", "0");
+        p.put("length", "1");
+        return http.get("transactions", p).path("recordsFiltered").asLong(-1);
+    }
+
     public record AdProject(long id, String name) {}
 
     /** Proyektlar (arxivdagilar ham). */
@@ -291,8 +307,15 @@ public class AdeskClient {
         p.put("range_start", from.format(ISO));
         p.put("range_end", to.format(ISO));
         return listAll("commitments", "commitments", p, true,
-                j -> new AdCommit(j.path("id").asLong(), j.path("type").asInt(0), dec(j.path("amount")),
-                        date(j.path("date").asText("")), idOf(j.path("contractor")), j.path("description").asText("")));
+                j -> new AdCommit(j.path("id").asLong(), commitType(j.path("type")), dec(j.path("amount")),
+                        date(j.path("date").asText("")), idOf(j.path("contractor")), j.path("description").asText(""),
+                        j.path("isShipment").asBoolean(true), idOf(j.path("project"))));
+    }
+
+    /** Adesk type'ni matn qaytaradi («in»/«out»): 1 — kirim (priyomka), 2 — chiqim (otgruzka). Son deb o'qilsa hamma yozuv 0 bo'lardi. */
+    private static int commitType(JsonNode n) {
+        String t = n.asText("");
+        return "out".equalsIgnoreCase(t) ? 2 : "in".equalsIgnoreCase(t) ? 1 : n.asInt(0);
     }
 
     /* ==================== yordamchilar ==================== */

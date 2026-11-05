@@ -87,7 +87,13 @@ public class Sender {
         }
     }
 
+    /** Uzun matn bo'laklarga bo'linadi (Telegram limiti 4096); tugmalar oxirgi bo'lakda. */
     public void send(long chatId, String text, ReplyKeyboard kb) {
+        java.util.List<String> parts = TextUtil.splitHtml(text, 4000);
+        for (int i = 0; i < parts.size(); i++) sendOne(chatId, parts.get(i), i == parts.size() - 1 ? kb : null);
+    }
+
+    private void sendOne(long chatId, String text, ReplyKeyboard kb) {
         SendMessage m = SendMessage.builder()
                 .chatId(String.valueOf(chatId))
                 .text(text)
