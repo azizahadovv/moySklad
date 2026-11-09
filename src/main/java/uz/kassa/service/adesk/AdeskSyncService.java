@@ -665,6 +665,7 @@ public class AdeskSyncService {
         Map<String, TxWant> wants = new LinkedHashMap<>();
         List<TxWant> create = new ArrayList<>(), update = new ArrayList<>();
         List<AdeskLink> remove = new ArrayList<>();
+        List<MsMoneyDoc> restored = new ArrayList<>();
         Set<String> seen = new HashSet<>();
         int i = 0;
         for (MsMoneyDoc d : docs) {
@@ -682,6 +683,12 @@ public class AdeskSyncService {
             // 2026-10-09: 02625/04496 Adesk'ka qaytib nusxa bo'lib tushgan edi (144232163/64) — perevod ikki marta ko'ringan.
             Long fromAd = adeskOrigin(d);
             if (fromAd != null) {
+                // Adesk'da o'chirilgani uchun bot korzinaga o'tkazgan hujjat MoySklad'da tiklangan (2026-11-09: N ga qayta bog'lanib,
+                // syncEdits uni 10 daqiqada yana korzinaga tashlardi) — Adesk'da qayta yaratiladi
+                if (l != null && FROM_AD.equals(l.getOrigin()) && DELETED.equals(l.getStatus()) && fromAd.equals(l.getAdeskId())) {
+                    restored.add(d);
+                    continue;
+                }
                 if (l == null || !fromAd.equals(l.getAdeskId()) || !FROM_AD.equals(l.getOrigin()) || !OK.equals(l.getStatus())) {
                     if (l == null) l = AdeskLink.builder().kind(MONEY).msKey(d.id()).build();
                     l.setAdeskId(fromAd); l.setOrigin(FROM_AD); l.setStatus(OK); l.setError(null); l.setName("Adesk #" + fromAd);
@@ -704,6 +711,20 @@ public class AdeskSyncService {
             wants.put(d.id(), w);
             if (!linked(l)) create.add(w);
             else if (!w.hash().equals(l.getHash()) || ERROR.equals(l.getStatus())) update.add(w);
+        }
+        if (!restored.isEmpty() && !r.stopped()) {
+            r.progress = "korzinadan tiklanganlar " + restored.size();
+            // perevodlar Adesk'da shu yerning o'zida qayta yaratiladi; oddiy operatsiyalar MoySklad'dan boshqariladigan bo'lib qaytadi
+            for (MsMoneyDoc d : reverse.restoreFromTrash(r, L, restored)) {
+                AdeskLink l = L.get(d.id());
+                try {
+                    TxWant w = want(r, d, l);
+                    wants.put(d.id(), w);
+                    create.add(w);
+                }
+                catch (AdeskException e) { if (e.fatal) throw e; moneyErr(r, d, l, e.getMessage()); }
+                catch (Exception e) { moneyErr(r, d, l, e.getMessage()); }
+            }
         }
         if (all) for (AdeskLink l : L.values())
             if (linked(l) && !isTr(l) && !seen.contains(l.getMsKey())) remove.add(l);

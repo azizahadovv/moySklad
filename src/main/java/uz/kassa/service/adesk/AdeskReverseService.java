@@ -543,6 +543,169 @@ public class AdeskReverseService {
         save(L, l);
     }
 
+    /* ==================== MoySklad'da korzinadan tiklangan (Adesk'da o'chirilgan) hujjatlar ==================== */
+
+    /** Bot belgilari: «[Adesk #N …]» va korzinaga o'tmagan hujjatdagi «❌ Adesk'da o'chirilgan · » boshlanmasi. */
+    private static final java.util.regex.Pattern MARKS = java.util.regex.Pattern.compile("\\[Adesk #\\d+[^\\]]*\\]|^❌ Adesk'da o'chirilgan\\s*·?");
+
+    /** Izoh bot belgilarisiz («[Adesk #701] sotuv · статья: Выручка» → «sotuv · статья: Выручка»). */
+    static String stripMarks(String desc) {
+        String s = desc == null ? "" : MARKS.matcher(desc.trim()).replaceAll(" ");
+        s = s.replaceAll("\\s+", " ").trim();
+        return s.replaceAll("^(·\\s*)+", "").replaceAll("(\\s*·)+$", "").trim();
+    }
+
+    /** Perevod izohidagi foydalanuvchi matni: belgilar va «Перемещение» shabloni olib tashlanadi («… Перемещение · test» → «test»). */
+    static String userText(String desc) {
+        String s = stripMarks(desc);
+        if (s.equals("Перемещение")) return "";
+        return s.startsWith("Перемещение · ") ? s.substring("Перемещение · ".length()).trim() : s;
+    }
+
+    /**
+     * Adesk'da o'chirilgani uchun bot korzinaga o'tkazgan (origin AD, bog'lanish DELETED) hujjat MoySklad'da korzinadan tiklandi
+     * yoki qayta проведён qilindi. 2026-11-09: 07.11 da 32 000 000 va 349 300 perevodlar shunday tiklangan, sinxron esa ularni izohdagi
+     * o'chgan «[Adesk #N]» ga qayta bog'lagan, syncEdits N ni topmay 10 daqiqada yana korzinaga tashlagan — Adesk'da qaytib chiqmagan.
+     * Endi (har hujjat uchun avval Adesk'dan N so'raladi; javob noaniq bo'lsa — keyingi yurishda):
+     *  - N Adesk'da bor — oddiy qayta bog'lanish; N boshqa MoySklad hujjatiga bog'langan bo'lsa — xato (ikki nusxa bo'lmasin);
+     *  - perevod (chiqim va kirim ikkalasi tiklangan) — Adesk'da qayta perevod yaratiladi, MoySklad izohi va bog'lanish yangi id'larga
+     *    o'tadi; perevodning bitta tomoni tiklangan bo'lsa — kutadi (xato matni «Ўтмаган ҳужжатлар» da);
+     *  - oddiy operatsiya — endi MoySklad'dan boshqariladi: izohdan belgi olinadi, bog'lanish MS'ga o'tadi, hujjat qaytariladi —
+     *    chaqiruvchi (sinxron) uni Adesk'da odatdagidek yaratadi.
+     * Bog'lanish DELETED holatda qoladi — syncEdits uni ko'rmaydi, qayta korzinaga tashlamaydi.
+     */
+    public List<AdeskMsReader.MsMoneyDoc> restoreFromTrash(AdeskRun r, Map<String, AdeskLink> L, List<AdeskMsReader.MsMoneyDoc> docs) {
+        List<AdeskMsReader.MsMoneyDoc> plain = new ArrayList<>(), outs = new ArrayList<>(), ins = new ArrayList<>();
+        Set<String> mine = new HashSet<>();
+        docs.forEach(d -> mine.add(d.id()));
+        Set<Long> taken = new HashSet<>();
+        for (AdeskLink l : L.values()) if (AdeskSyncService.linked(l) && !mine.contains(l.getMsKey())) taken.add(l.getAdeskId());
+        for (AdeskMsReader.MsMoneyDoc d : docs) {
+            if (r.stopped()) return plain;
+            AdeskLink l = L.get(d.id());
+            long n = l.getAdeskId();
+            Optional<AdTx> t;
+            try { t = adc.transaction(n); }
+            catch (AdeskHttp.AdeskException e) { if (e.fatal) throw e; continue; }   // noaniq — o'chirilgan deb hisoblanmaydi
+            if (t.isPresent()) {
+                if (taken.contains(n)) {
+                    restoreErr(L, l, "Adesk #" + n + " boshqa MoySklad hujjatiga bog'langan — bu korzinadan tiklangan eski nusxa, MoySklad'da o'chiring");
+                    continue;
+                }
+                l.setStatus(OK); l.setError(null);
+                save(L, l);
+                taken.add(n);
+                r.inc("ad.relinked");
+                continue;
+            }
+            if (transferLeg(r, d)) (d.income() ? ins : outs).add(d);
+            else plain.add(d);
+        }
+        // perevodlar: chiqim + kirim juftlari (firma, summa, sana bo'yicha — MoySklad'da perevod kabi)
+        List<AdeskSyncService.TrPair> pairs = AdeskSyncService.pairTransfers(outs, ins);
+        Set<String> paired = new HashSet<>();
+        for (AdeskSyncService.TrPair p : pairs) {
+            if (r.stopped()) return plain;
+            paired.add(p.out().id());
+            paired.add(p.in().id());
+            try {
+                restoreTransfer(r, L, p, taken);
+            } catch (AdeskHttp.AdeskException e) {
+                if (e.fatal) throw e;
+                restoreErr(L, L.get(p.out().id()), "Adesk'da perevod qayta yaratilmadi: " + e.getMessage());
+                restoreErr(L, L.get(p.in().id()), "Adesk'da perevod qayta yaratilmadi: " + e.getMessage());
+            } catch (Exception e) {
+                restoreErr(L, L.get(p.out().id()), "Adesk'da perevod qayta yaratilmadi: " + e.getMessage());
+                restoreErr(L, L.get(p.in().id()), "Adesk'da perevod qayta yaratilmadi: " + e.getMessage());
+                log.warn("Tiklangan perevod {} → {} Adesk'da yaratilmadi: {}", p.out().number(), p.in().number(), e.getMessage());
+            }
+        }
+        for (AdeskMsReader.MsMoneyDoc d : outs) if (!paired.contains(d.id()))
+            restoreErr(L, L.get(d.id()), "perevodning ikkinchi tomoni (kirim) ham MoySklad korzinasidan tiklanishi kerak — keyin Adesk'da qayta yaratiladi");
+        for (AdeskMsReader.MsMoneyDoc d : ins) if (!paired.contains(d.id()))
+            restoreErr(L, L.get(d.id()), "perevodning ikkinchi tomoni (chiqim) ham MoySklad korzinasidan tiklanishi kerak — keyin Adesk'da qayta yaratiladi");
+
+        // oddiy operatsiyalar — MoySklad'dan boshqariladigan bo'ladi
+        List<AdeskMsReader.MsMoneyDoc> back = new ArrayList<>();
+        for (AdeskMsReader.MsMoneyDoc d : plain) {
+            AdeskLink l = L.get(d.id());
+            String text = stripMarks(d.description());
+            try {
+                ObjectNode b = JN.objectNode();
+                b.put("description", text);
+                put(d.entity(), d.id(), b);
+            } catch (Exception e) {
+                restoreErr(L, l, "MoySklad izohidagi «[Adesk #" + l.getAdeskId() + "]» belgisi olinmadi: " + e.getMessage());
+                continue;
+            }
+            l.setOrigin(FROM_MS); l.setAdeskId(null); l.setHash(null); l.setError(null); l.setStatus(DELETED);
+            save(L, l);
+            r.inc("ad.restored");
+            log.info("MoySklad {} {} korzinadan tiklandi — endi MoySklad'dan boshqariladi, Adesk'da qayta yaratiladi", d.entity(), d.number());
+            back.add(new AdeskMsReader.MsMoneyDoc(d.id(), d.entity(), d.number(), d.date(), d.updated(), d.sumTiyin(), d.origTiyin(),
+                    d.currencyIso(), d.rate(), d.orgId(), d.accountKey(), d.agentId(), d.agentType(), d.expenseItemId(), text, d.purpose(), d.applicable()));
+        }
+        return back;
+    }
+
+    /** Adesk perevodidan yozilgan leg: izoh «[Adesk #N] Перемещение…»; chiqim — statya «Перемещение», agent o'z firma; kirim — o'tkazma. */
+    private boolean transferLeg(AdeskRun r, AdeskMsReader.MsMoneyDoc d) {
+        String s = stripMarks(d.description());
+        if (!s.equals("Перемещение") && !s.startsWith("Перемещение · ")) return false;
+        if (d.income()) return d.incomeTransfer();
+        return "organization".equals(d.agentType()) && r.expenseItems != null
+                && AdeskSyncService.norm(r.expenseItems.getOrDefault(d.expenseItemId(), "")).equals(AdeskSyncService.norm(cfg.catTransfer()));
+    }
+
+    /**
+     * Tiklangan perevod jufti → Adesk perevodi. Oldingi urinish yaratib, legini topa olmagan perevod (hisoblar, summa, sana, izoh teng,
+     * hech qaysi hujjatga bog'lanmagan) avval qidiriladi — qayta yaratilmaydi. Har leg: MoySklad izohi yangi id bilan, keyin bog'lanish.
+     */
+    private void restoreTransfer(AdeskRun r, Map<String, AdeskLink> L, AdeskSyncService.TrPair p, Set<Long> taken) {
+        AdeskMsReader.MsMoneyDoc o = p.out(), i = p.in();
+        Long from = r.account.get(o.accountKey()), to = r.account.get(i.accountKey());
+        if (from == null || to == null)
+            throw new IllegalStateException("hisob Adesk'da bog'lanmagan (" + (from == null ? o.accountKey() : i.accountKey()) + ")");
+        String text = userText(o.description());
+        if (text.isEmpty()) text = userText(i.description());
+        long tiyin = o.sumTiyin();
+        LocalDate date = o.date();
+        List<AdTx> day = adc.transactions(date, date);
+        AdTx[] legs = AdeskSyncService.findLegs(day, from, to, tiyin, date, text, taken, 0);
+        if (legs == null) {
+            long maxId = day.stream().mapToLong(AdTx::id).max().orElse(0);
+            adc.createTransfer(from, to, AdeskSyncService.som(tiyin), date, text);
+            legs = AdeskSyncService.findLegs(adc.transactions(date, date), from, to, tiyin, date, text, taken, maxId);
+            if (legs == null)
+                throw new IllegalStateException("perevod yaratildi, lekin ro'yxatda topilmadi — keyingi yurishda bog'lanadi, Adesk'da qo'lda yaratmang");
+        }
+        restoredLeg(L, o, legs[0], text);
+        restoredLeg(L, i, legs[1], text);
+        taken.add(legs[0].id());
+        taken.add(legs[1].id());
+        r.inc("ad.restored");
+        r.note("Korzinadan tiklangan perevod Adesk'da qayta yaratildi: " + o.number() + " → " + i.number() + " (" + AdeskSyncService.som(tiyin).toPlainString() + ")");
+        log.info("MoySklad perevodi {} → {} korzinadan tiklandi — Adesk'da qayta yaratildi #{} / #{}", o.number(), i.number(), legs[0].id(), legs[1].id());
+    }
+
+    private void restoredLeg(Map<String, AdeskLink> L, AdeskMsReader.MsMoneyDoc d, AdTx t, String text) {
+        ObjectNode b = JN.objectNode();
+        b.put("description", msDesc(t.id(), "Перемещение", text, null));
+        put(d.entity(), d.id(), b);
+        AdeskLink l = L.get(d.id());
+        l.setAdeskId(t.id());
+        l.setOrigin(FROM_AD);
+        relinked(L, l, t, d.accountKey());
+    }
+
+    /** Tiklangan hujjat Adesk'ka o'tmadi: bog'lanish DELETED qoladi (syncEdits tegmaydi), sababi «Ўтмаган ҳужжатлар» da ko'rinadi. */
+    private void restoreErr(Map<String, AdeskLink> L, AdeskLink l, String msg) {
+        if (l == null) return;
+        l.setStatus(DELETED);
+        l.setError(msg);
+        save(L, l);
+    }
+
     /**
      * MoySklad hujjati korzinaga (qayta tiklash mumkin). Korzinaga o'tmasa — проведение olib tashlanadi (summa hisobdan chiqadi,
      * hujjat «❌ Adesk'da o'chirilgan» izohi bilan qoladi). MoySklad'da allaqachon yo'q (404) — bog'lanish yopiladi.

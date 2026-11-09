@@ -58,6 +58,7 @@ public class AdeskCheckService {
         List<AdTx> adTx = ad.transactions(from, today);
         Map<Long, String> catName = new HashMap<>();
         ad.categories().forEach(c -> catName.put(c.id(), c.name()));
+        Map<Long, List<String>> botCat = botCategoryNames(repo.findByKind(CATEGORY));
 
         Map<String, AdeskLink> accLinks = new HashMap<>();
         repo.findByKind(ACCOUNT).forEach(l -> accLinks.put(l.getMsKey(), l));
@@ -137,14 +138,15 @@ public class AdeskCheckService {
             }
             byCat.computeIfAbsent(c, k -> new long[2])[0] += d.sumTiyin();
         }
+        Set<String> msInNames = new HashSet<>(), msOutNames = new HashSet<>();
+        for (String k : byCat.keySet()) (k.startsWith("Кирим · ") ? msInNames : msOutNames).add(k.substring(k.indexOf(" · ") + 3));
         int manual = 0;
         long manualSum = 0;
         List<Object[]> manualRows = new ArrayList<>();
         for (AdTx t : adTx) {
             if (t.date() == null || t.date().isAfter(to) || t.planned()) continue;
             long v = Math.abs(t.signedTiyin());
-            // Adesk perevodi legi — MoySklad tomonidagi kabi «Перемещение» (perevod MoySklad'da chiqim «Перемещение» + kirim bo'lib turadi)
-            String n = t.transfer() ? cfg.catTransfer() : catName.getOrDefault(t.categoryId(), t.categoryName().isBlank() ? "Статьясиз" : t.categoryName());
+            String n = adCatName(t, botCat, catName, cfg.catTransfer(), t.income() ? msInNames : msOutNames);
             String c = (t.income() ? "Кирим · " : "Чиқим · ") + n;
             byCat.computeIfAbsent(c, k -> new long[2])[1] += v;
             if (t.income()) adIn += v; else adOut += v;
@@ -324,6 +326,33 @@ public class AdeskCheckService {
         String html = sb.toString() + extra;
         if (html.length() > 4000) html = html.substring(0, 3990) + "…";
         return new Result(html, sheets, equal, shortLine);
+    }
+
+    /** Bot bog'lagan Adesk statyalari: Adesk id → MoySklad tomonidagi nom(lar) («in:Выручка» → «Выручка»). */
+    static Map<Long, List<String>> botCategoryNames(Collection<AdeskLink> links) {
+        Map<Long, List<String>> m = new HashMap<>();
+        for (AdeskLink l : links) {
+            if (!AdeskSyncService.linked(l) || l.getMsKey() == null) continue;
+            int i = l.getMsKey().indexOf(':');
+            m.computeIfAbsent(l.getAdeskId(), k -> new ArrayList<>()).add(i < 0 ? l.getMsKey() : l.getMsKey().substring(i + 1));
+        }
+        return m;
+    }
+
+    /**
+     * Adesk operatsiyasining ДДС qatori. Perevod legi — MoySklad tomonidagi kabi «Перемещение» (MoySklad'da chiqim «Перемещение» +
+     * kirim). Adesk'dagi joriy nom MoySklad qatorlarida bo'lmasa — bot shu statyani bog'lagan nom (msNames — MoySklad tomonidagi
+     * shu yo'nalish nomlari): 2026-11 da Adesk'da «Выручка» «Поступление от покупателей» deb qayta nomlangan, pul o'sha statyaga
+     * tushishda davom etgan, lekin hisobot ikki qator bo'lib har kuni tushumga teng soxta farq (8,35 → 8,99 mlrd) ko'rsatgan.
+     */
+    static String adCatName(AdTx t, Map<Long, List<String>> botCat, Map<Long, String> adName, String transfer, Set<String> msNames) {
+        if (t.transfer()) return transfer;
+        String own = t.categoryName() == null || t.categoryName().isBlank() ? "Статьясиз" : t.categoryName();
+        if (t.categoryId() == null) return own;
+        own = adName.getOrDefault(t.categoryId(), own);
+        if (msNames.contains(own)) return own;
+        for (String b : botCat.getOrDefault(t.categoryId(), List.of())) if (msNames.contains(b)) return b;
+        return own;
     }
 
     private static final String MS_APP = "https://online.moysklad.ru/app/#";

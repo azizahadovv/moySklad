@@ -514,6 +514,45 @@ class AdeskSyncServiceTest {
         assertEquals("[Adesk #6] ijara · статья: Выручка", AdeskReverseService.msDesc(6L, null, "ijara", "статья: Выручка"));
     }
 
+    /**
+     * 2026-11-09: Adesk'da o'chirilgani uchun bot korzinaga o'tkazgan hujjat MoySklad'da tiklandi. Avval sinxron uni izohdagi
+     * o'chgan «[Adesk #N]» ga qayta bog'lardi, syncEdits esa N ni topmay, 10 daqiqada yana korzinaga tashlardi (07.11, 32 mln perevod).
+     * Endi bunday hujjat {@link AdeskReverseService#restoreFromTrash} ga beriladi; u qaytargan oddiy operatsiya Adesk'da yaratiladi.
+     */
+    @Test
+    void docRestoredFromTrashIsHandedToRestoreNotRelinkedToDeletedId() {
+        MsMoneyDoc tr = new MsMoneyDoc("m1", "paymentout", "02974", D5, LocalDateTime.of(D5, java.time.LocalTime.NOON), 32_000_000_00L,
+                32_000_000_00L, "", 1, ORG, ORG + ":" + ACC, ORG2, "organization", "ei-tr", "[Adesk #147759469] Перемещение", "", true);
+        MsMoneyDoc op = new MsMoneyDoc("m2", "cashout", "02999", D5, LocalDateTime.of(D5, java.time.LocalTime.NOON), 10_000_00L,
+                10_000_00L, "", 1, ORG, ORG + ":CASH", ORG, "organization", "ei-zp", "[Adesk #700] ish haqi", "", true);
+        AdeskLink l1 = link(AdeskLink.MONEY, "m1", 147759469L), l2 = link(AdeskLink.MONEY, "m2", 700L);
+        for (AdeskLink l : List.of(l1, l2)) { l.setOrigin(AdeskLink.FROM_AD); l.setStatus(AdeskLink.DELETED); }
+        when(repo.findByKind(AdeskLink.MONEY)).thenReturn(List.of(l1, l2));
+        when(msr.moneyDocs(eq(START), any(), isNull(), any())).thenReturn(List.of(tr, op));
+        MsMoneyDoc op2 = new MsMoneyDoc("m2", "cashout", "02999", D5, op.updated(), 10_000_00L, 10_000_00L, "", 1, ORG, ORG + ":CASH",
+                ORG, "organization", "ei-zp", "ish haqi", "", true);
+        when(reverse.restoreFromTrash(any(), any(), anyList())).thenAnswer(inv -> {
+            l2.setOrigin(AdeskLink.FROM_MS); l2.setAdeskId(null);
+            return List.of(op2);
+        });
+        when(ad.createTransactions(anyList())).thenReturn(Map.of("ms:m2", 7300L));
+        when(ad.transactions(any(), any())).thenReturn(List.of());
+
+        AdeskRun r = run(true);
+        svc.money(r);
+
+        verify(reverse).restoreFromTrash(same(r), any(), eq(List.of(tr, op)));
+        assertEquals(AdeskLink.DELETED, l1.getStatus(), "o'chgan id ga qayta bog'lanmaydi");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ObjectNode>> cap = ArgumentCaptor.forClass(List.class);
+        verify(ad).createTransactions(cap.capture());
+        assertEquals(1, cap.getValue().size());
+        assertEquals("ms:m2", cap.getValue().get(0).path("importedId").asText());
+        assertFalse(cap.getValue().get(0).path("description").asText().contains("[Adesk #"));
+        assertEquals(7300L, l2.getAdeskId());
+        assertEquals(AdeskLink.OK, l2.getStatus());
+    }
+
     static MsMoneyDoc trDoc(String id, String entity, String number, LocalDate date, long tiyin, String org, String acc, String agent,
                             String expense, String purpose) {
         return new MsMoneyDoc(id, entity, number, date, LocalDateTime.of(date, java.time.LocalTime.NOON), tiyin, tiyin, "", 1, org,

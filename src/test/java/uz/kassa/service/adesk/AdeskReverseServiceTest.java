@@ -290,4 +290,160 @@ class AdeskReverseServiceTest {
         verifyNoInteractions(adc);
         verify(ms, never()).trashEntity(anyString(), anyString());
     }
+
+    /* ---- 2026-11-09: Adesk'da o'chirilib MoySklad korzinasiga o'tgan hujjat korzinadan tiklandi ---- */
+
+    static final LocalDate D6 = TODAY.minusDays(3);
+
+    static AdeskMsReader.MsMoneyDoc msDoc(String id, String entity, long tiyin, String org, String accKey, String agent,
+                                          String expense, String desc, String purpose) {
+        return new AdeskMsReader.MsMoneyDoc(id, entity, "N" + id, D6, LocalDateTime.of(D6, java.time.LocalTime.NOON), tiyin, tiyin, "", 1,
+                org, accKey, agent, "organization", expense, desc, purpose, true);
+    }
+
+    AdeskLink trashed(String msKey, long adeskId, String msType, String accKey, long tiyin) {
+        AdeskLink l = adLink(msKey, adeskId, msType, accKey, tiyin, "AD:old");
+        l.setStatus(AdeskLink.DELETED);
+        l.setDocDate(D6);
+        return l;
+    }
+
+    static AdTx leg(long id, int type, String amount, long acc, long paired, String desc) {
+        return new AdTx(id, type, new BigDecimal(amount), D6, acc, null, null, desc, true, false, "", "", "", null, "acc", paired);
+    }
+
+    /**
+     * 07.11 hodisasi: 32 000 000 perevod Adesk'da o'chirildi → bot MoySklad'dagi ikki hujjatni korzinaga o'tkazdi → foydalanuvchi
+     * ularni korzinadan tikladi → bot 10 daqiqada yana korzinaga tashladi (izohdagi o'chgan «[Adesk #N]» ga qayta bog'lanib).
+     * Endi: perevod Adesk'da qayta yaratiladi, MoySklad izohi va bog'lanish yangi id'larga o'tadi.
+     */
+    @Test
+    void restoredTransferIsRecreatedInAdeskWithNewIds() {
+        var out = msDoc("mo", "paymentout", 32_000_000_00L, ORG, ORG + ":acc-1", ORG2, "ei-tr", "[Adesk #147759469] Перемещение", "Перемещение собственных средств 001 NSB от 06.10.2026");
+        var in = msDoc("mi", "paymentin", 32_000_000_00L, ORG2, ORG2 + ":acc-2", ORG, "", "[Adesk #147759470] Перемещение", "Перемещение собственных средств 001 NSB от 06.10.2026");
+        AdeskLink lo = trashed("mo", 147759469, "paymentout", ORG + ":acc-1", -32_000_000_00L);
+        AdeskLink li = trashed("mi", 147759470, "paymentin", ORG2 + ":acc-2", 32_000_000_00L);
+        r.account.put(ORG + ":acc-1", 502L);
+        r.account.put(ORG2 + ":acc-2", 503L);
+        when(adc.transaction(anyLong())).thenReturn(Optional.empty());
+        AdTx newOut = leg(147852944, 2, "32000000.00", 502, 147852945, ""), newIn = leg(147852945, 1, "32000000.00", 503, 147852944, "");
+        when(adc.transactions(D6, D6)).thenReturn(List.of(), List.of(newOut, newIn));
+
+        var plain = svc.restoreFromTrash(r, L, List.of(out, in));
+
+        assertTrue(plain.isEmpty(), "perevod oddiy operatsiya bo'lib qaytmaydi");
+        verify(adc).createTransfer(502L, 503L, new BigDecimal("32000000.00"), D6, "");
+        ArgumentCaptor<String> bo = ArgumentCaptor.forClass(String.class), bi = ArgumentCaptor.forClass(String.class);
+        verify(ms).putEntity(eq("entity/paymentout/mo"), bo.capture());
+        verify(ms).putEntity(eq("entity/paymentin/mi"), bi.capture());
+        assertTrue(bo.getValue().contains("[Adesk #147852944] Перемещение"), bo.getValue());
+        assertTrue(bi.getValue().contains("[Adesk #147852945] Перемещение"), bi.getValue());
+        assertFalse(bo.getValue().contains("\"sum\""), "faqat izoh o'zgaradi");
+        assertEquals(147852944L, lo.getAdeskId());
+        assertEquals(147852945L, li.getAdeskId());
+        assertEquals(AdeskLink.OK, lo.getStatus());
+        assertEquals(AdeskLink.FROM_AD, li.getOrigin());
+        assertEquals(AdeskReverseService.fp(newOut), lo.getHash(), "keyingi syncEdits uni «tahrirlangan» deb ko'rmaydi");
+        assertEquals(1, r.get("ad.restored"));
+        verify(ms, never()).trashEntity(anyString(), anyString());
+    }
+
+    /** Oldingi urinish perevodni yaratib, legini topa olmagan bo'lsa — qayta yaratilmaydi, mavjudi bog'lanadi. */
+    @Test
+    void restoredTransferAdoptsTransferCreatedByEarlierAttempt() {
+        var out = msDoc("mo", "paymentout", 349_300_00L, ORG, ORG + ":acc-1", ORG, "ei-tr", "[Adesk #147478990] Перемещение · karta", "");
+        var in = msDoc("mi", "paymentin", 349_300_00L, ORG, ORG + ":acc-3", ORG, "", "[Adesk #147478991] Перемещение · karta", "Перемещение собственных средств");
+        trashed("mo", 147478990, "paymentout", ORG + ":acc-1", -349_300_00L);
+        trashed("mi", 147478991, "paymentin", ORG + ":acc-3", 349_300_00L);
+        r.account.put(ORG + ":acc-1", 502L);
+        r.account.put(ORG + ":acc-3", 504L);
+        when(adc.transaction(anyLong())).thenReturn(Optional.empty());
+        when(adc.transactions(D6, D6)).thenReturn(List.of(leg(9001, 2, "349300.00", 502, 9002, "karta"), leg(9002, 1, "349300.00", 504, 9001, "karta")));
+        svc.restoreFromTrash(r, L, List.of(out, in));
+        verify(adc, never()).createTransfer(anyLong(), anyLong(), any(), any(), any());
+        assertEquals(9001L, L.get("mo").getAdeskId());
+        assertEquals(9002L, L.get("mi").getAdeskId());
+    }
+
+    @Test
+    void restoredDocWhoseAdeskOperationStillExistsIsRelinked() {
+        var d = msDoc("m1", "cashout", 10_000_00L, ORG, ORG + ":CASH", ORG, "ei-pr", "[Adesk #555] non", "");
+        AdeskLink l = trashed("m1", 555, "cashout", ORG + ":CASH", -10_000_00L);
+        when(adc.transaction(555)).thenReturn(Optional.of(tx(555, 2, "10000.00", 501, null, false, "non")));
+        assertTrue(svc.restoreFromTrash(r, L, List.of(d)).isEmpty());
+        assertEquals(AdeskLink.OK, l.getStatus());
+        assertEquals(555L, l.getAdeskId());
+        verify(adc, never()).createTransfer(anyLong(), anyLong(), any(), any(), any());
+        verify(ms, never()).putEntity(anyString(), anyString());
+    }
+
+    /** Hisob turi o'zgargani uchun eskisi korzinaga tashlangan hujjat tiklansa: Adesk #N yangi hujjatga bog'langan — ikki nusxa bo'lmaydi. */
+    @Test
+    void restoredOldCopyOfOperationLinkedElsewhereIsReportedNotRelinked() {
+        var d = msDoc("m-old", "cashout", 10_000_00L, ORG, ORG + ":CASH", ORG, "ei-pr", "[Adesk #555] non", "");
+        AdeskLink old = trashed("m-old", 555, "cashout", ORG + ":CASH", -10_000_00L);
+        adLink("m-new", 555, "paymentout", ORG + ":acc-1", -10_000_00L, "AD:x");
+        when(adc.transaction(555)).thenReturn(Optional.of(tx(555, 2, "10000.00", 502, null, false, "non")));
+        assertTrue(svc.restoreFromTrash(r, L, List.of(d)).isEmpty());
+        assertEquals(AdeskLink.DELETED, old.getStatus(), "syncEdits uni ko'rmaydi — qayta korzinaga tashlanmaydi");
+        assertTrue(old.getError().contains("boshqa MoySklad hujjatiga"), old.getError());
+    }
+
+    /** Oddiy operatsiya: endi MoySklad'dan boshqariladi — izohdan belgi olinadi, sinxron uni Adesk'da yaratadi. */
+    @Test
+    void restoredPlainOperationBecomesMoySkladManaged() {
+        var a = msDoc("m1", "cashout", 10_000_00L, ORG, ORG + ":CASH", ORG, "ei-pr", "[Adesk #700] ijara", "");
+        var b = msDoc("m2", "cashin", 5_000_00L, ORG, ORG + ":CASH", ORG, "", "❌ Adesk'da o'chirilgan · [Adesk #701] sotuv · статья: Выручка", "");
+        AdeskLink la = trashed("m1", 700, "cashout", ORG + ":CASH", -10_000_00L);
+        AdeskLink lb = trashed("m2", 701, "cashin", ORG + ":CASH", 5_000_00L);
+        when(adc.transaction(anyLong())).thenReturn(Optional.empty());
+
+        var plain = svc.restoreFromTrash(r, L, List.of(a, b));
+
+        assertEquals(List.of("ijara", "sotuv · статья: Выручка"), plain.stream().map(AdeskMsReader.MsMoneyDoc::description).toList());
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(ms).putEntity(eq("entity/cashout/m1"), body.capture());
+        assertTrue(body.getValue().contains("\"description\":\"ijara\""), body.getValue());
+        for (AdeskLink l : List.of(la, lb)) {
+            assertEquals(AdeskLink.FROM_MS, l.getOrigin());
+            assertNull(l.getAdeskId());
+            assertEquals(AdeskLink.DELETED, l.getStatus(), "bog'lanmagan — sinxron yangisini yaratadi");
+        }
+        verify(adc, never()).createTransfer(anyLong(), anyLong(), any(), any(), any());
+    }
+
+    @Test
+    void onlyOneRestoredTransferLegWaitsForTheOther() {
+        var out = msDoc("mo", "paymentout", 15_000_00L, ORG, ORG + ":acc-1", ORG2, "ei-tr", "[Adesk #147780567] Перемещение · test", "");
+        AdeskLink lo = trashed("mo", 147780567, "paymentout", ORG + ":acc-1", -15_000_00L);
+        r.account.put(ORG + ":acc-1", 502L);
+        when(adc.transaction(anyLong())).thenReturn(Optional.empty());
+        assertTrue(svc.restoreFromTrash(r, L, List.of(out)).isEmpty());
+        verify(adc, never()).createTransfer(anyLong(), anyLong(), any(), any(), any());
+        verify(ms, never()).putEntity(anyString(), anyString());
+        assertEquals(AdeskLink.DELETED, lo.getStatus());
+        assertEquals(147780567L, lo.getAdeskId(), "keyingi yurishda ikkinchi tomoni bilan qayta uriniladi");
+        assertTrue(lo.getError().contains("ikkinchi tomoni"), lo.getError());
+    }
+
+    /** Adesk javob bermasa — hech narsa o'zgarmaydi (o'chirilgan deb hisoblanmaydi). */
+    @Test
+    void restoreWaitsWhenAdeskIsUnavailable() {
+        var d = msDoc("m1", "cashout", 10_000_00L, ORG, ORG + ":CASH", ORG, "ei-pr", "[Adesk #555] non", "");
+        AdeskLink l = trashed("m1", 555, "cashout", ORG + ":CASH", -10_000_00L);
+        when(adc.transaction(555)).thenThrow(new AdeskHttp.AdeskException(500, 0, "server xatosi", false));
+        assertTrue(svc.restoreFromTrash(r, L, List.of(d)).isEmpty());
+        assertEquals(AdeskLink.DELETED, l.getStatus());
+        assertEquals(555L, l.getAdeskId());
+        verify(ms, never()).putEntity(anyString(), anyString());
+    }
+
+    @Test
+    void userTextDropsBotMarks() {
+        assertEquals("", AdeskReverseService.userText("[Adesk #147759469] Перемещение"));
+        assertEquals("test", AdeskReverseService.userText("[Adesk #147780567] Перемещение · test"));
+        assertEquals("ijara", AdeskReverseService.userText("❌ Adesk'da o'chirilgan · [Adesk #700] ijara"));
+        assertEquals("qo'lda yozildi", AdeskReverseService.userText("qo'lda yozildi [Adesk #888 · статья: Выручка]"));
+        assertEquals("sotuv · статья: Выручка", AdeskReverseService.stripMarks("[Adesk #701] sotuv · статья: Выручка"));
+    }
 }
